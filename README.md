@@ -1,7 +1,29 @@
 <div align="center">
   <h1>ACPMS</h1>
   <p><strong>Agentic Coding Project Management System</strong></p>
-  <img src="assets/dashboard_home.png" alt="Dashboard Home" width="100%">
+
+  <!-- Badges -->
+  <p>
+    <a href="https://github.com/thaonv7995/acpms/graphs/contributors">
+      <img src="https://img.shields.io/github/contributors/thaonv7995/acpms.svg?style=for-the-badge" alt="Contributors">
+    </a>
+    <a href="https://github.com/thaonv7995/acpms/network/members">
+      <img src="https://img.shields.io/github/forks/thaonv7995/acpms.svg?style=for-the-badge" alt="Forks">
+    </a>
+    <a href="https://github.com/thaonv7995/acpms/stargazers">
+      <img src="https://img.shields.io/github/stars/thaonv7995/acpms.svg?style=for-the-badge" alt="Stargazers">
+    </a>
+    <a href="https://github.com/thaonv7995/acpms/issues">
+      <img src="https://img.shields.io/github/issues/thaonv7995/acpms.svg?style=for-the-badge" alt="Issues">
+    </a>
+    <a href="https://github.com/thaonv7995/acpms/blob/main/LICENSE">
+      <img src="https://img.shields.io/github/license/thaonv7995/acpms.svg?style=for-the-badge" alt="License">
+    </a>
+  </p>
+  
+  <br />
+  
+  <img src="assets/dashboard_home.png" alt="Dashboard Home" width="100%" style="border-radius: 8px; box-shadow: 0 4px 8px rgba(0,0,0,0.1);">
 </div>
 
 ---
