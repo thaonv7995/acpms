@@ -89,6 +89,12 @@ Customize your preferences and workspace parameters to fit your workflow perfect
 
 ---
 
+## 📜 License
+
+This project is licensed under the **MIT Open Source License**. See the [LICENSE](LICENSE) file for more information.
+
+---
+
 <div align="center">
   <p>Built for the future of agentic engineering.</p>
 </div>
