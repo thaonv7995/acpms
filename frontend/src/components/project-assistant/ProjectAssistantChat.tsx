@@ -84,6 +84,43 @@ interface AssistantMessage {
   created_at: string;
 }
 
+const ANSI_ESCAPE_PATTERN = /\u001B\[[0-?]*[ -/]*[@-~]/g;
+
+function normalizeAssistantStreamChunk(content: string): string {
+  const withoutAnsi = content.replace(ANSI_ESCAPE_PATTERN, '');
+  const lines = withoutAnsi.split('\n').map((line) => {
+    const lastCarriageReturn = line.lastIndexOf('\r');
+    return lastCarriageReturn >= 0 ? line.slice(lastCarriageReturn + 1) : line;
+  });
+  return lines.join('\n');
+}
+
+function suffixPrefixOverlap(left: string, right: string): number {
+  const max = Math.min(left.length, right.length);
+  for (let size = max; size > 0; size -= 1) {
+    if (left.endsWith(right.slice(0, size))) {
+      return size;
+    }
+  }
+  return 0;
+}
+
+function mergeAssistantStreamChunk(existing: string, chunk: string): string {
+  const normalizedChunk = normalizeAssistantStreamChunk(chunk);
+  if (!normalizedChunk) return existing;
+  if (!existing) return normalizedChunk;
+  if (normalizedChunk === existing) return existing;
+  if (normalizedChunk.startsWith(existing)) return normalizedChunk;
+  if (existing.startsWith(normalizedChunk)) return existing;
+
+  const overlap = suffixPrefixOverlap(existing, normalizedChunk);
+  if (overlap > 0) {
+    return existing + normalizedChunk.slice(overlap);
+  }
+
+  return `${existing}${normalizedChunk}`;
+}
+
 /** Gộp các tin nhắn assistant liên tiếp thành một (backend stream mỗi chunk = 1 message) */
 function mergeConsecutiveAssistantMessages(msgs: AssistantMessage[]): AssistantMessage[] {
   const out: AssistantMessage[] = [];
@@ -95,7 +132,7 @@ function mergeConsecutiveAssistantMessages(msgs: AssistantMessage[]): AssistantM
       if (buf.length > 0) {
         out.push({
           ...buf[0],
-          content: buf.map((x) => x.content).join(''),
+          content: buf.reduce((acc, x) => mergeAssistantStreamChunk(acc, x.content), ''),
           metadata: buf[buf.length - 1]?.metadata,
         });
         buf = [];
@@ -106,7 +143,7 @@ function mergeConsecutiveAssistantMessages(msgs: AssistantMessage[]): AssistantM
   if (buf.length > 0) {
     out.push({
       ...buf[0],
-      content: buf.map((x) => x.content).join(''),
+      content: buf.reduce((acc, x) => mergeAssistantStreamChunk(acc, x.content), ''),
       metadata: buf[buf.length - 1]?.metadata,
     });
   }
@@ -298,7 +335,7 @@ export function ProjectAssistantChat({
   const hasAssistantReply = mergedMessages.some((m) => m.role === 'assistant');
   const lastMessageIsUser = mergedMessages.length > 0 && mergedMessages[mergedMessages.length - 1].role === 'user';
   const showTyping = agentActive && (loading || lastMessageIsUser);
-  const showStartPrompt = !readOnly && !agentActive && !hasAssistantReply;
+  const showStartPrompt = !readOnly && !agentActive && mergedMessages.length === 0;
 
   return (
     <div className="flex flex-col h-full bg-background/30">

@@ -1161,37 +1161,72 @@ async fn launch_auth_process(
                     Duration::from_secs(AUTH_EXIT_SUCCESS_VERIFY_RETRY_DELAY_SECONDS),
                 )
                 .await;
-                let error_message = if provider_status.message.trim().is_empty() {
-                    format!("Auth process exited with status {:?}", status.code())
-                } else {
-                    format!(
-                        "Auth process exited with status {:?}. {}",
-                        status.code(),
-                        provider_status.message
-                    )
-                };
-                let _ = store
-                    .update_status(
+                if provider_status.available {
+                    let _ = store
+                        .update_status(
+                            session_id,
+                            AuthSessionStatus::Succeeded,
+                            None,
+                            Some(format!(
+                                "Auth process exited with status {:?} but provider is authenticated",
+                                status.code()
+                            )),
+                        )
+                        .await;
+                    metrics
+                        .auth_session_success_total
+                        .with_label_values(&[provider.as_str()])
+                        .inc();
+                    let _ = append_agent_auth_audit_event(
+                        &db,
+                        session_user_id,
+                        "agent_auth_succeeded",
                         session_id,
-                        AuthSessionStatus::Failed,
-                        Some(error_message),
-                        None,
+                        provider.as_str(),
+                        "succeeded",
+                        Some(json!({
+                            "exit_code": status.code(),
+                            "verification_source": "provider_status_after_nonzero_exit",
+                            "provider_status_message": provider_status.message,
+                        })),
                     )
                     .await;
-                metrics
-                    .auth_session_failed_total
-                    .with_label_values(&[provider.as_str()])
-                    .inc();
-                let _ = append_agent_auth_audit_event(
-                    &db,
-                    session_user_id,
-                    "agent_auth_failed",
-                    session_id,
-                    provider.as_str(),
-                    "failed",
-                    Some(json!({ "exit_code": status.code() })),
-                )
-                .await;
+                } else {
+                    let error_message = if provider_status.message.trim().is_empty() {
+                        format!("Auth process exited with status {:?}", status.code())
+                    } else {
+                        format!(
+                            "Auth process exited with status {:?}. {}",
+                            status.code(),
+                            provider_status.message
+                        )
+                    };
+                    let _ = store
+                        .update_status(
+                            session_id,
+                            AuthSessionStatus::Failed,
+                            Some(error_message),
+                            None,
+                        )
+                        .await;
+                    metrics
+                        .auth_session_failed_total
+                        .with_label_values(&[provider.as_str()])
+                        .inc();
+                    let _ = append_agent_auth_audit_event(
+                        &db,
+                        session_user_id,
+                        "agent_auth_failed",
+                        session_id,
+                        provider.as_str(),
+                        "failed",
+                        Some(json!({
+                            "exit_code": status.code(),
+                            "provider_status_message": provider_status.message,
+                        })),
+                    )
+                    .await;
+                }
             }
             Err(err) => {
                 let _ = store

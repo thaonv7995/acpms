@@ -4419,7 +4419,15 @@ impl ExecutorOrchestrator {
             }
         }
 
-        let (session_input_sender, mut stdio_input_rx) = mpsc::unbounded_channel::<String>();
+        // Claude Project Assistant runs in one-shot `--print` mode, so live stdin follow-up
+        // is not exposed for that provider. Follow-up messages are handled via new turns.
+        let (session_input_sender, mut stdio_input_rx) =
+            if matches!(provider, AgentCliProvider::ClaudeCode) {
+                (None, None)
+            } else {
+                let (tx, rx) = mpsc::unbounded_channel::<String>();
+                (Some(tx), Some(rx))
+            };
         let provider_env_for_spawn = provider_env.clone();
 
         let spawn_fut = async {
@@ -4487,7 +4495,7 @@ impl ExecutorOrchestrator {
             let session = AssistantActiveSession {
                 interrupt_sender,
                 child: child_arc.clone(),
-                input_sender: Some(session_input_sender),
+                input_sender: session_input_sender,
             };
             self.active_assistant_sessions
                 .lock()
@@ -4508,23 +4516,18 @@ impl ExecutorOrchestrator {
         };
 
         // Forward live input to stdin
-        if let Some(mut stdin) = stdin_opt {
+        if let (Some(mut stdin), Some(mut input_rx)) = (stdin_opt, stdio_input_rx.take()) {
             let session_id = session_id;
-            let provider_stdin = provider;
             tokio::spawn(async move {
-                while let Some(message) = stdio_input_rx.recv().await {
+                while let Some(message) = input_rx.recv().await {
                     let trimmed = message.trim();
                     if trimmed.is_empty() {
                         continue;
                     }
-                    let line = if matches!(provider_stdin, AgentCliProvider::ClaudeCode) {
-                        format!("{}\n", trimmed)
-                    } else {
-                        format!(
-                            "{}\n",
-                            crate::follow_up_utils::wrap_trivial_follow_up(trimmed)
-                        )
-                    };
+                    let line = format!(
+                        "{}\n",
+                        crate::follow_up_utils::wrap_trivial_follow_up(trimmed)
+                    );
                     if let Err(e) = stdin.write_all(line.as_bytes()).await {
                         let _ = append_assistant_log(
                             session_id,

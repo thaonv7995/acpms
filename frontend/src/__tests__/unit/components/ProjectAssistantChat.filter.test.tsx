@@ -72,4 +72,48 @@ describe('ProjectAssistantChat message visibility', () => {
     expect(screen.queryByText('Preparing initial codebase inspection')).toBeNull();
     expect(screen.getByRole('button', { name: 'Start' })).toBeTruthy();
   });
+
+  it('collapses cumulative assistant chunks into a single readable message', () => {
+    renderChat([
+      {
+        id: 'assistant-1',
+        session_id: 'session-1',
+        role: 'assistant',
+        content: 'The file already exists',
+        created_at: '2026-03-04T10:00:00.000Z',
+      },
+      {
+        id: 'assistant-2',
+        session_id: 'session-1',
+        role: 'assistant',
+        content: 'The file already exists with a solid analysis.',
+        created_at: '2026-03-04T10:00:01.000Z',
+      },
+      {
+        id: 'user-1',
+        session_id: 'session-1',
+        role: 'user',
+        content: 'ok',
+        created_at: '2026-03-04T10:00:02.000Z',
+      },
+    ]);
+
+    expect(screen.getByText('The file already exists with a solid analysis.')).toBeTruthy();
+    expect(screen.queryByText('The file already exists')).toBeNull();
+  });
+
+  it('does not show start prompt when system error is present', () => {
+    renderChat([
+      {
+        id: 'system-1',
+        session_id: 'session-1',
+        role: 'system',
+        content: 'Error: Claude CLI requires authentication.',
+        created_at: '2026-03-04T10:00:00.000Z',
+      },
+    ]);
+
+    expect(screen.getByText('Error: Claude CLI requires authentication.')).toBeTruthy();
+    expect(screen.queryByRole('button', { name: 'Start' })).toBeNull();
+  });
 });

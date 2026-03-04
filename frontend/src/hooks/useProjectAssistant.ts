@@ -127,13 +127,25 @@ export function useProjectAssistant(projectId: string | undefined) {
 
   const startAgent = useCallback(async () => {
     if (!projectId || !session) return;
+    const START_REQUEST_TIMEOUT_MS = 15_000;
     const STARTING_TIMEOUT_MS = 10_000;
     const startedAt = Date.now();
     setStarting(true);
     setError(null);
     try {
-      await apiStartSession(projectId, session.id);
+      await Promise.race([
+        apiStartSession(projectId, session.id),
+        new Promise<never>((_, reject) => {
+          setTimeout(() => {
+            reject(new Error('Start request timed out. Please retry.'));
+          }, START_REQUEST_TIMEOUT_MS);
+        }),
+      ]);
       setAgentActive(false);
+      if (statusPollRef.current) {
+        clearInterval(statusPollRef.current);
+        statusPollRef.current = null;
+      }
       // Poll logs immediately so fast agent runs still surface assistant replies
       // even when status polling misses a short-lived active window.
       startPolling();

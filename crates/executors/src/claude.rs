@@ -144,7 +144,10 @@ impl ClaudeClient {
         })
     }
 
-    /// Spawn Claude Code CLI in interactive mode for Project Assistant (persistent, accepts stdin).
+    /// Spawn Claude Code CLI for Project Assistant session.
+    ///
+    /// We run in `--print` mode so the initial assistant response is emitted deterministically
+    /// in non-TTY environments (web backend worker), instead of waiting on an interactive prompt.
     pub async fn spawn_assistant_session(
         &self,
         worktree_path: &Path,
@@ -176,9 +179,8 @@ impl ClaudeClient {
             .replace('`', "\\`")
             .replace('$', "\\$");
 
-        // No --print: interactive mode, stays alive for follow-up via stdin
         let full_cmd = format!(
-            "{} --dangerously-skip-permissions --allowedTools '*' --output-format text \"{}\"",
+            "{} --print --dangerously-skip-permissions --allowedTools '*' --output-format text \"{}\"",
             base_cmd, escaped
         );
 
