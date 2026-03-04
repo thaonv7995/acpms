@@ -536,9 +536,14 @@ pub async fn submit_agent_auth_code(
             "Only localhost callback URLs are allowed for auth submit".to_string(),
         ));
     } else {
+        let input_payload = if current.provider == "claude-code" {
+            format!("{input}\r\n")
+        } else {
+            format!("{input}\n")
+        };
         state
             .auth_session_store
-            .write_to_stdin(req.session_id, &format!("{}\n", input))
+            .write_to_stdin(req.session_id, &input_payload)
             .await
             .map_err(ApiError::BadRequest)?;
     }
@@ -863,7 +868,9 @@ pub async fn get_agent_auth_session(
 ///   advance to the auth screen; until then no URL/code is printed.
 /// - **Cursor:** `agent login` is typically a Node/Electron binary; cold start (load runtime,
 ///   then print auth URL) can take several seconds. No server-side delay.
-/// - **Codex/Claude:** Single process, device-flow or OAuth URL printed soon after start.
+/// - **Codex:** Single process, device-flow URL usually appears soon after start.
+/// - **Claude:** Uses `script` (pty) when available to avoid non-interactive raw-mode failures
+///   and keep dev/prod auth behavior consistent.
 async fn launch_auth_process(
     state: AppState,
     session: AuthSessionRecord,
@@ -895,6 +902,10 @@ async fn launch_auth_process(
             command.env("TERM", "xterm-256color");
         }
     }
+    if session.provider == "claude-code" && std::env::var_os("TERM").is_none() {
+        // Claude CLI may run under systemd where TERM is missing.
+        command.env("TERM", "xterm-256color");
+    }
 
     let mut child = command.spawn().map_err(|e| {
         if e.kind() == std::io::ErrorKind::NotFound {
@@ -922,6 +933,18 @@ async fn launch_auth_process(
         .auth_session_store
         .set_stdin_writer(session.session_id, stdin)
         .await;
+    if session.provider == "claude-code" {
+        let _ = state
+            .auth_session_store
+            .update_action(
+                session.session_id,
+                None,
+                None,
+                Some("Claude sign-in is starting; auth URL may appear below in a few seconds. If nothing appears after ~30s, run `claude setup-token` in a terminal and complete auth there, then refresh provider status.".to_string()),
+                None,
+            )
+            .await;
+    }
     if session.provider == "gemini-cli" {
         // Do not set a bare Google OAuth URL (missing response_type etc. causes 400). Let CLI stdout set action_url/action_code via adapter.
         let _ = state
@@ -1210,13 +1233,22 @@ async fn auth_command_for_provider(provider: &str) -> Option<(String, Vec<String
             Some((npx_cmd, owned_args(CODEX_NPX_AUTH_DEVICE_ARGS)))
         }
         "claude-code" => {
-            if let Some(cmd) = resolve_provider_cli_command("claude-code") {
-                let args = resolve_claude_auth_args(false, None).await;
-                return Some((cmd, owned_args(args)));
+            let script_cmd = resolve_command_in_path("script");
+            if let Some(npx_cmd) = resolve_npx_command() {
+                let args = resolve_claude_auth_args(true, Some(npx_cmd.as_str())).await;
+                let resolved_args = owned_args(args);
+                if let Some(script) = script_cmd {
+                    return Some((script, wrap_with_script_args(&npx_cmd, &resolved_args)));
+                }
+                return Some((npx_cmd, resolved_args));
             }
-            let npx_cmd = resolve_npx_command()?;
-            let args = resolve_claude_auth_args(true, Some(npx_cmd.as_str())).await;
-            Some((npx_cmd, owned_args(args)))
+            let cmd = resolve_provider_cli_command("claude-code")?;
+            let args = resolve_claude_auth_args(false, None).await;
+            let resolved_args = owned_args(args);
+            if let Some(script) = script_cmd {
+                return Some((script, wrap_with_script_args(&cmd, &resolved_args)));
+            }
+            Some((cmd, resolved_args))
         }
         // Gemini CLI requires an interactive TTY for login.
         // Run via `script` and auto-pick `gemini auth` when CLI supports it.
@@ -1241,6 +1273,7 @@ fn select_auth_command_for_provider(
     provider: &str,
     codex_available: bool,
     claude_available: bool,
+    script_available: bool,
     gemini_available: bool,
     claude_args: &'static [&'static str],
 ) -> Option<(&'static str, &'static [&'static str])> {
@@ -1253,6 +1286,20 @@ fn select_auth_command_for_provider(
             }
         }
         "claude-code" => {
+            if script_available {
+                if claude_available {
+                    return if claude_args == CLAUDE_SETUP_TOKEN_ARGS {
+                        Some(("script", CLAUDE_SCRIPT_SETUP_TOKEN_ARGS))
+                    } else {
+                        Some(("script", CLAUDE_SCRIPT_AUTH_LOGIN_ARGS))
+                    };
+                }
+                return if claude_args == CLAUDE_NPX_SETUP_TOKEN_ARGS {
+                    Some(("script", CLAUDE_NPX_SCRIPT_SETUP_TOKEN_ARGS))
+                } else {
+                    Some(("script", CLAUDE_NPX_SCRIPT_AUTH_LOGIN_ARGS))
+                };
+            }
             if claude_available {
                 Some(("claude", claude_args))
             } else {
@@ -1292,14 +1339,50 @@ const CLAUDE_SETUP_TOKEN_ARGS: &[&str] = &["setup-token"];
 const CLAUDE_NPX_AUTH_LOGIN_ARGS: &[&str] = &["-y", "@anthropic-ai/claude-code", "auth", "login"];
 const CLAUDE_NPX_SETUP_TOKEN_ARGS: &[&str] = &["-y", "@anthropic-ai/claude-code", "setup-token"];
 #[cfg(test)]
+const CLAUDE_SCRIPT_AUTH_LOGIN_ARGS: &[&str] = &["-q", "/dev/null", "claude", "auth", "login"];
+#[cfg(test)]
+const CLAUDE_SCRIPT_SETUP_TOKEN_ARGS: &[&str] = &["-q", "/dev/null", "claude", "setup-token"];
+#[cfg(test)]
+const CLAUDE_NPX_SCRIPT_AUTH_LOGIN_ARGS: &[&str] = &[
+    "-q",
+    "/dev/null",
+    "npx",
+    "-y",
+    "@anthropic-ai/claude-code",
+    "auth",
+    "login",
+];
+#[cfg(test)]
+const CLAUDE_NPX_SCRIPT_SETUP_TOKEN_ARGS: &[&str] = &[
+    "-q",
+    "/dev/null",
+    "npx",
+    "-y",
+    "@anthropic-ai/claude-code",
+    "setup-token",
+];
+#[cfg(test)]
 const GEMINI_SCRIPT_ARGS: &[&str] = &["-q", "/dev/null", "gemini"];
 #[cfg(test)]
 const GEMINI_NPX_SCRIPT_ARGS: &[&str] = &["-q", "/dev/null", "npx", "-y", "@google/gemini-cli"];
 const CURSOR_AUTH_LOGIN_ARGS: &[&str] = &["login"];
-const CLAUDE_OAUTH_URL_PREFIX: &str = "https://claude.ai/oauth/authorize";
+const CLAUDE_OAUTH_URL_PREFIXES: [&str; 2] = [
+    "https://claude.ai/oauth/authorize",
+    "https://www.claude.ai/oauth/authorize",
+];
 
 fn owned_args(args: &[&str]) -> Vec<String> {
     args.iter().map(|arg| (*arg).to_string()).collect()
+}
+
+fn wrap_with_script_args(command: &str, args: &[String]) -> Vec<String> {
+    let mut wrapped = vec![
+        "-q".to_string(),
+        "/dev/null".to_string(),
+        command.to_string(),
+    ];
+    wrapped.extend(args.iter().cloned());
+    wrapped
 }
 
 async fn resolve_claude_auth_args(use_npx: bool, npx_cmd: Option<&str>) -> &'static [&'static str] {
@@ -1443,13 +1526,32 @@ async fn process_auth_stream_output<R>(
 
         if provider == "claude-code" {
             if let Some(start_url) = extract_claude_oauth_url_start(trimmed_line) {
-                pending_claude_oauth_url = Some(start_url);
+                pending_claude_oauth_url = Some(start_url.clone());
+                let _ = store
+                    .update_action(
+                        session_id,
+                        Some(start_url.clone()),
+                        None,
+                        Some("Complete auth in browser. If redirected to localhost and it fails, paste that localhost URL below.".to_string()),
+                        parse_loopback_port(&start_url),
+                    )
+                    .await;
                 continue;
             }
 
             if let Some(url) = pending_claude_oauth_url.as_mut() {
                 if is_auth_url_continuation_fragment(trimmed_line) {
                     url.push_str(trimmed_line);
+                    let partial_url = url.clone();
+                    let _ = store
+                        .update_action(
+                            session_id,
+                            Some(partial_url.clone()),
+                            None,
+                            Some("Complete auth in browser. If redirected to localhost and it fails, paste that localhost URL below.".to_string()),
+                            parse_loopback_port(&partial_url),
+                        )
+                        .await;
                     continue;
                 }
 
@@ -1470,13 +1572,38 @@ async fn process_auth_stream_output<R>(
 
         if provider == "cursor-cli" {
             if let Some(start_url) = extract_cursor_oauth_url_start(trimmed_line) {
-                pending_cursor_oauth_url = Some(start_url);
+                pending_cursor_oauth_url = Some(start_url.clone());
+                let _ = store
+                    .update_action(
+                        session_id,
+                        Some(start_url),
+                        None,
+                        Some(
+                            "Open this URL in browser to complete Cursor login. No need to paste callback."
+                                .to_string(),
+                        ),
+                        None,
+                    )
+                    .await;
                 continue;
             }
 
             if let Some(url) = pending_cursor_oauth_url.as_mut() {
                 if is_auth_url_continuation_fragment(trimmed_line) {
                     url.push_str(trimmed_line);
+                    let partial_url = url.clone();
+                    let _ = store
+                        .update_action(
+                            session_id,
+                            Some(partial_url),
+                            None,
+                            Some(
+                                "Open this URL in browser to complete Cursor login. No need to paste callback."
+                                    .to_string(),
+                            ),
+                            None,
+                        )
+                        .await;
                     continue;
                 }
 
@@ -1560,14 +1687,16 @@ fn strip_ansi_sequences(input: &str) -> String {
 }
 
 fn extract_claude_oauth_url_start(line: &str) -> Option<String> {
-    let start = line.find(CLAUDE_OAUTH_URL_PREFIX)?;
-    let mut url = line[start..].to_string();
-    url.retain(|c| !c.is_whitespace());
-    if url.starts_with(CLAUDE_OAUTH_URL_PREFIX) {
-        Some(url)
-    } else {
-        None
+    for prefix in CLAUDE_OAUTH_URL_PREFIXES {
+        if let Some(start) = line.find(prefix) {
+            let mut url = line[start..].to_string();
+            url.retain(|c| !c.is_whitespace());
+            if url.starts_with(prefix) {
+                return Some(url);
+            }
+        }
     }
+    None
 }
 
 const CURSOR_OAUTH_URL_PREFIXES: [&str; 2] = [
@@ -2092,11 +2221,11 @@ async fn check_claude_provider_status() -> ProviderStatusDoc {
         );
     }
 
-    let (probe_cmd, probe_args, timeout_secs) = if let Some(cmd) = claude_cmd {
-        (cmd, vec!["auth".to_string(), "status".to_string()], 8_u64)
-    } else {
-        (
-            npx_cmd.unwrap_or_default(),
+    // Keep provider status aligned with executor behavior (Claude tasks run via npx by default).
+    let mut probe_targets: Vec<(String, Vec<String>, u64, &'static str)> = Vec::new();
+    if let Some(npx) = npx_cmd {
+        probe_targets.push((
+            npx,
             vec![
                 "-y".to_string(),
                 "@anthropic-ai/claude-code".to_string(),
@@ -2104,79 +2233,110 @@ async fn check_claude_provider_status() -> ProviderStatusDoc {
                 "status".to_string(),
             ],
             20_u64,
-        )
-    };
+            "npx",
+        ));
+    }
+    if let Some(cmd) = claude_cmd {
+        probe_targets.push((
+            cmd,
+            vec!["auth".to_string(), "status".to_string()],
+            8_u64,
+            "claude",
+        ));
+    }
 
-    let probe = run_command_probe_owned(&probe_cmd, &probe_args, timeout_secs).await;
-    let probe = match probe {
-        Ok(result) => result,
-        Err(err) => {
+    let mut expired_message: Option<String> = None;
+    let mut unauthenticated_message: Option<String> = None;
+    let mut probe_errors: Vec<String> = Vec::new();
+
+    for (probe_cmd, probe_args, timeout_secs, source) in probe_targets {
+        let probe = match run_command_probe_owned(&probe_cmd, &probe_args, timeout_secs).await {
+            Ok(result) => result,
+            Err(err) => {
+                probe_errors.push(format!("{}: {}", source, err));
+                continue;
+            }
+        };
+
+        if probe.timed_out {
+            probe_errors.push(format!("{}: timed out while checking auth status", source));
+            continue;
+        }
+
+        if probe.success {
             return build_provider_status(
                 "claude-code",
                 true,
-                ProviderAuthState::Unknown,
-                ProviderAvailabilityReason::AuthCheckFailed,
-                format!("Failed to check Claude auth status: {}", err),
-            )
+                ProviderAuthState::Authenticated,
+                ProviderAvailabilityReason::Ok,
+                format!("Claude Code CLI is connected and ready ({})", source),
+            );
         }
-    };
 
-    if probe.timed_out {
-        return build_provider_status(
-            "claude-code",
-            true,
-            ProviderAuthState::Unknown,
-            ProviderAvailabilityReason::AuthCheckFailed,
-            "Timed out while checking Claude auth status".to_string(),
+        let output = format!(
+            "{} {}",
+            probe.stdout.to_lowercase(),
+            probe.stderr.to_lowercase()
         );
+        if output.contains("token has expired") || output.contains("oauth token has expired") {
+            expired_message = Some(format!(
+                "{} ({})",
+                summarize_probe_output(&probe.stdout, &probe.stderr, "Claude token has expired"),
+                source
+            ));
+            continue;
+        }
+        if output.contains("failed to authenticate")
+            || output.contains("not authenticated")
+            || output.contains("login")
+        {
+            unauthenticated_message = Some(format!(
+                "{} ({})",
+                summarize_probe_output(&probe.stdout, &probe.stderr, "Claude is not authenticated"),
+                source
+            ));
+            continue;
+        }
+
+        probe_errors.push(format!(
+            "{}: unable to determine auth state (exit code: {:?})",
+            source, probe.exit_code
+        ));
     }
 
-    if probe.success {
-        return build_provider_status(
-            "claude-code",
-            true,
-            ProviderAuthState::Authenticated,
-            ProviderAvailabilityReason::Ok,
-            "Claude Code CLI is connected and ready".to_string(),
-        );
-    }
-
-    let output = format!(
-        "{} {}",
-        probe.stdout.to_lowercase(),
-        probe.stderr.to_lowercase()
-    );
-    if output.contains("token has expired") || output.contains("oauth token has expired") {
+    if let Some(message) = expired_message {
         return build_provider_status(
             "claude-code",
             true,
             ProviderAuthState::Expired,
             ProviderAvailabilityReason::AuthExpired,
-            summarize_probe_output(&probe.stdout, &probe.stderr, "Claude token has expired"),
+            message,
         );
     }
-    if output.contains("failed to authenticate")
-        || output.contains("not authenticated")
-        || output.contains("login")
-    {
+    if let Some(message) = unauthenticated_message {
         return build_provider_status(
             "claude-code",
             true,
             ProviderAuthState::Unauthenticated,
             ProviderAvailabilityReason::NotAuthenticated,
-            summarize_probe_output(&probe.stdout, &probe.stderr, "Claude is not authenticated"),
+            message,
         );
     }
 
+    let message = if probe_errors.is_empty() {
+        "Unable to determine Claude auth state".to_string()
+    } else {
+        format!(
+            "Unable to determine Claude auth state ({})",
+            probe_errors.join("; ")
+        )
+    };
     build_provider_status(
         "claude-code",
         true,
         ProviderAuthState::Unknown,
         ProviderAvailabilityReason::AuthCheckFailed,
-        format!(
-            "Unable to determine Claude auth state (exit code: {:?})",
-            probe.exit_code
-        ),
+        message,
     )
 }
 
@@ -2502,8 +2662,9 @@ mod tests {
         normalize_agent_cli_provider, parse_auth_required_action_by_provider, parse_cli_semver,
         parse_loopback_port, redact_callback_target, select_auth_command_for_provider,
         strip_ansi_sequences, validate_loopback_callback_url, CLAUDE_AUTH_LOGIN_ARGS,
-        CLAUDE_NPX_AUTH_LOGIN_ARGS, CODEX_AUTH_DEVICE_ARGS, CODEX_NPX_AUTH_DEVICE_ARGS,
-        GEMINI_NPX_SCRIPT_ARGS, GEMINI_SCRIPT_ARGS,
+        CLAUDE_NPX_AUTH_LOGIN_ARGS, CLAUDE_NPX_SCRIPT_AUTH_LOGIN_ARGS,
+        CLAUDE_SCRIPT_SETUP_TOKEN_ARGS, CLAUDE_SETUP_TOKEN_ARGS, CODEX_AUTH_DEVICE_ARGS,
+        CODEX_NPX_AUTH_DEVICE_ARGS, GEMINI_NPX_SCRIPT_ARGS, GEMINI_SCRIPT_ARGS,
     };
 
     #[test]
@@ -2616,6 +2777,13 @@ mod tests {
     }
 
     #[test]
+    fn extract_claude_oauth_url_start_handles_www_prefix() {
+        let line = "https://www.claude.ai/oauth/authorize?code=true&client_id=abc";
+        let extracted = extract_claude_oauth_url_start(line).expect("url");
+        assert_eq!(extracted, line);
+    }
+
+    #[test]
     fn extract_cursor_oauth_url_start_detects_prefix() {
         let line =
             "Open this URL: https://cursor.com/loginDeepControl?challenge=abc&uuid=xyz&mode=login";
@@ -2654,6 +2822,7 @@ mod tests {
             true,
             false,
             false,
+            false,
             CLAUDE_AUTH_LOGIN_ARGS,
         )
         .expect("command");
@@ -2668,6 +2837,7 @@ mod tests {
             false,
             false,
             false,
+            false,
             CLAUDE_AUTH_LOGIN_ARGS,
         )
         .expect("command");
@@ -2676,17 +2846,33 @@ mod tests {
     }
 
     #[test]
-    fn auth_command_falls_back_to_npx_for_claude() {
+    fn auth_command_wraps_npx_claude_with_script_when_available() {
         let (cmd, args) = select_auth_command_for_provider(
             "claude-code",
             false,
             false,
+            true,
             false,
             CLAUDE_NPX_AUTH_LOGIN_ARGS,
         )
         .expect("command");
-        assert_eq!(cmd, "npx");
-        assert_eq!(args, CLAUDE_NPX_AUTH_LOGIN_ARGS);
+        assert_eq!(cmd, "script");
+        assert_eq!(args, CLAUDE_NPX_SCRIPT_AUTH_LOGIN_ARGS);
+    }
+
+    #[test]
+    fn auth_command_wraps_installed_claude_with_script_when_available() {
+        let (cmd, args) = select_auth_command_for_provider(
+            "claude-code",
+            false,
+            true,
+            true,
+            false,
+            CLAUDE_SETUP_TOKEN_ARGS,
+        )
+        .expect("command");
+        assert_eq!(cmd, "script");
+        assert_eq!(args, CLAUDE_SCRIPT_SETUP_TOKEN_ARGS);
     }
 
     #[test]
@@ -2695,6 +2881,7 @@ mod tests {
             "gemini-cli",
             false,
             false,
+            true,
             false,
             CLAUDE_AUTH_LOGIN_ARGS,
         )
@@ -2709,6 +2896,7 @@ mod tests {
             "gemini-cli",
             false,
             false,
+            true,
             true,
             CLAUDE_AUTH_LOGIN_ARGS,
         )

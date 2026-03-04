@@ -453,6 +453,56 @@ impl AgentCliProvider {
     }
 }
 
+fn normalize_assistant_plain_stdout_line(line: &str) -> Option<String> {
+    let trimmed = line.trim();
+    if trimmed.is_empty() {
+        return None;
+    }
+
+    if serde_json::from_str::<serde_json::Value>(trimmed).is_ok() {
+        return None;
+    }
+
+    let sanitized = sanitize_log(trimmed);
+    if sanitized.is_empty() || should_skip_log_line(&sanitized) {
+        return None;
+    }
+
+    Some(sanitized)
+}
+
+fn detect_provider_auth_blocker(provider: AgentCliProvider, line: &str) -> Option<&'static str> {
+    let normalized = line.to_ascii_lowercase();
+
+    match provider {
+        AgentCliProvider::GeminiCli => {
+            if normalized.contains("enter the authorization code")
+                || normalized.contains("please visit the following url to authorize")
+                || normalized.contains("opening authentication page in your browser")
+                || normalized.contains("do you want to continue? [y/n]")
+            {
+                return Some(
+                    "Gemini CLI requires authentication. Open Settings -> Agent Provider, run Sign in/Re-auth for Gemini CLI, then retry.",
+                );
+            }
+            None
+        }
+        AgentCliProvider::CursorCli => {
+            if normalized.contains("run `agent login`")
+                || normalized.contains("run agent login")
+                || normalized.contains("not logged in")
+                || normalized.contains("not authenticated")
+            {
+                return Some(
+                    "Cursor CLI requires authentication. Open Settings -> Agent Provider, run Sign in/Re-auth for Cursor CLI, then retry.",
+                );
+            }
+            None
+        }
+        _ => None,
+    }
+}
+
 pub struct ExecutorOrchestrator {
     db_pool: PgPool,
     worktree_manager: WorktreeManager,
@@ -2394,6 +2444,12 @@ impl ExecutorOrchestrator {
                                 let msg = sanitize_log(&raw_line);
                                 if !should_skip_log_line(&msg) {
                                     self.log(attempt_id, "stdout", &msg).await?;
+                                    if let Some(hint) =
+                                        detect_provider_auth_blocker(AgentCliProvider::GeminiCli, &msg)
+                                    {
+                                        self.log(attempt_id, "system", hint).await?;
+                                        return Err(anyhow::anyhow!(hint));
+                                    }
                                 }
                                 continue;
                             }
@@ -2614,6 +2670,13 @@ impl ExecutorOrchestrator {
                         Ok(Some(raw_line)) => {
                             if let Some(normalized) = normalize_stderr_for_display(&raw_line) {
                                 self.log(attempt_id, "stderr", &normalized).await?;
+                                if let Some(hint) = detect_provider_auth_blocker(
+                                    AgentCliProvider::GeminiCli,
+                                    &normalized,
+                                ) {
+                                    self.log(attempt_id, "system", hint).await?;
+                                    return Err(anyhow::anyhow!(hint));
+                                }
                             }
                         }
                         Ok(None) => stderr_done = true,
@@ -2674,6 +2737,12 @@ impl ExecutorOrchestrator {
                                 let msg = sanitize_log(&raw_line);
                                 if !should_skip_log_line(&msg) {
                                     self.log(attempt_id, "stdout", &msg).await?;
+                                    if let Some(hint) =
+                                        detect_provider_auth_blocker(AgentCliProvider::CursorCli, &msg)
+                                    {
+                                        self.log(attempt_id, "system", hint).await?;
+                                        return Err(anyhow::anyhow!(hint));
+                                    }
                                 }
                                 continue;
                             }
@@ -2819,6 +2888,13 @@ impl ExecutorOrchestrator {
                         Ok(Some(raw_line)) => {
                             if let Some(normalized) = normalize_stderr_for_display(&raw_line) {
                                 self.log(attempt_id, "stderr", &normalized).await?;
+                                if let Some(hint) = detect_provider_auth_blocker(
+                                    AgentCliProvider::CursorCli,
+                                    &normalized,
+                                ) {
+                                    self.log(attempt_id, "system", hint).await?;
+                                    return Err(anyhow::anyhow!(hint));
+                                }
                             }
                         }
                         Ok(None) => stderr_done = true,
@@ -4719,6 +4795,7 @@ impl ExecutorOrchestrator {
                     let mut reader = BufReader::new(stdout).lines();
                     let mut agent_buffer = AgentTextBuffer::new();
                     while let Ok(Some(line)) = reader.next_line().await {
+                        let mut emitted_for_line = false;
                         for ev in crate::gemini::parse_gemini_json_events(&line) {
                             let text = match ev {
                                 crate::gemini::GeminiStreamEvent::AgentMessage { text, .. }
@@ -4728,6 +4805,7 @@ impl ExecutorOrchestrator {
                             if text.trim().is_empty() {
                                 continue;
                             }
+                            emitted_for_line = true;
                             agent_buffer.push(&text);
                             let mut emitted_any = false;
                             while let Some((content, metadata)) = agent_buffer.pop_next() {
@@ -4780,6 +4858,43 @@ impl ExecutorOrchestrator {
                                 }
                             }
                         }
+
+                        if !emitted_for_line {
+                            if let Some(fallback_text) =
+                                normalize_assistant_plain_stdout_line(&line)
+                            {
+                                let role = if detect_provider_auth_blocker(
+                                    AgentCliProvider::GeminiCli,
+                                    &fallback_text,
+                                )
+                                .is_some()
+                                {
+                                    "system"
+                                } else {
+                                    "assistant"
+                                };
+                                let created_at = chrono::Utc::now();
+                                if let Ok(id) = append_assistant_log(
+                                    session_id_stdout,
+                                    role,
+                                    &fallback_text,
+                                    None,
+                                )
+                                .await
+                                {
+                                    let _ = broadcast_tx_stdout.send(AgentEvent::AssistantLog(
+                                        AssistantLogMessage {
+                                            session_id: session_id_stdout,
+                                            id,
+                                            role: role.to_string(),
+                                            content: fallback_text,
+                                            metadata: None,
+                                            created_at,
+                                        },
+                                    ));
+                                }
+                            }
+                        }
                     }
                     if let Some((content, metadata)) = agent_buffer.flush() {
                         let created_at = chrono::Utc::now();
@@ -4811,6 +4926,7 @@ impl ExecutorOrchestrator {
                     let mut agent_buffer = AgentTextBuffer::new();
                     let mut last_emitted_assistant_text: Option<String> = None;
                     while let Ok(Some(line)) = reader.next_line().await {
+                        let mut emitted_for_line = false;
                         for ev in crate::cursor::parse_cursor_json_events(&line) {
                             let text = match &ev {
                                 crate::cursor::CursorStreamEvent::AgentMessage { text, .. } => {
@@ -4830,6 +4946,7 @@ impl ExecutorOrchestrator {
                             ) {
                                 continue;
                             }
+                            emitted_for_line = true;
                             agent_buffer.push(&text);
                             let mut emitted_any = false;
                             while let Some((content, metadata)) = agent_buffer.pop_next() {
@@ -4893,6 +5010,56 @@ impl ExecutorOrchestrator {
                                             },
                                         ));
                                     }
+                                }
+                            }
+                        }
+
+                        if !emitted_for_line {
+                            if let Some(fallback_text) =
+                                normalize_assistant_plain_stdout_line(&line)
+                            {
+                                let role = if detect_provider_auth_blocker(
+                                    AgentCliProvider::CursorCli,
+                                    &fallback_text,
+                                )
+                                .is_some()
+                                {
+                                    "system"
+                                } else {
+                                    "assistant"
+                                };
+
+                                if role == "assistant"
+                                    && is_immediate_duplicate_assistant_text(
+                                        last_emitted_assistant_text.as_deref(),
+                                        &fallback_text,
+                                    )
+                                {
+                                    continue;
+                                }
+
+                                let created_at = chrono::Utc::now();
+                                if let Ok(id) = append_assistant_log(
+                                    session_id_stdout,
+                                    role,
+                                    &fallback_text,
+                                    None,
+                                )
+                                .await
+                                {
+                                    if role == "assistant" {
+                                        last_emitted_assistant_text = Some(fallback_text.clone());
+                                    }
+                                    let _ = broadcast_tx_stdout.send(AgentEvent::AssistantLog(
+                                        AssistantLogMessage {
+                                            session_id: session_id_stdout,
+                                            id,
+                                            role: role.to_string(),
+                                            content: fallback_text,
+                                            metadata: None,
+                                            created_at,
+                                        },
+                                    ));
                                 }
                             }
                         }
@@ -6587,6 +6754,47 @@ mod tests {
             Some("Hello world"),
             "Hello world again"
         ));
+    }
+
+    #[test]
+    fn normalize_assistant_plain_stdout_line_ignores_json_lines() {
+        let line = r#"{"type":"assistant","message":{"content":[{"type":"text","text":"hello"}]}}"#;
+        assert!(
+            normalize_assistant_plain_stdout_line(line).is_none(),
+            "JSON lines should be ignored by plain-text fallback"
+        );
+    }
+
+    #[test]
+    fn normalize_assistant_plain_stdout_line_keeps_plain_text() {
+        let line = "Open this URL to authenticate.";
+        let normalized =
+            normalize_assistant_plain_stdout_line(line).expect("expected plain-text fallback");
+        assert_eq!(normalized, line);
+    }
+
+    #[test]
+    fn detect_provider_auth_blocker_matches_gemini_auth_prompts() {
+        let hint = detect_provider_auth_blocker(
+            AgentCliProvider::GeminiCli,
+            "Enter the authorization code:",
+        );
+        assert!(
+            hint.is_some(),
+            "gemini auth prompt should map to a remediation hint"
+        );
+    }
+
+    #[test]
+    fn detect_provider_auth_blocker_matches_cursor_auth_prompts() {
+        let hint = detect_provider_auth_blocker(
+            AgentCliProvider::CursorCli,
+            "Not logged in. Please run agent login",
+        );
+        assert!(
+            hint.is_some(),
+            "cursor auth prompt should map to a remediation hint"
+        );
     }
 
     #[test]

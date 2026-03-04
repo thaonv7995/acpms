@@ -41,7 +41,7 @@ export function AgentStreamPage() {
     const [searchQuery, setSearchQuery] = useState('');
     const [selectedAttempt, setSelectedAttempt] = useState<string | null>(null);
     const [statusFilter, setStatusFilter] = useState<StatusFilter>('active');
-    const [viewMode, setViewMode] = useState<ViewMode>('list');
+    const [viewMode, setViewMode] = useState<ViewMode>('grid');
     const [showAll, setShowAll] = useState(false);
     const [reviewModalOpen, setReviewModalOpen] = useState(false);
     const [reviewAttempt, setReviewAttempt] = useState<{ id: string; taskTitle?: string; projectName?: string } | null>(null);

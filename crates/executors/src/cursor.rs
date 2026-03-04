@@ -22,7 +22,9 @@ use crate::claude::SpawnedAgent;
 use crate::process::{InterruptReceiver, InterruptSender};
 
 const EXEC_CURSOR_CMD_ENV: &str = "ACPMS_EXEC_CURSOR_CMD";
+const EXEC_CURSOR_MODEL_ENV: &str = "ACPMS_EXEC_CURSOR_MODEL";
 const OVERRIDE_CURSOR_BIN_ENV: &str = "ACPMS_AGENT_CURSOR_BIN";
+const OVERRIDE_CURSOR_MODEL_ENV: &str = "ACPMS_AGENT_CURSOR_MODEL";
 
 pub struct CursorClient;
 
@@ -148,20 +150,25 @@ fn resolve_command_in_path(command: &str) -> Option<String> {
     None
 }
 
-fn resolve_command_with_override(default_cmd: &str, override_env: &str) -> Option<String> {
-    if let Some(override_cmd) = read_non_empty_env(override_env) {
-        return resolve_command_in_path(&override_cmd);
-    }
-    resolve_command_in_path(default_cmd)
-}
-
 fn resolve_cursor_command(env_vars: Option<&HashMap<String, String>>) -> Option<String> {
     if let Some(vars) = env_vars {
         if let Some(command) = read_non_empty_map_value(vars, EXEC_CURSOR_CMD_ENV) {
             return Some(command);
         }
     }
-    resolve_command_with_override("agent", OVERRIDE_CURSOR_BIN_ENV)
+    if let Some(override_cmd) = read_non_empty_env(OVERRIDE_CURSOR_BIN_ENV) {
+        return resolve_command_in_path(&override_cmd);
+    }
+    resolve_command_in_path("agent").or_else(|| resolve_command_in_path("cursor-agent"))
+}
+
+fn resolve_cursor_model(env_vars: Option<&HashMap<String, String>>) -> String {
+    if let Some(vars) = env_vars {
+        if let Some(model) = read_non_empty_map_value(vars, EXEC_CURSOR_MODEL_ENV) {
+            return model;
+        }
+    }
+    read_non_empty_env(OVERRIDE_CURSOR_MODEL_ENV).unwrap_or_else(|| "auto".to_string())
 }
 
 fn parse_cursor_usage(v: &Value) -> Option<CursorUsage> {
@@ -399,6 +406,7 @@ impl CursorClient {
 
         let command = resolve_cursor_command(env_vars.as_ref())
             .ok_or_else(|| anyhow::anyhow!("Cursor CLI not found in PATH or override"))?;
+        let model = resolve_cursor_model(env_vars.as_ref());
 
         let mut cmd = Command::new(&command);
         cmd.arg("-p")
@@ -406,8 +414,8 @@ impl CursorClient {
             .arg("--force")
             .arg("--output-format")
             .arg("stream-json")
-            .arg("--workspace")
-            .arg(worktree_path)
+            .arg("--model")
+            .arg(model)
             .current_dir(worktree_path)
             .stdin(Stdio::piped())
             .stdout(Stdio::piped())
@@ -595,5 +603,23 @@ mod tests {
 
         let resolved = resolve_cursor_command(Some(&vars)).expect("expected command resolution");
         assert_eq!(resolved, "/tmp/custom-agent");
+    }
+
+    #[test]
+    fn resolve_cursor_model_prefers_exec_env_value() {
+        let mut vars = HashMap::new();
+        vars.insert(
+            EXEC_CURSOR_MODEL_ENV.to_string(),
+            "claude-4.6-opus-high-thinking".to_string(),
+        );
+
+        let resolved = resolve_cursor_model(Some(&vars));
+        assert_eq!(resolved, "claude-4.6-opus-high-thinking");
+    }
+
+    #[test]
+    fn resolve_cursor_model_defaults_to_auto() {
+        let resolved = resolve_cursor_model(None);
+        assert_eq!(resolved, "auto");
     }
 }
