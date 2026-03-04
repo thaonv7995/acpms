@@ -1799,6 +1799,9 @@ async fn run_command_probe(
         .args(args)
         .stdout(Stdio::piped())
         .stderr(Stdio::piped());
+    if std::env::var_os("TERM").is_none() {
+        command.env("TERM", "xterm-256color");
+    }
 
     let timed = timeout(Duration::from_secs(timeout_secs), command.output()).await;
     match timed {
@@ -2000,6 +2003,69 @@ fn summarize_probe_output(stdout: &str, stderr: &str, fallback: &str) -> String 
     first_non_empty_line(stdout)
         .or_else(|| first_non_empty_line(stderr))
         .unwrap_or_else(|| fallback.to_string())
+}
+
+fn parse_claude_logged_in_flag(stdout: &str, stderr: &str) -> Option<bool> {
+    fn parse_from_text(text: &str) -> Option<bool> {
+        let trimmed = text.trim();
+        if trimmed.is_empty() {
+            return None;
+        }
+
+        if let Ok(parsed) = serde_json::from_str::<serde_json::Value>(trimmed) {
+            if let Some(flag) = parsed.get("loggedIn").and_then(|value| value.as_bool()) {
+                return Some(flag);
+            }
+            if let Some(flag) = parsed.get("logged_in").and_then(|value| value.as_bool()) {
+                return Some(flag);
+            }
+            if let Some(flag) = parsed
+                .get("auth")
+                .and_then(|auth| auth.get("loggedIn"))
+                .and_then(|value| value.as_bool())
+            {
+                return Some(flag);
+            }
+            if let Some(flag) = parsed
+                .get("auth")
+                .and_then(|auth| auth.get("logged_in"))
+                .and_then(|value| value.as_bool())
+            {
+                return Some(flag);
+            }
+        }
+
+        let lower = trimmed.to_ascii_lowercase();
+        if lower.contains("\"loggedin\":true") || lower.contains("\"logged_in\":true") {
+            return Some(true);
+        }
+        if lower.contains("\"loggedin\":false") || lower.contains("\"logged_in\":false") {
+            return Some(false);
+        }
+
+        None
+    }
+
+    parse_from_text(stdout).or_else(|| parse_from_text(stderr))
+}
+
+fn looks_like_claude_unauthenticated_output(output: &str) -> bool {
+    output.contains("failed to authenticate")
+        || output.contains("not authenticated")
+        || output.contains("not logged in")
+        || output.contains("run /login")
+        || output.contains("please run /login")
+        || output.contains("log in")
+        || output.contains("login")
+}
+
+fn looks_like_claude_authenticated_output(output: &str) -> bool {
+    // Keep this strict enough to avoid classifying "not authenticated" as authenticated.
+    (output.contains("authenticated as")
+        || output.contains("you are authenticated")
+        || output.contains("logged in as")
+        || output.contains("auth status: authenticated"))
+        && !looks_like_claude_unauthenticated_output(output)
 }
 
 async fn append_agent_auth_audit_event(
@@ -2222,6 +2288,24 @@ async fn check_claude_provider_status() -> ProviderStatusDoc {
             );
         }
 
+        if let Some(logged_in) = parse_claude_logged_in_flag(&probe.stdout, &probe.stderr) {
+            if logged_in {
+                return build_provider_status(
+                    "claude-code",
+                    true,
+                    ProviderAuthState::Authenticated,
+                    ProviderAvailabilityReason::Ok,
+                    format!("Claude Code CLI is connected and ready ({})", source),
+                );
+            }
+            unauthenticated_message = Some(format!(
+                "{} ({})",
+                summarize_probe_output(&probe.stdout, &probe.stderr, "Claude is not authenticated"),
+                source
+            ));
+            continue;
+        }
+
         let output = format!(
             "{} {}",
             probe.stdout.to_lowercase(),
@@ -2235,16 +2319,30 @@ async fn check_claude_provider_status() -> ProviderStatusDoc {
             ));
             continue;
         }
-        if output.contains("failed to authenticate")
-            || output.contains("not authenticated")
-            || output.contains("login")
-        {
+        if looks_like_claude_unauthenticated_output(&output) {
             unauthenticated_message = Some(format!(
                 "{} ({})",
                 summarize_probe_output(&probe.stdout, &probe.stderr, "Claude is not authenticated"),
                 source
             ));
             continue;
+        }
+        if looks_like_claude_authenticated_output(&output) {
+            return build_provider_status(
+                "claude-code",
+                true,
+                ProviderAuthState::Authenticated,
+                ProviderAvailabilityReason::Ok,
+                format!(
+                    "{} ({})",
+                    summarize_probe_output(
+                        &probe.stdout,
+                        &probe.stderr,
+                        "Claude Code CLI is connected and ready"
+                    ),
+                    source
+                ),
+            );
         }
 
         probe_errors.push(format!(
@@ -2503,16 +2601,18 @@ fn has_gemini_local_credentials() -> bool {
     let Some(home) = home else {
         return false;
     };
-    let creds = std::path::Path::new(&home)
-        .join(".gemini")
-        .join("oauth_creds.json");
-    if !creds.exists() {
-        return false;
-    }
+    let gemini_dir = std::path::Path::new(&home).join(".gemini");
+    let credential_candidates = [
+        gemini_dir.join("oauth_creds.json"),
+        gemini_dir.join("google_accounts.json"),
+        gemini_dir.join("google_account_id"),
+    ];
 
-    std::fs::metadata(&creds)
-        .map(|meta| meta.is_file() && meta.len() > 0)
-        .unwrap_or(false)
+    credential_candidates.iter().any(|path| {
+        std::fs::metadata(path)
+            .map(|meta| meta.is_file() && meta.len() > 0)
+            .unwrap_or(false)
+    })
 }
 
 /// Canonical provider values: claude-code | openai-codex | gemini-cli | cursor-cli
@@ -2607,9 +2707,11 @@ fn get_claude_session_info() -> Option<SessionInfo> {
 mod tests {
     use super::{
         extract_claude_oauth_url_start, extract_cursor_oauth_url_start,
-        is_auth_url_continuation_fragment, looks_like_http_url, looks_like_loopback_callback,
-        normalize_agent_cli_provider, parse_auth_required_action_by_provider, parse_loopback_port,
-        redact_callback_target, select_auth_command_for_provider, strip_ansi_sequences,
+        is_auth_url_continuation_fragment, looks_like_claude_authenticated_output,
+        looks_like_claude_unauthenticated_output, looks_like_http_url, parse_claude_logged_in_flag,
+        looks_like_loopback_callback, normalize_agent_cli_provider,
+        parse_auth_required_action_by_provider, parse_loopback_port, redact_callback_target,
+        select_auth_command_for_provider, strip_ansi_sequences,
         validate_loopback_callback_url, CLAUDE_AUTH_LOGIN_ARGS, CLAUDE_NPX_AUTH_LOGIN_ARGS,
         CLAUDE_NPX_SCRIPT_AUTH_LOGIN_ARGS, CLAUDE_SCRIPT_AUTH_LOGIN_ARGS, CODEX_AUTH_DEVICE_ARGS,
         CODEX_NPX_AUTH_DEVICE_ARGS, GEMINI_NPX_SCRIPT_ARGS, GEMINI_SCRIPT_ARGS,
@@ -2867,5 +2969,30 @@ mod tests {
     fn help_parser_ignores_authenticate_word_without_auth_token() {
         let help = "Use this command to authenticate with Gemini CLI.";
         assert!(!super::help_mentions_auth_subcommand(help));
+    }
+
+    #[test]
+    fn claude_unauthenticated_parser_detects_slash_login_hint() {
+        let output = "not logged in · please run /login (claude)";
+        assert!(looks_like_claude_unauthenticated_output(output));
+    }
+
+    #[test]
+    fn claude_authenticated_parser_detects_positive_status() {
+        let output = "authenticated as user@example.com";
+        assert!(looks_like_claude_authenticated_output(output));
+        assert!(!looks_like_claude_unauthenticated_output(output));
+    }
+
+    #[test]
+    fn parse_claude_logged_in_flag_reads_json_true() {
+        let output = r#"{"loggedIn":true,"authMethod":"oauth"}"#;
+        assert_eq!(parse_claude_logged_in_flag(output, ""), Some(true));
+    }
+
+    #[test]
+    fn parse_claude_logged_in_flag_reads_json_false() {
+        let output = r#"{"loggedIn":false,"authMethod":"none"}"#;
+        assert_eq!(parse_claude_logged_in_flag(output, ""), Some(false));
     }
 }

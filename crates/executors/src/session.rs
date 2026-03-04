@@ -137,6 +137,28 @@ impl ClaudeSessionManager {
         Ok(projects)
     }
 
+    /// Fast check if any Claude projects exist without parsing session JSONL files.
+    /// Used for rapid verification of Claude Code login status.
+    pub fn has_any_project(&self) -> Result<bool> {
+        let projects_dir = self.get_projects_dir();
+
+        if !projects_dir.exists() {
+            return Ok(false);
+        }
+
+        let entries = fs::read_dir(&projects_dir)
+            .with_context(|| format!("Failed to read directory: {:?}", projects_dir))?;
+
+        for entry in entries {
+            let entry = entry.context("Failed to read directory entry")?;
+            if entry.path().is_dir() {
+                return Ok(true);
+            }
+        }
+
+        Ok(false)
+    }
+
     /// Find projects matching a specific git branch using fuzzy matching
     pub fn find_projects_by_branch(&self, target_branch: &str) -> Result<Vec<ClaudeProject>> {
         let projects = self.discover_projects()?;

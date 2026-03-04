@@ -133,14 +133,21 @@ export function useProjectAssistant(projectId: string | undefined) {
     setStarting(true);
     setError(null);
     try {
-      await Promise.race([
-        apiStartSession(projectId, session.id),
-        new Promise<never>((_, reject) => {
-          setTimeout(() => {
-            reject(new Error('Start request timed out. Please retry.'));
-          }, START_REQUEST_TIMEOUT_MS);
-        }),
-      ]);
+      let startRequestTimeout: ReturnType<typeof setTimeout> | null = null;
+      try {
+        await Promise.race([
+          apiStartSession(projectId, session.id),
+          new Promise<never>((_, reject) => {
+            startRequestTimeout = setTimeout(() => {
+              reject(new Error('Start request timed out. Please retry.'));
+            }, START_REQUEST_TIMEOUT_MS);
+          }),
+        ]);
+      } finally {
+        if (startRequestTimeout) {
+          clearTimeout(startRequestTimeout);
+        }
+      }
       setAgentActive(false);
       if (statusPollRef.current) {
         clearInterval(statusPollRef.current);

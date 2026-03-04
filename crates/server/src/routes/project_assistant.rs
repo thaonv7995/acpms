@@ -320,7 +320,15 @@ pub async fn create_session(
             .await
             .map_err(|e| ApiError::Internal(e.to_string()))?
         {
-            let _ = archive_and_end_session(&state, &service, &active_session).await?;
+            let state_clone = state.clone();
+            let service_clone = ProjectAssistantSessionService::new(state.db.clone());
+            tokio::spawn(async move {
+                if let Err(e) =
+                    archive_and_end_session(&state_clone, &service_clone, &active_session).await
+                {
+                    tracing::error!("Failed to archive background session: {:?}", e);
+                }
+            });
         }
         service
             .create_session(project_id, auth_user.id)
@@ -455,7 +463,7 @@ pub async fn start_session(
             .await?;
 
     let worktrees_path = state.worktrees_path.read().await.clone();
-    let repo_path = worktrees_path.join(format!("assistant-{}", session_id));
+    let repo_path = worktrees_path.join(format!("assistant-{}-{}", project_id, auth_user.id));
 
     let job = ProjectAssistantJob {
         session_id,
@@ -596,7 +604,7 @@ pub async fn post_message(
         .map_err(|e| ApiError::Internal(e.to_string()))?;
 
     let worktrees_path = state.worktrees_path.read().await.clone();
-    let repo_path = worktrees_path.join(format!("assistant-{}", session_id));
+    let repo_path = worktrees_path.join(format!("assistant-{}-{}", project_id, auth_user.id));
 
     let job = ProjectAssistantJob {
         session_id,

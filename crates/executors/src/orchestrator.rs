@@ -592,16 +592,16 @@ impl ExecutorOrchestrator {
     }
 
     /// Verify Claude session exists before execution.
-    /// Uses spawn_blocking for discover_projects to avoid blocking tokio runtime
-    /// (fs::read_dir + recursive session discovery can be slow on large dirs).
+    /// Uses spawn_blocking for has_any_project to avoid blocking tokio runtime
+    /// (fs::read_dir can be slow on large dirs).
     async fn verify_claude_session(&self, attempt_id: Option<Uuid>) -> Result<()> {
         let manager = self.session_manager.clone();
-        let projects = tokio::task::spawn_blocking(move || manager.discover_projects())
+        let has_projects = tokio::task::spawn_blocking(move || manager.has_any_project())
             .await
-            .context("discover_projects task panicked")?
-            .context("Failed to discover Claude sessions")?;
+            .context("has_any_project task panicked")?
+            .context("Failed to check Claude sessions")?;
 
-        if projects.is_empty() {
+        if !has_projects {
             let error_msg =
                 "No Claude session found. Please login via: npx @anthropic-ai/claude-code";
             if let Some(attempt_id) = attempt_id {
@@ -610,7 +610,7 @@ impl ExecutorOrchestrator {
             anyhow::bail!(error_msg);
         }
 
-        info!("Found {} Claude project(s) available", projects.len());
+        info!("Claude project(s) available");
         Ok(())
     }
 
