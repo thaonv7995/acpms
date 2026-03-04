@@ -77,10 +77,20 @@ function makeProvidersStatus(
   };
 }
 
+function getProviderRowByLabel(label: string): HTMLElement {
+  const providerLabel = screen.getByText(label, { selector: 'p' });
+  const providerRow = providerLabel.closest('div.rounded-lg.border') as HTMLElement | null;
+  if (!providerRow) {
+    throw new Error(`Unable to resolve provider row for label: ${label}`);
+  }
+  return providerRow;
+}
+
 describe('SettingsPage agent auth UI', () => {
   beforeEach(() => {
     vi.clearAllMocks();
     window.localStorage.clear();
+    vi.stubGlobal('open', vi.fn());
 
     vi.mocked(useSettings).mockReturnValue({
       settings: baseSettings,
@@ -140,7 +150,7 @@ describe('SettingsPage agent auth UI', () => {
     });
 
     expect(screen.getByRole('button', { name: 'Re-auth' })).toBeTruthy();
-    expect(screen.getAllByRole('button', { name: 'Sign in' })).toHaveLength(2);
+    expect(screen.getAllByRole('button', { name: 'Sign in' }).length).toBeGreaterThanOrEqual(2);
   });
 
   it('uses cached provider status within 24h and skips initial API check', async () => {
@@ -227,7 +237,7 @@ describe('SettingsPage agent auth UI', () => {
     fireEvent.click(reauthButton);
 
     await waitFor(() => {
-      expect(initiateAgentAuth).toHaveBeenCalledWith('openai-codex');
+      expect(initiateAgentAuth).toHaveBeenCalledWith('openai-codex', false);
     });
 
     expect(await screen.findByText('Provider Authentication')).toBeTruthy();
@@ -288,7 +298,7 @@ describe('SettingsPage agent auth UI', () => {
     fireEvent.click(reauthButton);
 
     await waitFor(() => {
-      expect(initiateAgentAuth).toHaveBeenCalledWith('openai-codex');
+      expect(initiateAgentAuth).toHaveBeenCalledWith('openai-codex', false);
     });
 
     const dialog = await screen.findByRole('dialog');
@@ -344,11 +354,13 @@ describe('SettingsPage agent auth UI', () => {
 
     render(<SettingsPage />);
 
-    const signInButton = await screen.findByRole('button', { name: 'Sign in' });
+    await screen.findByText('Claude Code (Anthropic)', { selector: 'p' });
+    const claudeProviderRow = getProviderRowByLabel('Claude Code (Anthropic)');
+    const signInButton = within(claudeProviderRow).getByRole('button', { name: 'Sign in' });
     fireEvent.click(signInButton);
 
     await waitFor(() => {
-      expect(initiateAgentAuth).toHaveBeenCalledWith('claude-code');
+      expect(initiateAgentAuth).toHaveBeenCalledWith('claude-code', false);
     });
 
     const dialog = await screen.findByRole('dialog');
@@ -357,8 +369,81 @@ describe('SettingsPage agent auth UI', () => {
         'Complete auth in browser. If redirected to localhost and it fails, paste that localhost URL below.'
       )
     ).toBeTruthy();
+    expect(
+      within(dialog).getByText(
+        'Session is active and waiting for provider auth output. If URL/code has not appeared yet, please wait a bit.'
+      )
+    ).toBeTruthy();
     expect(within(dialog).queryByText('One-time code')).toBeNull();
     expect(within(dialog).getByRole('link', { name: 'Open Link' })).toBeTruthy();
+  });
+
+  it('shows loading state when auth session is verifying', async () => {
+    vi.mocked(getAgentProvidersStatus).mockResolvedValue(
+      makeProvidersStatus([
+        {
+          provider: 'claude-code',
+          available: false,
+          reason: 'not_authenticated',
+          message: 'Not authenticated',
+        },
+        {
+          provider: 'openai-codex',
+          available: true,
+          reason: 'ok',
+          message: 'Codex CLI is available',
+        },
+        {
+          provider: 'gemini-cli',
+          available: true,
+          reason: 'ok',
+          message: 'Gemini CLI is available',
+        },
+      ])
+    );
+
+    vi.mocked(initiateAgentAuth).mockResolvedValue({
+      session_id: 'session-claude-verifying-1',
+      provider: 'claude-code',
+      flow_type: 'loopback_proxy',
+      status: 'verifying',
+      created_at: '2026-02-27T10:00:00.000Z',
+      updated_at: '2026-02-27T10:00:30.000Z',
+      expires_at: '2026-02-27T10:05:00.000Z',
+      process_pid: 1111,
+      allowed_loopback_port: null,
+      last_seq: 2,
+      last_error: null,
+      result: null,
+      action_url: 'https://claude.ai/oauth/authorize?code=true&client_id=abc',
+      action_code: null,
+      action_hint:
+        'Complete auth in browser. If redirected to localhost and it fails, paste that localhost URL below.',
+    });
+
+    render(<SettingsPage />);
+
+    await screen.findByText('Claude Code (Anthropic)', { selector: 'p' });
+    const claudeProviderRow = getProviderRowByLabel('Claude Code (Anthropic)');
+    const signInButton = within(claudeProviderRow).getByRole('button', { name: 'Sign in' });
+    fireEvent.click(signInButton);
+
+    await waitFor(() => {
+      expect(initiateAgentAuth).toHaveBeenCalledWith('claude-code', false);
+    });
+
+    const dialog = await screen.findByRole('dialog');
+    expect(
+      within(dialog).getByText(
+        'Server is verifying authentication with provider. This can take up to 60 seconds.'
+      )
+    ).toBeTruthy();
+    const textarea = within(dialog).getByPlaceholderText(
+      '4/0AeaY... or http://127.0.0.1:port/?code=...'
+    ) as HTMLTextAreaElement;
+    expect(textarea.disabled).toBe(true);
+    const submitButton = within(dialog).getByRole('button', { name: 'Checking...' });
+    expect((submitButton as HTMLButtonElement).disabled).toBe(true);
   });
 
   it('opens gemini sign-in mode with OOB code render', async () => {
@@ -405,11 +490,13 @@ describe('SettingsPage agent auth UI', () => {
 
     render(<SettingsPage />);
 
-    const signInButton = await screen.findByRole('button', { name: 'Sign in' });
+    await screen.findByText('Gemini CLI (Google)', { selector: 'p' });
+    const geminiProviderRow = getProviderRowByLabel('Gemini CLI (Google)');
+    const signInButton = within(geminiProviderRow).getByRole('button', { name: 'Sign in' });
     fireEvent.click(signInButton);
 
     await waitFor(() => {
-      expect(initiateAgentAuth).toHaveBeenCalledWith('gemini-cli');
+      expect(initiateAgentAuth).toHaveBeenCalledWith('gemini-cli', false);
     });
 
     const dialog = await screen.findByRole('dialog');

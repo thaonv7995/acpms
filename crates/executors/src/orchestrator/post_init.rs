@@ -1,7 +1,5 @@
 use super::*;
-use acpms_db::models::{
-    Project, ProjectSettings, ProjectType, RequirementPriority, RequirementStatus, Task,
-};
+use acpms_db::models::{Project, ProjectSettings, ProjectType, Task};
 use serde::Deserialize;
 use serde_json::json;
 use std::collections::{HashMap, HashSet};
@@ -1092,106 +1090,6 @@ Project type: {}
         })
     }
 
-    fn build_prd_seed_requirements(
-        &self,
-        project: &Project,
-        task: &Task,
-        project_type: ProjectType,
-        repo_files: &[String],
-    ) -> Vec<(String, String, RequirementPriority)> {
-        let project_summary = project
-            .description
-            .as_deref()
-            .filter(|value| !value.trim().is_empty())
-            .map(|value| truncate_for_requirement_summary(value, 280))
-            .unwrap_or_else(|| format!("Initialize {}.", project.name));
-
-        let stack_hints = Self::detect_stack_hints(repo_files, project_type);
-        let stack_summary = if stack_hints.is_empty() {
-            "Stack details will be confirmed during implementation.".to_string()
-        } else {
-            format!("Detected stack hints: {}.", stack_hints.join(", "))
-        };
-
-        let scope_content = format!(
-            "Define business scope and measurable outcomes for `{}`.\n\nContext:\n- {}\n- {}\n\nAcceptance criteria:\n- Document primary user persona(s) and top 3 use-cases.\n- Define in-scope and out-of-scope boundaries.\n- Capture success metrics that can be verified after release.",
-            project.name, project_summary, stack_summary
-        );
-
-        let type_specific = match project_type {
-            ProjectType::Web => (
-                "Deliver core web user journey".to_string(),
-                "Specify the core browser flow from entry point to value delivery.\n\nAcceptance criteria:\n- Define page/screen map and critical navigation path.\n- Define API/data dependencies for each main screen.\n- Include responsive behavior requirements (desktop + mobile web).".to_string(),
-                RequirementPriority::High,
-            ),
-            ProjectType::Mobile => (
-                "Deliver core mobile user journey".to_string(),
-                "Specify the primary mobile experience from onboarding to key action completion.\n\nAcceptance criteria:\n- Define major screens and navigation transitions.\n- Define offline/poor-network behavior.\n- Define push notification and background sync expectations (if applicable).".to_string(),
-                RequirementPriority::High,
-            ),
-            ProjectType::Desktop => (
-                "Deliver core desktop workflow".to_string(),
-                "Specify the main desktop workflow and native integration requirements.\n\nAcceptance criteria:\n- Define key desktop flows and expected user outcomes.\n- Define native integrations (filesystem, tray, notifications) that must be supported.\n- Define data persistence model (local/offline/sync).".to_string(),
-                RequirementPriority::High,
-            ),
-            ProjectType::Extension => (
-                "Deliver extension interaction flow".to_string(),
-                "Specify extension behavior on target sites and background processing expectations.\n\nAcceptance criteria:\n- Define trigger points and expected browser interactions.\n- Define permission scope and rationale.\n- Define data storage and sync behavior.".to_string(),
-                RequirementPriority::High,
-            ),
-            ProjectType::Api => (
-                "Define API contract baseline".to_string(),
-                "Specify API resources, contract expectations, and integration boundaries.\n\nAcceptance criteria:\n- Define initial endpoints/resources and ownership.\n- Define request/response contract expectations.\n- Define backward compatibility strategy for future versions.".to_string(),
-                RequirementPriority::High,
-            ),
-            ProjectType::Microservice => (
-                "Define service responsibility boundary".to_string(),
-                "Specify service responsibilities, upstream/downstream dependencies, and message flow.\n\nAcceptance criteria:\n- Define service boundary and non-goals.\n- Define synchronous and asynchronous integration patterns.\n- Define failure handling and retry behavior across service boundaries.".to_string(),
-                RequirementPriority::High,
-            ),
-        };
-
-        let architecture_content = "Capture target system architecture and integration contracts.\n\nAcceptance criteria:\n- Identify primary components and data flows.\n- Define component ownership and interface boundaries.\n- Keep architecture diagram and requirement set aligned.".to_string();
-
-        let quality_content = format!(
-            "Define release quality gate for `{}` init scaffold.\n\nAcceptance criteria:\n- Build command must pass in CI.\n- Lint/type-check/test commands for current stack must pass.\n- Failures must block promotion to done.\n\nReference attempt: {}",
-            project.name, task.id
-        );
-
-        let security_content = "Define security and compliance baseline.\n\nAcceptance criteria:\n- Define secret handling policy (no hardcoded credentials).\n- Define authentication/authorization requirements where applicable.\n- Define audit logging expectations for sensitive operations.".to_string();
-
-        let delivery_content = "Define deployment, rollback, and operational readiness requirements.\n\nAcceptance criteria:\n- Define deployment target/environment strategy.\n- Define rollback strategy and failure recovery steps.\n- Define minimum monitoring/alerting signals for production health.".to_string();
-
-        vec![
-            (
-                "Define product scope and success criteria".to_string(),
-                scope_content,
-                RequirementPriority::High,
-            ),
-            type_specific,
-            (
-                "Define architecture and integration contracts".to_string(),
-                architecture_content,
-                RequirementPriority::Medium,
-            ),
-            (
-                "Establish quality gates for delivery".to_string(),
-                quality_content,
-                RequirementPriority::Medium,
-            ),
-            (
-                "Establish security baseline".to_string(),
-                security_content,
-                RequirementPriority::High,
-            ),
-            (
-                "Define deployment and operational readiness".to_string(),
-                delivery_content,
-                RequirementPriority::Medium,
-            ),
-        ]
-    }
-
     pub(super) async fn bootstrap_project_context_after_init(
         &self,
         task: &Task,
@@ -1238,77 +1136,6 @@ Project type: {}
                 attempt_id,
                 "system",
                 "System Architecture already exists, skipping auto-generation.",
-            )
-            .await?;
-        }
-
-        let existing_requirements: i64 =
-            sqlx::query_scalar("SELECT COUNT(*) FROM requirements WHERE project_id = $1")
-                .bind(project.id)
-                .fetch_one(&self.db_pool)
-                .await
-                .context("Failed to count project requirements")?;
-
-        if existing_requirements > 0 {
-            if emit_attempt_logs {
-                self.log(
-                    attempt_id,
-                    "system",
-                    "PRD requirements already exist, skipping draft generation.",
-                )
-                .await?;
-            }
-            return Ok(());
-        }
-
-        let sprint_id: Option<Uuid> = sqlx::query_scalar(
-            "SELECT id FROM sprints WHERE project_id = $1 ORDER BY created_at ASC LIMIT 1",
-        )
-        .bind(project.id)
-        .fetch_optional(&self.db_pool)
-        .await
-        .context("Failed to resolve default sprint for PRD generation")?;
-
-        let drafts = self.build_prd_seed_requirements(project, task, project_type, &repo_files);
-
-        let mut tx = self.db_pool.begin().await?;
-        for (index, (title, content, priority)) in drafts.into_iter().enumerate() {
-            let metadata = json!({
-                "source": "auto_prd",
-                "generator": "init_bootstrap",
-                "attempt_id": attempt_id.to_string(),
-                "task_id": task.id.to_string(),
-                "project_type": project_type,
-                "order": index + 1
-            });
-
-            sqlx::query(
-                r#"
-                INSERT INTO requirements (
-                    project_id, sprint_id, title, content, status, priority, metadata, created_by
-                )
-                VALUES ($1, $2, $3, $4, $5, $6, $7, $8)
-                "#,
-            )
-            .bind(project.id)
-            .bind(sprint_id)
-            .bind(&title)
-            .bind(&content)
-            .bind(RequirementStatus::Todo)
-            .bind(priority)
-            .bind(metadata)
-            .bind(task.created_by)
-            .execute(&mut *tx)
-            .await
-            .context("Failed to insert auto-generated PRD requirement")?;
-        }
-        tx.commit().await?;
-
-        if emit_attempt_logs {
-            self.log(
-                attempt_id,
-                "system",
-                "Generated initial PRD draft requirements from project scaffold.",
             )
             .await?;
         }

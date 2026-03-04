@@ -594,7 +594,7 @@ export function SettingsPage() {
         setAuthSubmitting(true);
         try {
             await submitAgentAuthCode(activeAuthSession.session_id, trimmed);
-            showToast('Auth input submitted. Waiting for provider confirmation...', 'success');
+            showToast('Auth input submitted. Checking provider confirmation, this may take up to 60 seconds...', 'success');
             setAuthInput('');
             const latest = await getAgentAuthSession(activeAuthSession.session_id);
             setActiveAuthSession(latest);
@@ -639,6 +639,16 @@ export function SettingsPage() {
         ? PROVIDER_LABELS[activeAuthSession.provider] || activeAuthSession.provider
         : '';
     const authIsTerminal = isAuthTerminal(activeAuthSession?.status);
+    const authIsWaitingUserAction = activeAuthSession?.status === 'waiting_user_action';
+    const authIsVerifying = activeAuthSession?.status === 'verifying';
+    const authIsBusyChecking = Boolean(activeAuthSession) && !authIsTerminal && (authSubmitting || authIsVerifying);
+    const authCheckingMessage = authSubmitting
+        ? 'Submitting auth input and checking provider status. This can take up to 60 seconds.'
+        : authIsVerifying
+            ? 'Server is verifying authentication with provider. This can take up to 60 seconds.'
+            : authIsWaitingUserAction
+                ? 'Session is active and waiting for provider auth output. If URL/code has not appeared yet, please wait a bit.'
+                : null;
     const authStatusLabel = activeAuthSession?.status
         ? activeAuthSession.status.replace(/_/g, ' ')
         : 'idle';
@@ -1375,8 +1385,14 @@ export function SettingsPage() {
                                 <p className="text-sm text-card-foreground font-semibold">
                                     Session {activeAuthSession.session_id.slice(0, 8)}...
                                 </p>
-                                <p className="mt-1 text-xs text-muted-foreground uppercase tracking-wide">
-                                    Status: {authStatusLabel}
+                                <p className="mt-1 text-xs text-muted-foreground uppercase tracking-wide flex items-center gap-2">
+                                    <span>Status: {authStatusLabel}</span>
+                                    {!authIsTerminal && (authIsWaitingUserAction || authIsBusyChecking) && (
+                                        <span
+                                            className="inline-block h-3 w-3 animate-spin rounded-full border-2 border-muted-foreground/40 border-t-muted-foreground"
+                                            aria-label="Checking auth status"
+                                        />
+                                    )}
                                 </p>
                                 {activeAuthSession.last_error && (
                                     <p className="mt-2 text-xs text-red-500 dark:text-red-400 break-words">
@@ -1387,6 +1403,12 @@ export function SettingsPage() {
                                     <p className="mt-2 text-xs text-muted-foreground break-words">
                                         {activeAuthSession.action_hint}
                                     </p>
+                                )}
+                                {authCheckingMessage && (
+                                    <div className="mt-2 rounded-md border border-border/60 bg-background/60 px-2.5 py-2 text-xs text-muted-foreground flex items-center gap-2">
+                                        <span className="inline-block h-3 w-3 animate-spin rounded-full border-2 border-muted-foreground/40 border-t-muted-foreground shrink-0" />
+                                        <span>{authCheckingMessage}</span>
+                                    </div>
                                 )}
                             </div>
 
@@ -1455,9 +1477,10 @@ export function SettingsPage() {
                                         Enter auth code or localhost callback URL
                                     </label>
                                     <textarea
-                                        className="w-full min-h-[86px] rounded-lg border border-border bg-background p-3 text-sm text-card-foreground font-mono resize-y"
+                                        className="w-full min-h-[86px] rounded-lg border border-border bg-background p-3 text-sm text-card-foreground font-mono resize-y disabled:opacity-60 disabled:cursor-not-allowed"
                                         value={authInput}
                                         onChange={(e) => setAuthInput(e.target.value)}
+                                        disabled={authIsBusyChecking}
                                         placeholder="4/0AeaY... or http://127.0.0.1:port/?code=..."
                                     />
                                 </div>
@@ -1483,10 +1506,10 @@ export function SettingsPage() {
                                     <button
                                         type="button"
                                         onClick={handleSubmitAuthInput}
-                                        disabled={authSubmitting || authIsTerminal || !authInput.trim()}
+                                        disabled={authIsBusyChecking || authIsTerminal || !authInput.trim()}
                                         className="px-3 py-1.5 text-xs font-semibold rounded-md bg-primary text-primary-foreground hover:bg-primary/90 transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
                                     >
-                                        {authSubmitting ? 'Submitting...' : 'Submit Input'}
+                                        {authIsBusyChecking ? 'Checking...' : 'Submit Input'}
                                     </button>
                                 </div>
                             </div>

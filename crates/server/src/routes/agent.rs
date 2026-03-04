@@ -940,7 +940,7 @@ async fn launch_auth_process(
                 session.session_id,
                 None,
                 None,
-                Some("Claude sign-in is starting; auth URL may appear below in a few seconds. If nothing appears after ~30s, run `claude setup-token` in a terminal and complete auth there, then refresh provider status.".to_string()),
+                Some("Claude sign-in is starting; auth URL may appear below in a few seconds. If nothing appears after ~30s, run `npx -y @anthropic-ai/claude-code auth login` in a terminal, then refresh provider status.".to_string()),
                 None,
             )
             .await;
@@ -1288,17 +1288,9 @@ fn select_auth_command_for_provider(
         "claude-code" => {
             if script_available {
                 if claude_available {
-                    return if claude_args == CLAUDE_SETUP_TOKEN_ARGS {
-                        Some(("script", CLAUDE_SCRIPT_SETUP_TOKEN_ARGS))
-                    } else {
-                        Some(("script", CLAUDE_SCRIPT_AUTH_LOGIN_ARGS))
-                    };
+                    return Some(("script", CLAUDE_SCRIPT_AUTH_LOGIN_ARGS));
                 }
-                return if claude_args == CLAUDE_NPX_SETUP_TOKEN_ARGS {
-                    Some(("script", CLAUDE_NPX_SCRIPT_SETUP_TOKEN_ARGS))
-                } else {
-                    Some(("script", CLAUDE_NPX_SCRIPT_AUTH_LOGIN_ARGS))
-                };
+                return Some(("script", CLAUDE_NPX_SCRIPT_AUTH_LOGIN_ARGS));
             }
             if claude_available {
                 Some(("claude", claude_args))
@@ -1325,23 +1317,12 @@ fn select_auth_command_for_provider(
     }
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-struct CliSemver {
-    major: u64,
-    minor: u64,
-    patch: u64,
-}
-
 const CODEX_AUTH_DEVICE_ARGS: &[&str] = &["login", "--device-auth"];
 const CODEX_NPX_AUTH_DEVICE_ARGS: &[&str] = &["-y", "@openai/codex", "login", "--device-auth"];
 const CLAUDE_AUTH_LOGIN_ARGS: &[&str] = &["auth", "login"];
-const CLAUDE_SETUP_TOKEN_ARGS: &[&str] = &["setup-token"];
 const CLAUDE_NPX_AUTH_LOGIN_ARGS: &[&str] = &["-y", "@anthropic-ai/claude-code", "auth", "login"];
-const CLAUDE_NPX_SETUP_TOKEN_ARGS: &[&str] = &["-y", "@anthropic-ai/claude-code", "setup-token"];
 #[cfg(test)]
 const CLAUDE_SCRIPT_AUTH_LOGIN_ARGS: &[&str] = &["-q", "/dev/null", "claude", "auth", "login"];
-#[cfg(test)]
-const CLAUDE_SCRIPT_SETUP_TOKEN_ARGS: &[&str] = &["-q", "/dev/null", "claude", "setup-token"];
 #[cfg(test)]
 const CLAUDE_NPX_SCRIPT_AUTH_LOGIN_ARGS: &[&str] = &[
     "-q",
@@ -1351,15 +1332,6 @@ const CLAUDE_NPX_SCRIPT_AUTH_LOGIN_ARGS: &[&str] = &[
     "@anthropic-ai/claude-code",
     "auth",
     "login",
-];
-#[cfg(test)]
-const CLAUDE_NPX_SCRIPT_SETUP_TOKEN_ARGS: &[&str] = &[
-    "-q",
-    "/dev/null",
-    "npx",
-    "-y",
-    "@anthropic-ai/claude-code",
-    "setup-token",
 ];
 #[cfg(test)]
 const GEMINI_SCRIPT_ARGS: &[&str] = &["-q", "/dev/null", "gemini"];
@@ -1386,75 +1358,12 @@ fn wrap_with_script_args(command: &str, args: &[String]) -> Vec<String> {
 }
 
 async fn resolve_claude_auth_args(use_npx: bool, npx_cmd: Option<&str>) -> &'static [&'static str] {
-    let (version_cmd, version_args, timeout_secs) = if use_npx {
-        (
-            npx_cmd.unwrap_or("npx"),
-            &["-y", "@anthropic-ai/claude-code", "--version"][..],
-            20_u64,
-        )
-    } else {
-        ("claude", &["--version"][..], 3_u64)
-    };
-
-    if let Ok(outcome) = run_command_probe(version_cmd, version_args, timeout_secs).await {
-        let combined = format!("{}\n{}", outcome.stdout, outcome.stderr);
-        if let Some(version) = parse_cli_semver(&combined) {
-            if version.major >= 2 {
-                if use_npx {
-                    return CLAUDE_NPX_SETUP_TOKEN_ARGS;
-                }
-                return CLAUDE_SETUP_TOKEN_ARGS;
-            }
-        }
-    }
-
+    let _ = npx_cmd;
     if use_npx {
         CLAUDE_NPX_AUTH_LOGIN_ARGS
     } else {
         CLAUDE_AUTH_LOGIN_ARGS
     }
-}
-
-fn parse_cli_semver(text: &str) -> Option<CliSemver> {
-    let mut numbers: Vec<u64> = Vec::new();
-    let mut current = String::new();
-
-    for ch in text.chars() {
-        if ch.is_ascii_digit() {
-            current.push(ch);
-            continue;
-        }
-
-        if ch == '.' && !current.is_empty() {
-            numbers.push(current.parse().ok()?);
-            current.clear();
-            continue;
-        }
-
-        if !current.is_empty() {
-            numbers.push(current.parse().ok()?);
-            current.clear();
-            if numbers.len() >= 3 {
-                break;
-            }
-        } else {
-            numbers.clear();
-        }
-    }
-
-    if !current.is_empty() && numbers.len() < 3 {
-        numbers.push(current.parse().ok()?);
-    }
-
-    if numbers.len() < 3 {
-        return None;
-    }
-
-    Some(CliSemver {
-        major: numbers[0],
-        minor: numbers[1],
-        patch: numbers[2],
-    })
 }
 
 fn is_agent_ui_auth_enabled() -> bool {
@@ -2659,11 +2568,10 @@ mod tests {
     use super::{
         extract_claude_oauth_url_start, extract_cursor_oauth_url_start,
         is_auth_url_continuation_fragment, looks_like_http_url, looks_like_loopback_callback,
-        normalize_agent_cli_provider, parse_auth_required_action_by_provider, parse_cli_semver,
-        parse_loopback_port, redact_callback_target, select_auth_command_for_provider,
-        strip_ansi_sequences, validate_loopback_callback_url, CLAUDE_AUTH_LOGIN_ARGS,
-        CLAUDE_NPX_AUTH_LOGIN_ARGS, CLAUDE_NPX_SCRIPT_AUTH_LOGIN_ARGS,
-        CLAUDE_SCRIPT_SETUP_TOKEN_ARGS, CLAUDE_SETUP_TOKEN_ARGS, CODEX_AUTH_DEVICE_ARGS,
+        normalize_agent_cli_provider, parse_auth_required_action_by_provider, parse_loopback_port,
+        redact_callback_target, select_auth_command_for_provider, strip_ansi_sequences,
+        validate_loopback_callback_url, CLAUDE_AUTH_LOGIN_ARGS, CLAUDE_NPX_AUTH_LOGIN_ARGS,
+        CLAUDE_NPX_SCRIPT_AUTH_LOGIN_ARGS, CLAUDE_SCRIPT_AUTH_LOGIN_ARGS, CODEX_AUTH_DEVICE_ARGS,
         CODEX_NPX_AUTH_DEVICE_ARGS, GEMINI_NPX_SCRIPT_ARGS, GEMINI_SCRIPT_ARGS,
     };
 
@@ -2752,14 +2660,6 @@ mod tests {
         let redacted = redact_callback_target(&parsed);
         assert_eq!(redacted, "http://127.0.0.1:5000/callback");
         assert!(!redacted.contains("secret"));
-    }
-
-    #[test]
-    fn parse_cli_semver_from_version_string() {
-        let parsed = parse_cli_semver("2.1.34 (Claude Code)").expect("semver");
-        assert_eq!(parsed.major, 2);
-        assert_eq!(parsed.minor, 1);
-        assert_eq!(parsed.patch, 34);
     }
 
     #[test]
@@ -2868,11 +2768,11 @@ mod tests {
             true,
             true,
             false,
-            CLAUDE_SETUP_TOKEN_ARGS,
+            CLAUDE_AUTH_LOGIN_ARGS,
         )
         .expect("command");
         assert_eq!(cmd, "script");
-        assert_eq!(args, CLAUDE_SCRIPT_SETUP_TOKEN_ARGS);
+        assert_eq!(args, CLAUDE_SCRIPT_AUTH_LOGIN_ARGS);
     }
 
     #[test]
