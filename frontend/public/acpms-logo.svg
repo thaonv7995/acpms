@@ -1,0 +1,19 @@
+<svg width="200" height="50" viewBox="0 0 200 50" fill="none" xmlns="http://www.w3.org/2000/svg">
+  <!-- Icon Part -->
+  <defs>
+    <linearGradient id="gradient_logo" x1="0%" y1="0%" x2="100%" y2="100%">
+      <stop offset="0%" stop-color="#3B82F6" />
+      <stop offset="100%" stop-color="#8B5CF6" />
+    </linearGradient>
+  </defs>
+  
+  <g transform="translate(10, 5) scale(0.08)">
+    <rect width="512" height="512" rx="120" fill="url(#gradient_logo)" />
+    <path d="M256 160L336 320H176L256 160Z" fill="none" stroke="#FFFFFF" stroke-width="36" stroke-linejoin="round"/>
+    <circle cx="256" cy="240" r="32" fill="#FFFFFF" />
+  </g>
+
+  <!-- Text Part -->
+  <text x="60" y="32" font-family="system-ui, -apple-system, sans-serif" font-weight="bold" font-size="24" fill="#FFFFFF">ACPMS</text>
+  <text x="60" y="46" font-family="system-ui, -apple-system, sans-serif" font-weight="normal" font-size="8" fill="#94A3B8" letter-spacing="1">AGENTIC CODING SYSTEM</text>
+</svg>

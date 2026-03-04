@@ -1,0 +1,55 @@
+[package]
+name = "acpms-services"
+version.workspace = true
+edition.workspace = true
+authors.workspace = true
+license.workspace = true
+
+[dependencies]
+# Workspace crates
+acpms-db = { path = "../db" }
+acpms-utils = { path = "../utils" }
+acpms-gitlab = { path = "../gitlab" }
+acpms-github = { path = "../github" }
+acpms-executors = { path = "../executors" }
+
+# Workspace dependencies
+sqlx.workspace = true
+anyhow.workspace = true
+thiserror.workspace = true
+chrono.workspace = true
+uuid.workspace = true
+bcrypt.workspace = true
+jsonwebtoken.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+ts-rs.workspace = true
+
+# Async traits
+async-trait = "0.1"
+
+# Encryption & Hashing
+aes-gcm = "0.10"
+base64 = "0.22"
+rand = "0.8"
+sha2 = "0.10"
+
+# Compression
+flate2 = "1.0"
+
+# Logging
+tracing.workspace = true
+
+# HTTP & URL encoding
+urlencoding = "2.1"
+reqwest = { workspace = true, features = ["json"] }
+url.workspace = true
+
+# AWS
+aws-config = { workspace = true }
+aws-sdk-s3 = { workspace = true }
+
+# Async runtime
+tokio = { workspace = true }
+tokio-stream = { workspace = true, features = ["sync"] }
+futures = "0.3"

@@ -1,0 +1,1 @@
+export { MRCard } from './MRCard';

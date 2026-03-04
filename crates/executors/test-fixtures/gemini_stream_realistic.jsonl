@@ -1,0 +1,3 @@
+{"type":"response.completed","response":{"candidates":[{"content":{"parts":[{"text":"Prepared deployment checklist."}]}}],"usage":{"inputTokenCount":"52","outputTokenCount":"21","totalTokenCount":"73"},"next_action":"Hold deploy until QA sign-off","user_answered_questions":{"question":"Deploy now?","answer":"after QA"}}}
+{"type":"tool_result","command":"curl -s https://status.example.com/health","status":"completed","output":"ok"}
+{"type":"file_change","changes":[{"path":"docs/runbook.md","kind":"update"}]}

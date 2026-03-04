@@ -1,0 +1,23 @@
+[package]
+name = "acpms-deployment"
+version.workspace = true
+edition.workspace = true
+authors.workspace = true
+license.workspace = true
+
+[dependencies]
+# Workspace crates
+acpms-db = { path = "../db" }
+acpms-utils = { path = "../utils" }
+
+# Workspace dependencies
+tokio.workspace = true
+anyhow.workspace = true
+reqwest.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+uuid.workspace = true
+chrono.workspace = true
+
+# Additional dependencies
+base64 = "0.22"

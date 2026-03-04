@@ -1,0 +1,74 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <link rel="icon" type="image/svg+xml" href="/favicon.svg" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>ACPMS - Agentic Coding Project Management</title>
+    <!-- Apply theme before first paint to prevent FOUC on reload -->
+    <script>
+      (function() {
+        var stored = localStorage.getItem('theme');
+        var prefersDark = window.matchMedia('(prefers-color-scheme: dark)').matches;
+        var theme = stored === 'dark' || (!stored && prefersDark) ? 'dark' : 'light';
+        if (theme === 'dark') document.documentElement.classList.add('dark');
+        else document.documentElement.classList.remove('dark');
+      })();
+    </script>
+    <!-- Google Fonts -->
+    <link href="https://fonts.googleapis.com" rel="preconnect" />
+    <link href="https://fonts.gstatic.com" rel="preconnect" crossorigin />
+    <!-- Material Symbols - preload + reduced axis (wght 100-400, FILL 0-1) for faster load -->
+    <link
+      rel="preload"
+      href="https://fonts.googleapis.com/css2?family=Material+Symbols+Outlined:wght,FILL@100..400,0..1&display=swap"
+      as="style"
+    />
+    <link
+      href="https://fonts.googleapis.com/css2?family=Material+Symbols+Outlined:wght,FILL@100..400,0..1&display=swap"
+      rel="stylesheet"
+    />
+    <link
+      href="https://fonts.googleapis.com/css2?family=Chivo+Mono:ital,wght@0,100..900;1,100..900&family=Noto+Emoji:wght@300..700&family=Space+Grotesk:wght@300;400;500;600;700&family=Noto+Sans:wght@400;500;600;700&family=JetBrains+Mono:wght@400;500&family=Inter:wght@400;500;700;900&display=swap"
+      rel="stylesheet"
+    />
+    
+    <style>
+      /* Critical theme variables - prevent FOUC before bundle loads */
+      :root { color-scheme: light; --background: 48 33% 97%; --foreground: 222.2 84% 4.9%; --card: 0 0% 100%; --card-foreground: 222.2 84% 4.9%; --primary: 220 13% 91%; --primary-foreground: 222.2 84% 4.9%; --muted: 0 0% 100%; --muted-foreground: 222.2 84% 4.9%; --accent: 48 33% 97%; --accent-foreground: 222.2 84% 4.9%; --border: 214.3 31.8% 91.4%; --radius: 0.5rem; }
+      .dark { color-scheme: dark; --background: 48 4% 16%; --foreground: 48 7% 85%; --card: 60 2% 18%; --card-foreground: 48 7% 85%; --primary: 60 2% 25%; --primary-foreground: 48 7% 85%; --muted: 60 2% 18%; --muted-foreground: 48 7% 85%; --accent: 48 4% 16%; --accent-foreground: 48 7% 85%; --border: 60 2% 25%; }
+      body { background-color: hsl(var(--background)); color: hsl(var(--foreground)); }
+      /* Scrollbar - uses theme variables */
+      ::-webkit-scrollbar { width: 8px; height: 8px; }
+      ::-webkit-scrollbar-track { background: hsl(var(--background)); }
+      ::-webkit-scrollbar-thumb { background: hsl(var(--border)); border-radius: 4px; }
+      ::-webkit-scrollbar-thumb:hover { background: hsl(var(--muted-foreground) / 0.5); }
+      /* Material Symbols configuration */
+      .material-symbols-outlined {
+        font-variation-settings: 'FILL' 0, 'wght' 400, 'GRAD' 0, 'opsz' 24;
+      }
+      .material-symbols-filled {
+        font-variation-settings: 'FILL' 1, 'wght' 400, 'GRAD' 0, 'opsz' 24;
+      }
+      /* Hide scrollbar utility */
+      .no-scrollbar::-webkit-scrollbar {
+        display: none;
+      }
+      .no-scrollbar {
+        -ms-overflow-style: none;
+        scrollbar-width: none;
+      }
+      .scrollbar-hide::-webkit-scrollbar {
+        display: none;
+      }
+      .scrollbar-hide {
+        -ms-overflow-style: none;
+        scrollbar-width: none;
+      }
+    </style>
+  </head>
+  <body class="overflow-hidden selection:bg-primary/30">
+    <div id="root"></div>
+    <script type="module" src="/src/main.tsx"></script>
+  </body>
+</html>

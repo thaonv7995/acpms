@@ -1,0 +1,57 @@
+# Rust
+/target/
+Cargo.lock
+**/*.rs.bk
+*.pdb
+
+# SQLx
+.sqlx/
+
+# Environment
+.env
+.env.local
+.env.*.local
+
+# IDEs
+.idea/
+.vscode/
+*.swp
+*.swo
+*~
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Logs
+*.log
+logs/
+
+# Frontend
+node_modules/
+dist/
+dist-ssr/
+*.local
+
+# Docker
+docker-compose.override.yml
+
+# Generated
+frontend/src/shared/types.ts.backup
+
+# Temporary
+tmp/
+temp/
+*.tmp
+
+# Testing / automation artifacts (do not commit)
+.playwright-cli/
+**/.playwright-cli/
+*.playwright-cli/
+
+# Agent worktrees (runtime, do not commit)
+crates/server/repos/
+
+# Claude Code
+CLAUDE.md
+**/CLAUDE.md

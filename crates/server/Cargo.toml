@@ -1,0 +1,72 @@
+[package]
+name = "acpms-server"
+version.workspace = true
+edition.workspace = true
+authors.workspace = true
+license.workspace = true
+
+[lib]
+name = "acpms_server"
+path = "src/lib.rs"
+
+[[bin]]
+name = "acpms-server"
+path = "src/main.rs"
+
+[dependencies]
+# Workspace crates
+acpms-db = { path = "../db" }
+acpms-services = { path = "../services" }
+acpms-utils = { path = "../utils" }
+acpms-executors = { path = "../executors" }
+acpms-gitlab = { path = "../gitlab" }
+acpms-github = { path = "../github" }
+acpms-preview = { path = "../preview" }
+acpms-deployment = { path = "../deployment" }
+
+# Workspace dependencies
+axum.workspace = true
+axum-extra.workspace = true
+tower.workspace = true
+tower-http.workspace = true
+tokio.workspace = true
+sqlx.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+anyhow.workspace = true
+thiserror.workspace = true
+tracing.workspace = true
+tracing-subscriber.workspace = true
+dotenvy.workspace = true
+uuid.workspace = true
+chrono.workspace = true
+ts-rs.workspace = true
+utoipa.workspace = true
+utoipa-swagger-ui.workspace = true
+validator.workspace = true
+jsonwebtoken.workspace = true
+url = "2.5"
+futures = "0.3"
+regex = "1.10"
+async-trait = "0.1"
+reqwest.workspace = true
+
+# Rate limiting
+tower_governor = "0.4"
+governor = "0.6"
+
+# Metrics
+prometheus = "0.13"
+
+# SSH (native Rust, no sshpass)
+russh = { workspace = true }
+
+# CLI
+clap = { version = "4", features = ["derive"] }
+
+[dev-dependencies]
+# Testing
+tokio-test = "0.4"
+tower = { workspace = true, features = ["util"] }
+tower-http = { workspace = true, features = ["trace"] }
+tokio-tungstenite = "0.28"

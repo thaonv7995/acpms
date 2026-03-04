@@ -1,0 +1,20 @@
+[package]
+name = "acpms-gitlab"
+version.workspace = true
+edition.workspace = true
+authors.workspace = true
+license.workspace = true
+
+[dependencies]
+# Workspace crates
+acpms-db = { path = "../db" }
+acpms-utils = { path = "../utils" }
+
+# Workspace dependencies
+tokio.workspace = true
+reqwest.workspace = true
+anyhow.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+chrono.workspace = true
+url.workspace = true

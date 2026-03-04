@@ -1,0 +1,91 @@
+import { describe, expect, it } from 'vitest';
+import {
+  isPreviewAlreadyStoppedMessage,
+  isPreviewReadinessBlockingMessage,
+  mapPreviewErrorMessage,
+} from '../../../hooks/useDevServer';
+
+describe('useDevServer error helpers', () => {
+  it('detects readiness-blocking backend messages', () => {
+    expect(
+      isPreviewReadinessBlockingMessage(
+        'Preview unavailable: missing Cloudflare config: cloudflare_zone_id'
+      )
+    ).toBe(true);
+    expect(
+      isPreviewReadinessBlockingMessage(
+        'Preview unavailable: Docker preview runtime is disabled'
+      )
+    ).toBe(true);
+    expect(
+      isPreviewReadinessBlockingMessage(
+        'Preview is disabled in project settings'
+      )
+    ).toBe(true);
+    expect(
+      isPreviewReadinessBlockingMessage(
+        "Preview not supported for project type 'mobile'"
+      )
+    ).toBe(true);
+    expect(isPreviewReadinessBlockingMessage('docker compose up failed')).toBe(
+      false
+    );
+  });
+
+  it('maps command resolution/package errors to actionable guidance', () => {
+    expect(
+      mapPreviewErrorMessage(
+        "Unable to resolve preview command from package.json for project type 'web'. Tried scripts [dev, start], available scripts [lint, test]."
+      )
+    ).toContain('No compatible start script found for preview');
+
+    expect(
+      mapPreviewErrorMessage(
+        'Failed to parse package.json for preview command resolution: expected value at line 1 column 1'
+      )
+    ).toContain('Cannot read package.json for preview command detection');
+
+    expect(
+      mapPreviewErrorMessage(
+        "Unable to resolve preview command for project type 'api' because package.json is missing at /tmp/app and no supported non-Node entrypoint (Python/Go/Rust) was detected."
+      )
+    ).toContain('Cannot detect Python/Go/Rust preview entrypoint');
+  });
+
+  it('maps docker daemon/runtime startup errors', () => {
+    expect(
+      mapPreviewErrorMessage(
+        'Failed to execute docker compose up for attempt 1: No such file or directory'
+      )
+    ).toContain('Docker compose command failed to execute');
+
+    expect(
+      mapPreviewErrorMessage(
+        'docker compose up failed for attempt 1: Cannot connect to the Docker daemon at unix:///var/run/docker.sock. Is the docker daemon running?'
+      )
+    ).toContain('Cannot connect to Docker daemon');
+
+    expect(
+      mapPreviewErrorMessage(
+        'Timed out after 90s waiting for dev-server and cloudflared to be running'
+      )
+    ).toContain('startup timed out');
+  });
+
+  it('maps non-node runtime dependency/toolchain errors', () => {
+    expect(
+      mapPreviewErrorMessage('ModuleNotFoundError: No module named uvicorn')
+    ).toContain('Python preview dependencies are missing');
+
+    expect(
+      mapPreviewErrorMessage('/bin/sh: go: command not found')
+    ).toContain('Runtime image does not include required toolchain');
+  });
+
+  it('detects and normalizes already-stopped preview message', () => {
+    expect(isPreviewAlreadyStoppedMessage('Preview not found')).toBe(true);
+    expect(
+      mapPreviewErrorMessage('Preview not found for this attempt')
+    ).toBe('Preview is already stopped for this attempt.');
+  });
+});

@@ -1,0 +1,4 @@
+{"type":"item.updated","item":{"id":"item_1","type":"agent_message","text":"Planning migration rollout..."}}
+{"type":"item.completed","item":{"id":"item_2","type":"command_execution","command":"/bin/zsh -lc 'rg \"DATABASE_URL\" .env'","aggregatedOutput":"DATABASE_URL=postgres://...","status":"completed"}}
+{"type":"item.completed","item":{"id":"item_3","type":"file_change","changes":[{"path":"crates/db/migrations/20260227_add_index.sql","kind":"create"}],"status":"completed"}}
+{"type":"response.completed","response":{"usage":{"inputTokens":"44","outputTokens":"17","totalTokens":"61"},"next_action":"Wait for DBA approval","user_answered_questions":{"question":"Run migration now?","answer":"after backup"}}}

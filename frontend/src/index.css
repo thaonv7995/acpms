@@ -1,0 +1,219 @@
+/* Fonts loaded via index.html link for non-blocking load */
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+/* Theme Variables - Vibe-Kanban Style */
+@layer base {
+  /* Light theme defaults */
+  :root {
+    color-scheme: light;
+
+    /* Core colors (HSL format for Tailwind) */
+    --background: 48 33% 97%;           /* #f8f8f8 - Page background */
+    --foreground: 222.2 84% 4.9%;       /* #0a0a0a - Text */
+    --card: 0 0% 100%;                  /* white - Card background */
+    --card-foreground: 222.2 84% 4.9%;  /* #0a0a0a - Card text */
+    --popover: 0 0% 100%;               /* white */
+    --popover-foreground: 222.2 84% 4.9%;
+
+    /* Semantic colors */
+    --primary: 220 13% 91%;             /* Neutral primary */
+    --primary-foreground: 222.2 84% 4.9%;
+    --secondary: 0 0% 100%;
+    --secondary-foreground: 222.2 84% 4.9%;
+    --muted: 0 0% 100%;                 /* white - Muted elements */
+    --muted-foreground: 222.2 84% 4.9%;
+    --accent: 48 33% 97%;               /* Match background */
+    --accent-foreground: 222.2 84% 4.9%;
+    --destructive: 0 84.2% 60.2%;       /* Red for errors */
+    --destructive-foreground: 0 0% 100%;
+
+    /* Borders and inputs */
+    --border: 214.3 31.8% 91.4%;        /* #e5e7eb - Subtle borders */
+    --input: 214.3 31.8% 91.4%;
+    --ring: 222.2 84% 4.9%;             /* Focus ring */
+
+    /* Status colors */
+    --success: 142.1 76.2% 36.3%;       /* Green */
+    --success-foreground: 142.1 76.2% 20%;
+    --warning: 32.2 95% 44.1%;          /* Orange */
+    --warning-foreground: 26 83.3% 14.1%;
+    --info: 217.2 91.2% 59.8%;          /* Blue */
+    --info-foreground: 222.2 84% 4.9%;
+    --neutral: 210 40% 96%;             /* Light gray */
+    --neutral-foreground: 222.2 84% 4.9%;
+
+    /* Border radius */
+    --radius: 0.5rem;
+  }
+
+  /* Dark theme (optional - can be enabled with .dark class) */
+  .dark {
+    color-scheme: dark;
+    --background: 48 4% 16%;            /* #272727 */
+    --foreground: 48 7% 85%;            /* #d4d4d4 */
+    --card: 60 2% 18%;                  /* #2d2d2d */
+    --card-foreground: 48 7% 85%;
+    --popover: 60 2% 18%;
+    --popover-foreground: 48 7% 85%;
+    --primary: 60 2% 25%;               /* #3f3f3f - Softer gray, not too bright */
+    --primary-foreground: 48 7% 85%;    /* Light text on dark background */
+    --secondary: 60 2% 18%;
+    --secondary-foreground: 48 7% 85%;
+    --muted: 60 2% 18%;
+    --muted-foreground: 48 7% 85%;
+    --accent: 48 4% 16%;
+    --accent-foreground: 48 7% 85%;
+    --destructive: 0 45% 55%;
+    --destructive-foreground: 0 0% 100%;
+    --border: 60 2% 25%;                /* #3f3f3f */
+    --input: 60 2% 25%;
+    --ring: 212.7 26.8% 83.9%;
+    --success: 138.5 76.5% 47.7%;
+    --success-foreground: 138.5 76.5% 96.7%;
+    --warning: 32.2 95% 44.1%;
+    --warning-foreground: 26 83.3% 14.1%;
+    --info: 217.2 91.2% 59.8%;
+    --info-foreground: 222.2 84% 4.9%;
+    --neutral: 217.2 32.6% 17.5%;
+    --neutral-foreground: 210 40% 98%;
+  }
+
+}
+
+/* Global styles - applied after Tailwind layers */
+body {
+  background-color: hsl(var(--background));
+  color: hsl(var(--foreground));
+  font-family: 'Chivo Mono', 'Noto Emoji', monospace;
+}
+
+/* Prism.js Dark Theme for Diff Viewer */
+.token.comment,
+.token.prolog,
+.token.doctype,
+.token.cdata {
+  color: #6e7681;
+}
+
+.token.punctuation {
+  color: #c9d1d9;
+}
+
+.token.namespace {
+  opacity: 0.7;
+}
+
+.token.property,
+.token.tag,
+.token.boolean,
+.token.number,
+.token.constant,
+.token.symbol,
+.token.deleted {
+  color: #79c0ff;
+}
+
+.token.selector,
+.token.attr-name,
+.token.string,
+.token.char,
+.token.builtin,
+.token.inserted {
+  color: #a5d6ff;
+}
+
+.token.operator,
+.token.entity,
+.token.url,
+.language-css .token.string,
+.style .token.string {
+  color: #d2a8ff;
+}
+
+.token.atrule,
+.token.attr-value,
+.token.keyword {
+  color: #ff7b72;
+}
+
+.token.function,
+.token.class-name {
+  color: #d2a8ff;
+}
+
+.token.regex,
+.token.important,
+.token.variable {
+  color: #ffa657;
+}
+
+.token.important,
+.token.bold {
+  font-weight: bold;
+}
+
+.token.italic {
+  font-style: italic;
+}
+
+.token.entity {
+  cursor: help;
+}
+
+/* Light mode overrides */
+:root:not(.dark) .token.comment,
+:root:not(.dark) .token.prolog,
+:root:not(.dark) .token.doctype,
+:root:not(.dark) .token.cdata {
+  color: #6a737d;
+}
+
+:root:not(.dark) .token.punctuation {
+  color: #24292e;
+}
+
+:root:not(.dark) .token.property,
+:root:not(.dark) .token.tag,
+:root:not(.dark) .token.boolean,
+:root:not(.dark) .token.number,
+:root:not(.dark) .token.constant,
+:root:not(.dark) .token.symbol,
+:root:not(.dark) .token.deleted {
+  color: #005cc5;
+}
+
+:root:not(.dark) .token.selector,
+:root:not(.dark) .token.attr-name,
+:root:not(.dark) .token.string,
+:root:not(.dark) .token.char,
+:root:not(.dark) .token.builtin,
+:root:not(.dark) .token.inserted {
+  color: #032f62;
+}
+
+:root:not(.dark) .token.operator,
+:root:not(.dark) .token.entity,
+:root:not(.dark) .token.url,
+:root:not(.dark) .language-css .token.string,
+:root:not(.dark) .style .token.string {
+  color: #6f42c1;
+}
+
+:root:not(.dark) .token.atrule,
+:root:not(.dark) .token.attr-value,
+:root:not(.dark) .token.keyword {
+  color: #d73a49;
+}
+
+:root:not(.dark) .token.function,
+:root:not(.dark) .token.class-name {
+  color: #6f42c1;
+}
+
+:root:not(.dark) .token.regex,
+:root:not(.dark) .token.important,
+:root:not(.dark) .token.variable {
+  color: #e36209;
+}

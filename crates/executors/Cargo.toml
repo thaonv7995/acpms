@@ -1,0 +1,65 @@
+[package]
+name = "acpms-executors"
+version.workspace = true
+edition.workspace = true
+authors.workspace = true
+license.workspace = true
+
+[dependencies]
+# Workspace crates
+acpms-db = { path = "../db" }
+acpms-utils = { path = "../utils" }
+acpms-gitlab = { path = "../gitlab" }
+acpms-github = { path = "../github" }
+
+# Encryption (for PAT decryption)
+aes-gcm = "0.10"
+base64 = "0.22"
+
+# Workspace dependencies
+tokio.workspace = true
+tokio-stream.workspace = true
+sqlx.workspace = true
+anyhow.workspace = true
+uuid.workspace = true
+tracing.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+chrono.workspace = true
+
+# Worker Queue
+deadqueue = "0.2"
+thiserror.workspace = true
+
+# File system
+dirs = "5.0"
+walkdir = "2.4"
+zip = "2.2"
+tar = "0.4"
+flate2 = "1.0"
+
+# Regex for log sanitization
+regex = "1.10"
+once_cell = "1.19"
+
+# TypeScript type generation
+ts-rs.workspace = true
+
+# Process group management (for proper agent termination)
+command-group = { version = "5.0", features = ["with-tokio"] }
+
+# Scope guard for cleanup on drop
+scopeguard = "1.2"
+
+# NEW: SDK Control Protocol dependencies
+os_pipe = "1.2"              # Stdout/stderr piping for protocol separation
+strip-ansi-escapes = "0.2.1" # Clean ANSI codes from logs
+async-trait = "0.1"          # For ApprovalService trait
+async-stream = "0.3"         # For MsgStore stream generation
+futures = "0.3"              # Stream utilities
+
+[target.'cfg(unix)'.dependencies]
+nix = { version = "0.29", features = ["signal", "process"] }
+
+[dev-dependencies]
+tempfile = "3.8"
