@@ -34,6 +34,7 @@ const ACPMS_AGENT_CODEX_BIN_ENV: &str = "ACPMS_AGENT_CODEX_BIN";
 const ACPMS_AGENT_GEMINI_BIN_ENV: &str = "ACPMS_AGENT_GEMINI_BIN";
 const ACPMS_AGENT_CURSOR_BIN_ENV: &str = "ACPMS_AGENT_CURSOR_BIN";
 const ACPMS_AGENT_NPX_BIN_ENV: &str = "ACPMS_AGENT_NPX_BIN";
+const ACPMS_GEMINI_HOME_ENV: &str = "ACPMS_GEMINI_HOME";
 
 /// Agent provider status response (legacy endpoint response)
 #[derive(Debug, Serialize, ToSchema)]
@@ -885,6 +886,14 @@ async fn launch_auth_process(
     if session.provider == "gemini-cli" {
         // Force manual URL/code flow so UI can always show actionable auth link/code.
         command.env("NO_BROWSER", "true");
+        // Keep Gemini auth state under an explicit home when provided.
+        if let Some(gemini_home) = read_non_empty_env(ACPMS_GEMINI_HOME_ENV) {
+            command.env("HOME", gemini_home);
+        }
+        // Some headless service environments have no TERM; Gemini CLI may exit early.
+        if std::env::var_os("TERM").is_none() {
+            command.env("TERM", "xterm-256color");
+        }
     }
 
     let mut child = command.spawn().map_err(|e| {
@@ -1123,14 +1132,26 @@ async fn launch_auth_process(
                 }
             }
             Ok(status) => {
+                let provider_status = verify_provider_status_with_retry(
+                    &provider,
+                    AUTH_EXIT_SUCCESS_VERIFY_RETRIES,
+                    Duration::from_secs(AUTH_EXIT_SUCCESS_VERIFY_RETRY_DELAY_SECONDS),
+                )
+                .await;
+                let error_message = if provider_status.message.trim().is_empty() {
+                    format!("Auth process exited with status {:?}", status.code())
+                } else {
+                    format!(
+                        "Auth process exited with status {:?}. {}",
+                        status.code(),
+                        provider_status.message
+                    )
+                };
                 let _ = store
                     .update_status(
                         session_id,
                         AuthSessionStatus::Failed,
-                        Some(format!(
-                            "Auth process exited with status {:?}",
-                            status.code()
-                        )),
+                        Some(error_message),
                         None,
                     )
                     .await;
@@ -1197,27 +1218,17 @@ async fn auth_command_for_provider(provider: &str) -> Option<(String, Vec<String
             let args = resolve_claude_auth_args(true, Some(npx_cmd.as_str())).await;
             Some((npx_cmd, owned_args(args)))
         }
-        // Gemini CLI v0.1.x has no `auth` subcommand and requires an interactive TTY.
-        // Run via `script` to allocate a pseudo-terminal for login flow.
+        // Gemini CLI requires an interactive TTY for login.
+        // Run via `script` and auto-pick `gemini auth` when CLI supports it.
         "gemini-cli" => {
             let script_cmd = resolve_command_in_path("script")?;
             if let Some(gemini_cmd) = resolve_provider_cli_command("gemini-cli") {
-                return Some((
-                    script_cmd,
-                    vec!["-q".to_string(), "/dev/null".to_string(), gemini_cmd],
-                ));
+                let args = resolve_gemini_auth_script_args(Some(gemini_cmd.as_str()), None).await;
+                return Some((script_cmd, args));
             }
             let npx_cmd = resolve_npx_command()?;
-            Some((
-                script_cmd,
-                vec![
-                    "-q".to_string(),
-                    "/dev/null".to_string(),
-                    npx_cmd,
-                    "-y".to_string(),
-                    "@google/gemini-cli".to_string(),
-                ],
-            ))
+            let args = resolve_gemini_auth_script_args(None, Some(npx_cmd.as_str())).await;
+            Some((script_cmd, args))
         }
         "cursor-cli" => resolve_provider_cli_command("cursor-cli")
             .map(|cmd| (cmd, owned_args(CURSOR_AUTH_LOGIN_ARGS))),
@@ -1383,11 +1394,14 @@ async fn cursor_logout() {
 /// Remove Gemini CLI OAuth credentials so the next auth run will prompt for login.
 /// Uses HOME or ACPMS_GEMINI_HOME. No-op if path cannot be determined or file is missing.
 async fn clear_gemini_oauth_creds() {
-    let home = std::env::var("ACPMS_GEMINI_HOME")
+    let home = std::env::var(ACPMS_GEMINI_HOME_ENV)
         .ok()
         .or_else(|| std::env::var("HOME").ok());
     let Some(home) = home else {
-        tracing::warn!("Cannot clear Gemini creds: HOME and ACPMS_GEMINI_HOME not set");
+        tracing::warn!(
+            "Cannot clear Gemini creds: HOME and {} not set",
+            ACPMS_GEMINI_HOME_ENV
+        );
         return;
     };
     let path = std::path::Path::new(&home)
@@ -1421,6 +1435,7 @@ async fn process_auth_stream_output<R>(
 {
     let mut lines = BufReader::new(reader).lines();
     let mut pending_claude_oauth_url: Option<String> = None;
+    let mut pending_cursor_oauth_url: Option<String> = None;
 
     while let Ok(Some(line)) = lines.next_line().await {
         let normalized_line = strip_ansi_sequences(&line).replace('\r', "");
@@ -1453,6 +1468,36 @@ async fn process_auth_stream_output<R>(
             }
         }
 
+        if provider == "cursor-cli" {
+            if let Some(start_url) = extract_cursor_oauth_url_start(trimmed_line) {
+                pending_cursor_oauth_url = Some(start_url);
+                continue;
+            }
+
+            if let Some(url) = pending_cursor_oauth_url.as_mut() {
+                if is_auth_url_continuation_fragment(trimmed_line) {
+                    url.push_str(trimmed_line);
+                    continue;
+                }
+
+                let finalized_url = pending_cursor_oauth_url.take().unwrap_or_default();
+                if !finalized_url.is_empty() {
+                    let _ = store
+                        .update_action(
+                            session_id,
+                            Some(finalized_url),
+                            None,
+                            Some(
+                                "Open this URL in browser to complete Cursor login. No need to paste callback."
+                                    .to_string(),
+                            ),
+                            None,
+                        )
+                        .await;
+                }
+            }
+        }
+
         if let Some(parsed) = parse_auth_required_action_by_provider(&provider, &normalized_line) {
             let _ = store
                 .update_action(
@@ -1474,6 +1519,21 @@ async fn process_auth_stream_output<R>(
                 None,
                 Some("Complete auth in browser. If redirected to localhost and it fails, paste that localhost URL below.".to_string()),
                 parse_loopback_port(&finalized_url),
+            )
+            .await;
+    }
+
+    if let Some(finalized_url) = pending_cursor_oauth_url.take() {
+        let _ = store
+            .update_action(
+                session_id,
+                Some(finalized_url),
+                None,
+                Some(
+                    "Open this URL in browser to complete Cursor login. No need to paste callback."
+                        .to_string(),
+                ),
+                None,
             )
             .await;
     }
@@ -1508,6 +1568,24 @@ fn extract_claude_oauth_url_start(line: &str) -> Option<String> {
     } else {
         None
     }
+}
+
+const CURSOR_OAUTH_URL_PREFIXES: [&str; 2] = [
+    "https://cursor.com/loginDeepControl",
+    "https://www.cursor.com/loginDeepControl",
+];
+
+fn extract_cursor_oauth_url_start(line: &str) -> Option<String> {
+    for prefix in CURSOR_OAUTH_URL_PREFIXES {
+        if let Some(start) = line.find(prefix) {
+            let mut url = line[start..].to_string();
+            url.retain(|c| !c.is_whitespace());
+            if url.starts_with(prefix) {
+                return Some(url);
+            }
+        }
+    }
+    None
 }
 
 fn is_auth_url_continuation_fragment(fragment: &str) -> bool {
@@ -1671,6 +1749,70 @@ async fn run_command_probe_owned(
 ) -> Result<CommandProbeOutcome, String> {
     let arg_refs: Vec<&str> = args.iter().map(|arg| arg.as_str()).collect();
     run_command_probe(cmd, &arg_refs, timeout_secs).await
+}
+
+async fn resolve_gemini_auth_script_args(
+    gemini_cmd: Option<&str>,
+    npx_cmd: Option<&str>,
+) -> Vec<String> {
+    let mut args = vec!["-q".to_string(), "/dev/null".to_string()];
+    if let Some(cmd) = gemini_cmd {
+        args.push(cmd.to_string());
+        if gemini_supports_auth_subcommand(Some(cmd), None).await {
+            args.push("auth".to_string());
+        }
+        return args;
+    }
+
+    if let Some(npx) = npx_cmd {
+        args.push(npx.to_string());
+        args.push("-y".to_string());
+        args.push("@google/gemini-cli".to_string());
+        if gemini_supports_auth_subcommand(None, Some(npx)).await {
+            args.push("auth".to_string());
+        }
+    }
+
+    args
+}
+
+async fn gemini_supports_auth_subcommand(gemini_cmd: Option<&str>, npx_cmd: Option<&str>) -> bool {
+    let probe = if let Some(cmd) = gemini_cmd {
+        run_command_probe(cmd, &["--help"], 8).await
+    } else if let Some(npx) = npx_cmd {
+        run_command_probe(npx, &["-y", "@google/gemini-cli", "--help"], 25).await
+    } else {
+        return false;
+    };
+
+    let Ok(outcome) = probe else {
+        // Probe failed: prefer modern flow (`gemini auth`) because latest CLI uses it.
+        return true;
+    };
+    if outcome.timed_out {
+        return true;
+    }
+
+    let combined = format!("{}\n{}", outcome.stdout, outcome.stderr);
+    if help_mentions_auth_subcommand(&combined) {
+        return true;
+    }
+
+    // Help completed successfully and no `auth` token was exposed => legacy behavior.
+    if outcome.success {
+        return false;
+    }
+
+    // Inconclusive command output; prefer modern auth flow.
+    true
+}
+
+fn help_mentions_auth_subcommand(output: &str) -> bool {
+    output.split_whitespace().any(|token| {
+        token
+            .trim_matches(|c: char| !c.is_ascii_alphanumeric())
+            .eq_ignore_ascii_case("auth")
+    })
 }
 
 fn looks_like_loopback_callback(input: &str) -> bool {
@@ -2246,7 +2388,7 @@ fn gemini_api_key_configured() -> bool {
 }
 
 fn has_gemini_local_credentials() -> bool {
-    let home = std::env::var("ACPMS_GEMINI_HOME")
+    let home = std::env::var(ACPMS_GEMINI_HOME_ENV)
         .ok()
         .or_else(|| std::env::var("HOME").ok());
     let Some(home) = home else {
@@ -2355,13 +2497,13 @@ fn get_claude_session_info() -> Option<SessionInfo> {
 #[cfg(test)]
 mod tests {
     use super::{
-        extract_claude_oauth_url_start, is_auth_url_continuation_fragment, looks_like_http_url,
-        looks_like_loopback_callback, normalize_agent_cli_provider,
-        parse_auth_required_action_by_provider, parse_cli_semver, parse_loopback_port,
-        redact_callback_target, select_auth_command_for_provider, strip_ansi_sequences,
-        validate_loopback_callback_url, CLAUDE_AUTH_LOGIN_ARGS, CLAUDE_NPX_AUTH_LOGIN_ARGS,
-        CODEX_AUTH_DEVICE_ARGS, CODEX_NPX_AUTH_DEVICE_ARGS, GEMINI_NPX_SCRIPT_ARGS,
-        GEMINI_SCRIPT_ARGS,
+        extract_claude_oauth_url_start, extract_cursor_oauth_url_start,
+        is_auth_url_continuation_fragment, looks_like_http_url, looks_like_loopback_callback,
+        normalize_agent_cli_provider, parse_auth_required_action_by_provider, parse_cli_semver,
+        parse_loopback_port, redact_callback_target, select_auth_command_for_provider,
+        strip_ansi_sequences, validate_loopback_callback_url, CLAUDE_AUTH_LOGIN_ARGS,
+        CLAUDE_NPX_AUTH_LOGIN_ARGS, CODEX_AUTH_DEVICE_ARGS, CODEX_NPX_AUTH_DEVICE_ARGS,
+        GEMINI_NPX_SCRIPT_ARGS, GEMINI_SCRIPT_ARGS,
     };
 
     #[test]
@@ -2474,9 +2616,33 @@ mod tests {
     }
 
     #[test]
+    fn extract_cursor_oauth_url_start_detects_prefix() {
+        let line =
+            "Open this URL: https://cursor.com/loginDeepControl?challenge=abc&uuid=xyz&mode=login";
+        let extracted = extract_cursor_oauth_url_start(line).expect("url");
+        assert_eq!(
+            extracted,
+            "https://cursor.com/loginDeepControl?challenge=abc&uuid=xyz&mode=login"
+        );
+    }
+
+    #[test]
+    fn extract_cursor_oauth_url_start_handles_www_prefix() {
+        let line = "https://www.cursor.com/loginDeepControl?challenge=abc";
+        let extracted = extract_cursor_oauth_url_start(line).expect("url");
+        assert_eq!(
+            extracted,
+            "https://www.cursor.com/loginDeepControl?challenge=abc"
+        );
+    }
+
+    #[test]
     fn auth_url_continuation_fragment_validation() {
         assert!(is_auth_url_continuation_fragment(
             "44d1962f5e&response_type=code"
+        ));
+        assert!(is_auth_url_continuation_fragment(
+            "&uuid=c581c686-cdd2-4b68-ad67-4812a282c4ea&mode=login&redirectTarget=cli"
         ));
         assert!(!is_auth_url_continuation_fragment("Paste code here >"));
     }
@@ -2557,5 +2723,21 @@ mod tests {
         assert_eq!(normalize_agent_cli_provider("gemini"), "gemini-cli");
         assert_eq!(normalize_agent_cli_provider("cursor"), "cursor-cli");
         assert_eq!(normalize_agent_cli_provider("claude-code"), "claude-code");
+    }
+
+    #[test]
+    fn help_parser_detects_auth_subcommand_token() {
+        let help = r#"
+            Commands:
+              auth        Sign in to Gemini
+              update      Check for updates
+        "#;
+        assert!(super::help_mentions_auth_subcommand(help));
+    }
+
+    #[test]
+    fn help_parser_ignores_authenticate_word_without_auth_token() {
+        let help = "Use this command to authenticate with Gemini CLI.";
+        assert!(!super::help_mentions_auth_subcommand(help));
     }
 }

@@ -11,7 +11,7 @@
 #   ACPMS_SKIP_AGENT_CLI=1   - do not install Agent CLI providers (claude/codex/gemini/cursor)
 #   ACPMS_SERVICE_USER / ACPMS_SERVICE_GROUP - Linux systemd service account (defaults to current installer user)
 #   ADMIN_EMAIL / ADMIN_PASSWORD - non-interactive admin creation (ADMIN_PASSWORD optional; if omitted, script generates one)
-#   ACPMS_DOMAIN - hostname for S3_PUBLIC_ENDPOINT (default: acpms.local)
+#   ACPMS_DOMAIN - hostname for S3_PUBLIC_ENDPOINT (optional)
 #   ACPMS_PUBLIC_URL - public base URL for uploads (e.g. https://app.auxbase.space); overrides ACPMS_DOMAIN for S3 presigned URLs when set
 #   GITHUB_TOKEN - for private repo (releases + docker-compose.yml)
 # Release is created by .github/workflows/release.yml on push tag v* (e.g. v1.0.0). See repo Releases tab.
@@ -559,10 +559,13 @@ download_artifacts() {
 # =============================================================================
 
 generate_env() {
-  local domain="${ACPMS_DOMAIN:-acpms.local}"
-  # Public URL for presigned S3 (upload/avatar): must be reachable from browser (e.g. https://app.auxbase.space)
-  local s3_public_base="${ACPMS_PUBLIC_URL:-}"
-  [ -z "$s3_public_base" ] && s3_public_base="https://${domain}"
+  # Public URL for presigned S3 (upload/avatar): must be reachable from browser
+  # (e.g. https://app.auxbase.space). Accepts ACPMS_PUBLIC_URL with or without /s3.
+  local s3_public_base
+  s3_public_base="$(resolve_s3_public_base)"
+  if [ -z "${ACPMS_PUBLIC_URL:-}" ] && [ -z "${ACPMS_DOMAIN:-}" ]; then
+    log "ACPMS_PUBLIC_URL/ACPMS_DOMAIN not set; using local mode for presigned upload URLs."
+  fi
   local jwt_secret="${JWT_SECRET:-}"
   local encryption_key="${ENCRYPTION_KEY:-}"
   if [ -z "$jwt_secret" ]; then
@@ -606,6 +609,58 @@ S3_REGION=us-east-1
 # Port
 ACPMS_PORT=$ACPMS_PORT
 EOF
+}
+
+resolve_s3_public_base() {
+  local domain="${ACPMS_DOMAIN:-}"
+  local s3_public_base="${ACPMS_PUBLIC_URL:-}"
+  if [ -z "$s3_public_base" ]; then
+    if [ -n "$domain" ]; then
+      s3_public_base="https://${domain}"
+    else
+      s3_public_base="http://localhost:${ACPMS_PORT}"
+    fi
+  fi
+
+  # Normalize so S3_PUBLIC_ENDPOINT below always becomes <base>/s3 exactly once.
+  s3_public_base="${s3_public_base%/}"
+  case "$s3_public_base" in
+    */s3) s3_public_base="${s3_public_base%/s3}" ;;
+  esac
+
+  echo "$s3_public_base"
+}
+
+prompt_public_url() {
+  [ -n "${ACPMS_NONINTERACTIVE:-}" ] && return
+  [ -n "${ACPMS_PUBLIC_URL:-}" ] && return
+  [ -n "${ACPMS_DOMAIN:-}" ] && return
+
+  log "Configure public URL for uploads (presigned S3 URLs)."
+  log "Input domain (e.g. app.example.com) or full URL (e.g. https://app.example.com)."
+  log "Leave empty to run local mode."
+
+  local input trimmed base
+  read -rp "Public domain/URL (empty = local): " input
+  trimmed="$(printf '%s' "$input" | sed 's/^[[:space:]]*//;s/[[:space:]]*$//')"
+
+  if [ -z "$trimmed" ]; then
+    ACPMS_PUBLIC_URL="http://localhost:${ACPMS_PORT}"
+    log "Local mode selected. Upload URL base: ${ACPMS_PUBLIC_URL}/s3"
+    return
+  fi
+
+  case "$trimmed" in
+    http://*|https://*)
+      ACPMS_PUBLIC_URL="$trimmed"
+      ;;
+    *)
+      ACPMS_DOMAIN="$trimmed"
+      ;;
+  esac
+
+  base="$(resolve_s3_public_base)"
+  log "Upload URL base set to: ${base}/s3"
 }
 
 # =============================================================================
@@ -800,6 +855,16 @@ setup_macos_daemon() {
 
   log "Installing launchd service..."
   local plist="$HOME/Library/LaunchAgents/com.acpms.server.plist"
+  local runner="$BASE_DIR/run-acpms.sh"
+  local launchd_path="/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin:/usr/sbin:/sbin"
+  cat > "$runner" << EOF
+#!/bin/sh
+set -a
+. "$ENV_FILE"
+set +a
+exec "$BIN_PATH"
+EOF
+  chmod +x "$runner"
   mkdir -p "$(dirname "$plist")"
   cat > "$plist" << EOF
 <?xml version="1.0" encoding="UTF-8"?>
@@ -810,36 +875,16 @@ setup_macos_daemon() {
   <string>com.acpms.server</string>
   <key>ProgramArguments</key>
   <array>
-    <string>$BIN_PATH</string>
+    <string>$runner</string>
   </array>
   <key>WorkingDirectory</key>
   <string>$BASE_DIR</string>
   <key>EnvironmentVariables</key>
   <dict>
-    <key>ACPMS_FRONTEND_DIR</key>
-    <string>$FRONTEND_DIR</string>
-    <key>ACPMS_CONFIG_DIR</key>
-    <string>$CONF_DIR</string>
-    <key>ACPMS_WORKSPACE_DIR</key>
-    <string>$WORK_DIR</string>
-    <key>ACPMS_SKILLS_DIR</key>
-    <string>$SKILLS_DIR</string>
-    <key>DATABASE_URL</key>
-    <string>postgres://acpms_user:acpms_password@127.0.0.1:5432/acpms</string>
-    <key>S3_ENDPOINT</key>
-    <string>http://127.0.0.1:9000</string>
-    <key>S3_PUBLIC_ENDPOINT</key>
-    <string>https://acpms.local/s3</string>
-    <key>S3_ACCESS_KEY</key>
-    <string>admin</string>
-    <key>S3_SECRET_KEY</key>
-    <string>adminpassword123</string>
-    <key>S3_BUCKET_NAME</key>
-    <string>acpms-media</string>
-    <key>S3_REGION</key>
-    <string>us-east-1</string>
-    <key>ACPMS_PORT</key>
-    <string>$ACPMS_PORT</string>
+    <key>HOME</key>
+    <string>$HOME</string>
+    <key>PATH</key>
+    <string>$launchd_path</string>
   </dict>
   <key>RunAtLoad</key>
   <true/>
@@ -922,8 +967,10 @@ main_install() {
 
   ACPMS_PORT=$(find_free_port)
   log "Using port: $ACPMS_PORT"
+  prompt_public_url
 
   if [ -z "${ACPMS_NONINTERACTIVE:-}" ]; then
+    log "S3 public endpoint will be: $(resolve_s3_public_base)/s3"
     log "ACPMS will be installed to: $BASE_DIR (config: $CONF_DIR)."
     ask_yes "Continue with download and install? [Y/n]" "y" || exit 0
   fi
