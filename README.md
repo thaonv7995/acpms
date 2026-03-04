@@ -41,7 +41,25 @@ Focused on **project management** and **breaking down requirements** into manage
 
 The installer auto-starts Postgres + MinIO via Docker Compose if not running. It does **not** install Docker.
 
-**Option A – Clone repo, then install** (recommended):
+**Supported OS (installer + release binary):**
+
+- Linux (`x86_64`/`amd64`, `arm64`/`aarch64`)
+- macOS (`x86_64` Intel, `arm64` Apple Silicon)
+- Windows via WSL2 (run `install.sh` inside a Linux distro such as Ubuntu/Debian)
+
+**Option A – One-liner (recommended default for all supported OS):**
+
+```bash
+bash -c "$(curl -sSL https://raw.githubusercontent.com/thaonv7995/acpms/main/install.sh)"
+```
+
+Uninstall (one-liner mode):
+
+```bash
+bash -c "$(curl -fsSL https://raw.githubusercontent.com/thaonv7995/acpms/main/install.sh)" -- --uninstall
+```
+
+**Option B – Clone repo, then install** (alternative):
 
 ```bash
 git clone https://github.com/thaonv7995/acpms.git
@@ -49,19 +67,11 @@ cd acpms
 bash install.sh   # One-shot: auto-starts Postgres + MinIO, downloads binary, runs migration, creates admin
 ```
 
-**Option B – One-liner** (Postgres + MinIO auto-start if missing):
+Uninstall (from cloned repo):
 
 ```bash
-bash -c "$(curl -sSL https://raw.githubusercontent.com/thaonv7995/acpms/main/install.sh)"
+bash install.sh --uninstall
 ```
-
-**Option C – One-shot non-interactive** (CI/CD, automation):
-
-```bash
-ADMIN_EMAIL=admin@example.com ADMIN_PASSWORD=your-secure-password-12chars ACPMS_NONINTERACTIVE=1 bash install.sh
-```
-
-**Uninstall:** `./install.sh --uninstall`
 
 ---
 
