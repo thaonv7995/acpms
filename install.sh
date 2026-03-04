@@ -303,12 +303,13 @@ check_services() {
 }
 
 # Check Agent CLI providers (optional but recommended)
-# Providers: claude (npm), codex (npm), gemini (npm), agent (Cursor CLI via official script, not npm)
+# Providers: claude (npm), codex (npm), gemini (npm), Cursor CLI (`agent` / `cursor-agent`)
 check_agent_cli_providers() {
   local npm_providers=("claude:@anthropic-ai/claude-code" "codex:@openai/codex" "gemini:@google/gemini-cli")
   local missing_npm=()
   local need_cursor=false
   local pkg cmd
+  local cursor_cmd=""
 
   for entry in "${npm_providers[@]}"; do
     cmd="${entry%%:*}"
@@ -316,7 +317,11 @@ check_agent_cli_providers() {
       missing_npm+=("${entry##*:}")
     fi
   done
-  if ! command -v agent >/dev/null 2>&1; then
+  cursor_cmd="$(command -v agent 2>/dev/null || true)"
+  if [ -z "$cursor_cmd" ]; then
+    cursor_cmd="$(command -v cursor-agent 2>/dev/null || true)"
+  fi
+  if [ -z "$cursor_cmd" ]; then
     need_cursor=true
   fi
 
@@ -341,10 +346,10 @@ check_agent_cli_providers() {
   if [ "$need_cursor" = true ]; then
     log "Installing Cursor CLI (agent)..."
     if curl -fsSL https://cursor.com/install | bash 2>/dev/null; then
-      if command -v agent >/dev/null 2>&1; then
+      if command -v agent >/dev/null 2>&1 || command -v cursor-agent >/dev/null 2>&1; then
         log "  Cursor CLI installed."
       else
-        log "  Cursor CLI script ran; if 'agent' is not in PATH, add the install dir to PATH or run: curl https://cursor.com/install -fsS | bash"
+        log "  Cursor CLI script ran; if 'agent'/'cursor-agent' is not in PATH, add the install dir to PATH or run: curl https://cursor.com/install -fsS | bash"
       fi
     else
       err "Failed to install Cursor CLI. Run manually: curl https://cursor.com/install -fsS | bash"
@@ -578,6 +583,16 @@ generate_env() {
   worktrees_path="${WORKTREES_PATH:-$HOME/Projects}"
   case "$worktrees_path" in ~*) worktrees_path=$(eval echo "$worktrees_path") ;; esac
   [ -z "$worktrees_path" ] && worktrees_path="/var/acpms/worktrees"
+  # Capture absolute CLI paths at install time so runtime (systemd/launchd) does not depend on shell PATH.
+  local claude_bin codex_bin gemini_bin cursor_bin npx_bin
+  claude_bin="$(command -v claude 2>/dev/null || true)"
+  codex_bin="$(command -v codex 2>/dev/null || true)"
+  gemini_bin="$(command -v gemini 2>/dev/null || true)"
+  cursor_bin="$(command -v agent 2>/dev/null || true)"
+  if [ -z "$cursor_bin" ]; then
+    cursor_bin="$(command -v cursor-agent 2>/dev/null || true)"
+  fi
+  npx_bin="$(command -v npx 2>/dev/null || true)"
 
   log "Generating $ENV_FILE..."
   $USE_SUDO mkdir -p "$(dirname "$ENV_FILE")"
@@ -608,6 +623,13 @@ S3_REGION=us-east-1
 
 # Port
 ACPMS_PORT=$ACPMS_PORT
+
+# Optional CLI binary overrides (captured during install for dev/prod parity)
+ACPMS_AGENT_CLAUDE_BIN=$claude_bin
+ACPMS_AGENT_CODEX_BIN=$codex_bin
+ACPMS_AGENT_GEMINI_BIN=$gemini_bin
+ACPMS_AGENT_CURSOR_BIN=$cursor_bin
+ACPMS_AGENT_NPX_BIN=$npx_bin
 EOF
 }
 
@@ -796,8 +818,8 @@ setup_linux_daemon() {
         service_path="$service_path:$runtime_dir"
       fi
     done
-    # Include user-local bins because many npm global installs land here on production hosts.
-    service_path="$service_path:$service_home/.local/bin:$service_home/.npm-global/bin"
+    # Include user-local bins because many CLI installs land here on production hosts.
+    service_path="$service_path:$service_home/.local/bin:$service_home/.npm-global/bin:$service_home/.cursor/bin:$service_home/.local/share/cursor/bin"
 
     # Runtime writes worktrees under WORK_DIR; ensure service account can write.
     $USE_SUDO mkdir -p "$WORK_DIR"
@@ -856,7 +878,7 @@ setup_macos_daemon() {
   log "Installing launchd service..."
   local plist="$HOME/Library/LaunchAgents/com.acpms.server.plist"
   local runner="$BASE_DIR/run-acpms.sh"
-  local launchd_path="/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin:/usr/sbin:/sbin"
+  local launchd_path="/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin:/usr/sbin:/sbin:$HOME/.local/bin:$HOME/.npm-global/bin:$HOME/.cursor/bin:$HOME/.local/share/cursor/bin"
   cat > "$runner" << EOF
 #!/bin/sh
 set -a

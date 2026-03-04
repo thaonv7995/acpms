@@ -1681,14 +1681,19 @@ fn read_non_empty_env(var: &str) -> Option<String> {
 }
 
 fn resolve_provider_cli_command(provider: &str) -> Option<String> {
-    let (default_cmd, override_env) = match provider {
-        "claude-code" => ("claude", ACPMS_AGENT_CLAUDE_BIN_ENV),
-        "openai-codex" => ("codex", ACPMS_AGENT_CODEX_BIN_ENV),
-        "gemini-cli" => ("gemini", ACPMS_AGENT_GEMINI_BIN_ENV),
-        "cursor-cli" => ("agent", ACPMS_AGENT_CURSOR_BIN_ENV),
-        _ => return None,
-    };
-    resolve_command_with_override(default_cmd, override_env)
+    match provider {
+        "claude-code" => resolve_command_with_override("claude", ACPMS_AGENT_CLAUDE_BIN_ENV),
+        "openai-codex" => resolve_command_with_override("codex", ACPMS_AGENT_CODEX_BIN_ENV),
+        "gemini-cli" => resolve_command_with_override("gemini", ACPMS_AGENT_GEMINI_BIN_ENV),
+        "cursor-cli" => {
+            if let Some(override_cmd) = read_non_empty_env(ACPMS_AGENT_CURSOR_BIN_ENV) {
+                return resolve_command_in_path(&override_cmd);
+            }
+            // Cursor CLI command name differs between installs (`agent` vs `cursor-agent`).
+            resolve_command_in_path("agent").or_else(|| resolve_command_in_path("cursor-agent"))
+        }
+        _ => None,
+    }
 }
 
 fn resolve_npx_command() -> Option<String> {

@@ -14,6 +14,51 @@ export function combineTextFragments(entries: TimelineEntry[]): TimelineEntry[] 
   let bufferSource: string | null = null;
   let bufferLastTimestampMs: number | null = null;
 
+  const suffixPrefixOverlap = (prev: string, next: string): number => {
+    const maxOverlap = Math.min(prev.length, next.length);
+    for (let len = maxOverlap; len > 0; len -= 1) {
+      if (prev.endsWith(next.slice(0, len))) {
+        return len;
+      }
+    }
+    return 0;
+  };
+
+  const mergeContinuousStreamFragment = (
+    prev: string,
+    next: string
+  ): { content: string; shouldFlush: boolean } => {
+    if (!prev) return { content: next, shouldFlush: false };
+    if (!next) return { content: prev, shouldFlush: false };
+
+    // Snapshot updates: provider sends full message repeatedly with increasing length.
+    if (next.startsWith(prev)) {
+      return { content: next, shouldFlush: false };
+    }
+
+    // Late/stale update: keep the longer known snapshot.
+    if (prev.startsWith(next)) {
+      return { content: prev, shouldFlush: false };
+    }
+
+    // Delta mode with overlap (suffix/prefix) => append only unseen tail.
+    const overlap = suffixPrefixOverlap(prev, next);
+    if (overlap >= 2) {
+      return { content: prev + next.slice(overlap), shouldFlush: false };
+    }
+
+    // Heuristic split for back-to-back messages in the same stream source.
+    const prevTrimmed = prev.trimEnd();
+    const nextTrimmed = next.trimStart();
+    const prevLooksComplete = /[.!?][)"'\]]?$/.test(prevTrimmed);
+    const nextLooksNewMessage = /^[A-Z0-9]/.test(nextTrimmed);
+    if (prevLooksComplete && nextLooksNewMessage) {
+      return { content: next, shouldFlush: true };
+    }
+
+    return { content: prev + next, shouldFlush: false };
+  };
+
   const isStdoutTranscriptMarker = (text: string): boolean => {
     const trimmed = (text || '').trimStart();
     if (!trimmed) return false;
@@ -101,7 +146,29 @@ export function combineTextFragments(entries: TimelineEntry[]): TimelineEntry[] 
           bufferSource = entry.source || null;
           bufferLastTimestampMs = nextTimestampMs;
         } else {
-          textBuffer.push(entry.content);
+          if (isContinuousStream) {
+            if (textBuffer.length === 0) {
+              textBuffer.push(entry.content);
+            } else {
+              const lastIndex = textBuffer.length - 1;
+              const merged = mergeContinuousStreamFragment(textBuffer[lastIndex], entry.content);
+              if (merged.shouldFlush) {
+                if (bufferStart) {
+                  result.push({
+                    ...bufferStart,
+                    content: joinFragments(textBuffer),
+                  });
+                }
+                textBuffer = [entry.content];
+                bufferStart = entry;
+                bufferSource = entry.source || null;
+              } else {
+                textBuffer[lastIndex] = merged.content;
+              }
+            }
+          } else {
+            textBuffer.push(entry.content);
+          }
           bufferLastTimestampMs = nextTimestampMs;
         }
       } else {

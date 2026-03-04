@@ -6,7 +6,7 @@
 use axum::{
     body::Body,
     extract::{Path, Request},
-    http::StatusCode,
+    http::{header::HeaderName, StatusCode},
     response::{IntoResponse, Response},
 };
 use reqwest::Client;
@@ -17,9 +17,10 @@ pub async fn s3_proxy_handler(Path(path): Path<String>, req: Request) -> impl In
         env::var("S3_ENDPOINT").unwrap_or_else(|_| "http://127.0.0.1:9000".to_string());
     let bucket = env::var("S3_BUCKET_NAME").unwrap_or_else(|_| "acpms-media".to_string());
 
+    let incoming_headers = req.headers().clone();
+
     // Preserve Host from the original request so MinIO's signature validation (which uses Host + path) succeeds.
-    let host_header = req
-        .headers()
+    let host_header = incoming_headers
         .get("Host")
         .and_then(|v| v.to_str().ok())
         .map(|s| s.to_string());
@@ -53,6 +54,16 @@ pub async fn s3_proxy_handler(Path(path): Path<String>, req: Request) -> impl In
     let mut proxy_req = client
         .request(method.clone(), &target_url)
         .body(body_bytes.to_vec());
+
+    // Forward signed/request headers (especially Content-Type for presigned PUT).
+    // Skip hop-by-hop and Host (set explicitly below).
+    for (name, value) in incoming_headers.iter() {
+        if should_skip_forward_header(name) {
+            continue;
+        }
+        proxy_req = proxy_req.header(name, value);
+    }
+
     if let Some(h) = host_header {
         proxy_req = proxy_req.header("Host", h);
     }
@@ -85,4 +96,23 @@ pub async fn s3_proxy_handler(Path(path): Path<String>, req: Request) -> impl In
         }
         Err(e) => (StatusCode::BAD_GATEWAY, format!("MinIO unreachable: {}", e)).into_response(),
     }
+}
+
+fn should_skip_forward_header(name: &HeaderName) -> bool {
+    let lower = name.as_str().to_ascii_lowercase();
+    matches!(
+        lower.as_str(),
+        // We'll set Host explicitly from original incoming request.
+        "host"
+            // Hop-by-hop headers (must not be proxied)
+            | "connection"
+            | "proxy-connection"
+            | "keep-alive"
+            | "transfer-encoding"
+            | "upgrade"
+            | "te"
+            | "trailer"
+            // Let reqwest recalculate body length
+            | "content-length"
+    )
 }
