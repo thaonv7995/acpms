@@ -134,11 +134,16 @@ pub enum RequirementStatus {
 
 #[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq, sqlx::Type, TS, ToSchema)]
 #[sqlx(type_name = "requirement_priority", rename_all = "lowercase")]
+#[serde(rename_all = "lowercase")]
 #[ts(export)]
 pub enum RequirementPriority {
+    #[serde(alias = "Low")]
     Low,
+    #[serde(alias = "Medium")]
     Medium,
+    #[serde(alias = "High")]
     High,
+    #[serde(alias = "Critical")]
     Critical,
 }
 
@@ -2079,4 +2084,30 @@ pub struct SubagentRelationship {
     pub child_attempt_id: Uuid,
     pub spawned_at: DateTime<Utc>,
     pub spawn_tool_use_id: Option<String>,
+}
+
+#[cfg(test)]
+mod tests {
+    use super::RequirementPriority;
+
+    #[test]
+    fn requirement_priority_deserializes_lowercase_values() {
+        let parsed: RequirementPriority =
+            serde_json::from_str("\"high\"").expect("priority should parse");
+        assert_eq!(parsed, RequirementPriority::High);
+    }
+
+    #[test]
+    fn requirement_priority_deserializes_legacy_pascal_case_values() {
+        let parsed: RequirementPriority =
+            serde_json::from_str("\"High\"").expect("priority should parse");
+        assert_eq!(parsed, RequirementPriority::High);
+    }
+
+    #[test]
+    fn requirement_priority_serializes_to_lowercase() {
+        let encoded = serde_json::to_string(&RequirementPriority::Critical)
+            .expect("priority should serialize");
+        assert_eq!(encoded, "\"critical\"");
+    }
 }
