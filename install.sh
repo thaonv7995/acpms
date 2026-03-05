@@ -305,11 +305,12 @@ check_services() {
 }
 
 # Check Agent CLI providers (optional but recommended)
-# Providers: claude (npm), codex (npm), gemini (npm), Cursor CLI (`agent` / `cursor-agent`)
+# Providers: claude (curl), codex (npm), gemini (npm), Cursor CLI (`agent` / `cursor-agent`)
 check_agent_cli_providers() {
-  local npm_providers=("claude:@anthropic-ai/claude-code" "codex:@openai/codex" "gemini:@google/gemini-cli")
+  local npm_providers=("codex:@openai/codex" "gemini:@google/gemini-cli")
   local missing_npm=()
   local need_cursor=false
+  local need_claude=false
   local pkg cmd
   local cursor_cmd=""
 
@@ -319,6 +320,11 @@ check_agent_cli_providers() {
       missing_npm+=("${entry##*:}")
     fi
   done
+
+  if ! command -v claude >/dev/null 2>&1; then
+    need_claude=true
+  fi
+
   cursor_cmd="$(command -v agent 2>/dev/null || true)"
   if [ -z "$cursor_cmd" ]; then
     cursor_cmd="$(command -v cursor-agent 2>/dev/null || true)"
@@ -327,21 +333,31 @@ check_agent_cli_providers() {
     need_cursor=true
   fi
 
-  if [ ${#missing_npm[@]} -eq 0 ] && [ "$need_cursor" = false ]; then
+  if [ ${#missing_npm[@]} -eq 0 ] && [ "$need_cursor" = false ] && [ "$need_claude" = false ]; then
     log "Agent CLI providers: all found (claude, codex, gemini, cursor)"
     return
   fi
 
   if [ -n "${ACPMS_SKIP_AGENT_CLI:-}" ]; then
-    log "Skipped (ACPMS_SKIP_AGENT_CLI). Install later: npm i -g @anthropic-ai/claude-code @openai/codex @google/gemini-cli; Cursor CLI: curl https://cursor.com/install -fsS | bash"
+    log "Skipped (ACPMS_SKIP_AGENT_CLI). Install later: npm i -g @openai/codex @google/gemini-cli; Claude: curl -fsSL https://claude.ai/install.sh | bash; Cursor CLI: curl https://cursor.com/install -fsS | bash"
     return
   fi
 
   if [ -z "${ACPMS_NONINTERACTIVE:-}" ]; then
     ask_yes "Install missing Agent CLI providers (Node.js, claude/codex/gemini/cursor)? [Y/n]" "y" || {
-      log "Skipped. Install later: npm i -g @anthropic-ai/claude-code @openai/codex @google/gemini-cli; Cursor: curl https://cursor.com/install -fsS | bash"
+      log "Skipped. Install later: npm i -g @openai/codex @google/gemini-cli; Claude: curl -fsSL https://claude.ai/install.sh | bash; Cursor: curl https://cursor.com/install -fsS | bash"
       return
     }
+  fi
+
+  # Install Claude Code via official script
+  if [ "$need_claude" = true ]; then
+    log "Installing Claude Code..."
+    if curl -fsSL https://claude.ai/install.sh | bash 2>/dev/null; then
+      log "  Claude Code installed."
+    else
+      err "Failed to install Claude Code. Run manually: curl -fsSL https://claude.ai/install.sh | bash"
+    fi
   fi
 
   # Install Cursor CLI (agent) via official script — not npm; @anthropic-ai/cursor does not exist
@@ -394,7 +410,7 @@ check_agent_cli_providers() {
     return
   fi
 
-  # Node 18+ required for npm and CLI providers (claude-code, codex, gemini-cli)
+  # Node 18+ required for npm and CLI providers (codex, gemini-cli)
   local node_major
   node_major=$(node -v 2>/dev/null | sed -n 's/^v\([0-9]*\).*/\1/p')
   if [ -z "$node_major" ] || [ "$node_major" -lt 18 ]; then
