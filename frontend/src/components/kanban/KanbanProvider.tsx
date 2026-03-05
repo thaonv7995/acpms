@@ -11,6 +11,8 @@ import {
   useSensor,
   useSensors,
 } from '@dnd-kit/core';
+import type { KanbanTask } from '../../types/project';
+import { TaskCard } from './TaskCard';
 import { logger } from '@/lib/logger';
 
 interface KanbanProviderProps {
@@ -33,6 +35,7 @@ export function KanbanProvider({
   onDragEnd,
 }: KanbanProviderProps) {
   const [activeId, setActiveId] = useState<string | null>(null);
+  const [activeTask, setActiveTask] = useState<KanbanTask | null>(null);
   const columnCount = React.Children.count(children);
   const minColumnWidth = 240;
 
@@ -56,6 +59,13 @@ export function KanbanProvider({
     (event: DragStartEvent) => {
       const { active } = event;
       setActiveId(active.id as string);
+      const activeData = (active.data.current ?? {}) as Record<string, unknown>;
+      const taskData = activeData.task;
+      if (taskData && typeof taskData === 'object') {
+        setActiveTask(taskData as KanbanTask);
+      } else {
+        setActiveTask(null);
+      }
       onDragStart?.(active.id as string);
     },
     [onDragStart]
@@ -66,6 +76,7 @@ export function KanbanProvider({
     async (event: DragEndEvent) => {
       const { active, over } = event;
       setActiveId(null);
+      setActiveTask(null);
 
       if (!over) {
         onDragEnd?.();
@@ -124,11 +135,17 @@ export function KanbanProvider({
       </div>
       <DragOverlay>
         {activeId && (
-          <div className="bg-blue-100 dark:bg-blue-900 border-2 border-blue-500 rounded-lg p-3 shadow-2xl">
-            <p className="text-sm font-medium text-blue-900 dark:text-blue-100">
-              Moving task...
-            </p>
-          </div>
+          activeTask ? (
+            <div className="w-[320px] pointer-events-none">
+              <TaskCard task={activeTask} onClick={() => { }} />
+            </div>
+          ) : (
+            <div className="bg-blue-100 dark:bg-blue-900 border-2 border-blue-500 rounded-lg p-3 shadow-2xl">
+              <p className="text-sm font-medium text-blue-900 dark:text-blue-100">
+                Moving task...
+              </p>
+            </div>
+          )
         )}
       </DragOverlay>
     </DndContext>

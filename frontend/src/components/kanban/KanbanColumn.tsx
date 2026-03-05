@@ -179,7 +179,7 @@ function DraggableTaskCard({
 }) {
     const { attributes, listeners, setNodeRef, isDragging } = useDraggable({
         id: task.id,
-        data: { columnId },
+        data: { columnId, task },
     });
 
     return (
