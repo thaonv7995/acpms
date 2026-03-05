@@ -46,6 +46,42 @@ function getDueDateBadge(dueDate: string | null | undefined): { label: string; c
 
 const DESCRIPTION_PREVIEW_LENGTH = 80;
 
+function isAiBreakdownAnalysisTask(task: Task): boolean {
+    const metadata = task.metadata || {};
+    const mode = String(metadata.breakdown_mode ?? '').trim().toLowerCase();
+    const kind = String(metadata.breakdown_kind ?? '').trim().toLowerCase();
+    return (
+        mode === 'ai_support' ||
+        kind === 'analysis_session' ||
+        task.title?.startsWith('[Breakdown]') === true
+    );
+}
+
+function dedupeLinkedTasks(tasks: Task[]): Task[] {
+    const sorted = [...tasks].sort((a, b) => {
+        const aTs = Date.parse(a.updated_at || a.created_at || '') || 0;
+        const bTs = Date.parse(b.updated_at || b.created_at || '') || 0;
+        return bTs - aTs;
+    });
+
+    const kept: Task[] = [];
+    const seenBreakdownTitles = new Set<string>();
+    for (const task of sorted) {
+        if (!isAiBreakdownAnalysisTask(task)) {
+            kept.push(task);
+            continue;
+        }
+        const key = task.title.trim().toLowerCase();
+        if (seenBreakdownTitles.has(key)) {
+            continue;
+        }
+        seenBreakdownTitles.add(key);
+        kept.push(task);
+    }
+
+    return kept;
+}
+
 export function RequirementsTab({ requirements, rawTasks = [], onAddRequirement, onRequirementClick, onStatusChange, onAnalyzeWithAI, onImport }: RequirementsTabProps) {
     const [statusDropdownReqId, setStatusDropdownReqId] = useState<string | null>(null);
     const [expandedReqIds, setExpandedReqIds] = useState<Set<string>>(new Set());
@@ -60,7 +96,7 @@ export function RequirementsTab({ requirements, rawTasks = [], onAddRequirement,
     };
 
     const getLinkedTasks = (reqId: string) => {
-        return rawTasks.filter((t) => t.requirement_id === reqId);
+        return dedupeLinkedTasks(rawTasks.filter((t) => t.requirement_id === reqId));
     };
 
     const getLinkedTasksCount = (reqId: string) => {

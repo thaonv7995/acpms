@@ -40,6 +40,18 @@
 }
 ```
 
+## Realtime stream line format
+
+When running in an agent attempt with live UI append, emit progressive lines:
+
+```text
+BREAKDOWN_TASK {"title":"...","description":"...","task_type":"feature","priority":"medium","kind":"implementation"}
+```
+
+- Emit one line per proposed implementation task.
+- Keep `task_type` within allowed values.
+- `priority` must be one of `low|medium|high|critical`.
+
 ## Quality checklist
 
 - Requirement intent is explicit and concise.

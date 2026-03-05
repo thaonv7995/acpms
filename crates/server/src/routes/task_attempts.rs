@@ -47,6 +47,37 @@ fn task_run_build_and_tests(task: &Task) -> bool {
         .unwrap_or(true)
 }
 
+fn task_allows_analysis_only_attempt(task: &Task) -> bool {
+    let root_no_code_changes = task
+        .metadata
+        .get("no_code_changes")
+        .and_then(|v| v.as_bool())
+        .unwrap_or(false);
+    let execution_no_code_changes = task
+        .metadata
+        .get("execution")
+        .and_then(|v| v.get("no_code_changes"))
+        .and_then(|v| v.as_bool())
+        .unwrap_or(false);
+    let breakdown_mode_ai_support = task
+        .metadata
+        .get("breakdown_mode")
+        .and_then(|v| v.as_str())
+        .map(|v| v.eq_ignore_ascii_case("ai_support"))
+        .unwrap_or(false);
+    let breakdown_kind_analysis = task
+        .metadata
+        .get("breakdown_kind")
+        .and_then(|v| v.as_str())
+        .map(|v| v.eq_ignore_ascii_case("analysis_session"))
+        .unwrap_or(false);
+
+    root_no_code_changes
+        || execution_no_code_changes
+        || breakdown_mode_ai_support
+        || breakdown_kind_analysis
+}
+
 fn repository_mode_blocks_coding_attempt(context: &RepositoryContext) -> bool {
     matches!(
         context.access_mode,
@@ -746,6 +777,7 @@ pub async fn create_task_attempt(
 
     if task.task_type != TaskType::Init
         && repository_mode_blocks_coding_attempt(&project.repository_context)
+        && !task_allows_analysis_only_attempt(&task)
     {
         state
             .metrics

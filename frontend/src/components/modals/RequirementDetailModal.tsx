@@ -155,6 +155,40 @@ function normalizeTaskStatus(status: string | undefined): string {
         .toLowerCase();
 }
 
+function isAiBreakdownAnalysisTask(task: Task): boolean {
+    const metadata = task.metadata || {};
+    const mode = String(metadata.breakdown_mode ?? '').trim().toLowerCase();
+    const kind = String(metadata.breakdown_kind ?? '').trim().toLowerCase();
+    return (
+        mode === 'ai_support' ||
+        kind === 'analysis_session' ||
+        task.title?.startsWith('[Breakdown]') === true
+    );
+}
+
+function dedupeLinkedTasks(tasks: Task[]): Task[] {
+    const sorted = [...tasks].sort((a, b) => {
+        const aTs = Date.parse(a.updated_at || a.created_at || '') || 0;
+        const bTs = Date.parse(b.updated_at || b.created_at || '') || 0;
+        return bTs - aTs;
+    });
+    const kept: Task[] = [];
+    const seenBreakdownTitles = new Set<string>();
+    for (const task of sorted) {
+        if (!isAiBreakdownAnalysisTask(task)) {
+            kept.push(task);
+            continue;
+        }
+        const key = task.title.trim().toLowerCase();
+        if (seenBreakdownTitles.has(key)) {
+            continue;
+        }
+        seenBreakdownTitles.add(key);
+        kept.push(task);
+    }
+    return kept;
+}
+
 interface RequirementDetailModalProps {
     isOpen: boolean;
     onClose: () => void;
@@ -184,11 +218,12 @@ export function RequirementDetailModal({
 
     if (!isOpen || !requirement) return null;
 
-    const linkedTaskStatuses = linkedTasks.map((task) => normalizeTaskStatus(task.status));
+    const visibleLinkedTasks = dedupeLinkedTasks(linkedTasks);
+    const linkedTaskStatuses = visibleLinkedTasks.map((task) => normalizeTaskStatus(task.status));
     const linkedDoneCount = linkedTaskStatuses.filter((status) =>
         ['done', 'archived', 'cancelled', 'canceled'].includes(status)
     ).length;
-    const hasLinkedTasks = linkedTasks.length > 0;
+    const hasLinkedTasks = visibleLinkedTasks.length > 0;
     const derivedRequirementStatus: RequirementStatus =
         !hasLinkedTasks
             ? requirement.status
@@ -368,9 +403,9 @@ export function RequirementDetailModal({
                         {/* Linked Tasks */}
                         <div>
                             <h3 className="text-sm font-bold text-card-foreground mb-2">
-                                Linked Tasks ({linkedTasks.length})
+                                Linked Tasks ({visibleLinkedTasks.length})
                             </h3>
-                            {linkedTasks.length === 0 ? (
+                            {visibleLinkedTasks.length === 0 ? (
                                 <div className="text-sm text-muted-foreground bg-muted/30 rounded-lg p-4">
                                     No tasks linked yet.
                                     {onBreakIntoTasks && (
@@ -379,7 +414,7 @@ export function RequirementDetailModal({
                                 </div>
                             ) : (
                                 <div className="space-y-2">
-                                    {linkedTasks.map((task) => {
+                                    {visibleLinkedTasks.map((task) => {
                                         const taskStatus = normalizeTaskStatus(task.status);
                                         const icon = taskStatusIcons[taskStatus] || 'radio_button_unchecked';
                                         const isDone = ['done', 'archived', 'cancelled', 'canceled'].includes(taskStatus);

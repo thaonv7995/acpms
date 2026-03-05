@@ -45,6 +45,12 @@ Follow this section order exactly:
 5. `Implementation tasks (proposed)`
 6. `Sprint assignment (confirmation required)`
 
+### Realtime stream contract (required when running via agent attempt)
+- While analyzing, emit progressive lines exactly in this format so UI can append draft tasks in realtime:
+`BREAKDOWN_TASK {"title":"...","description":"...","task_type":"feature","priority":"medium","kind":"implementation"}`
+- Emit one `BREAKDOWN_TASK` line per task as soon as that task draft is ready (do not wait until the end).
+- After streaming lines, output one final JSON object matching `references/output_schema.md`.
+
 For each proposed implementation task include:
 - `title`
 - `goal` (1 sentence)

@@ -5,20 +5,18 @@ import type {
     RequirementBreakdownSprintAssignmentMode,
 } from '@/api/requirements';
 import { confirmRequirementBreakdownManual } from '@/api/requirements';
-import { createTask, getTaskAttachmentUploadUrl } from '@/api/tasks';
+import { createTask, getTaskAttachmentUploadUrl, getTaskAttempts as getTaskAttemptsLite, getTasks } from '@/api/tasks';
 import {
     cancelAttempt,
-    createTaskAttempt,
     getAttempt,
-    getAttemptLogs,
-    type AgentLog,
+    createTaskAttempt,
     type TaskAttempt,
 } from '@/api/taskAttempts';
 import type { SprintDto } from '@/api/generated/models';
 import type { ProjectMember } from '@/api/projects';
 import { TimelineLogDisplay } from '@/components/timeline-log';
-import type { TaskType } from '@/shared/types';
-import { logger } from '@/lib/logger';
+import { useAttemptStream } from '@/hooks/useAttemptStream';
+import type { Task, TaskType } from '@/shared/types';
 
 type TaskPriorityValue = 'low' | 'medium' | 'high' | 'critical';
 
@@ -135,6 +133,25 @@ function normalizePriority(rawPriority: unknown): TaskPriorityValue {
     return 'medium';
 }
 
+function isAiBreakdownAnalysisTask(task: Task, requirementId: string): boolean {
+    if (task.requirement_id !== requirementId) return false;
+    const metadata = task.metadata || {};
+    const mode = String(metadata.breakdown_mode ?? '').trim().toLowerCase();
+    const kind = String(metadata.breakdown_kind ?? '').trim().toLowerCase();
+    if (mode === 'ai_support' || kind === 'analysis_session') {
+        return true;
+    }
+    return task.title?.startsWith('[Breakdown][AI]') ?? false;
+}
+
+function sortByNewest<T extends { updated_at?: string; created_at?: string }>(items: T[]): T[] {
+    return [...items].sort((a, b) => {
+        const aTs = Date.parse(a.updated_at || a.created_at || '') || 0;
+        const bTs = Date.parse(b.updated_at || b.created_at || '') || 0;
+        return bTs - aTs;
+    });
+}
+
 function buildAiBreakdownPrompt(requirement: Requirement): string {
     return `
 You are supporting BA/PO/PM to break one requirement into executable tasks.
@@ -155,33 +172,116 @@ BREAKDOWN_TASK {"title":"...","description":"...","task_type":"feature","priorit
 `.trim();
 }
 
+interface BreakdownTaskPayloadSpan {
+    payload: Record<string, unknown>;
+    start: number;
+    end: number;
+}
+
+function extractBreakdownTaskPayloadSpans(content: string): BreakdownTaskPayloadSpan[] {
+    const marker = 'BREAKDOWN_TASK';
+    const spans: BreakdownTaskPayloadSpan[] = [];
+    let cursor = 0;
+
+    while (cursor < content.length) {
+        const markerIndex = content.indexOf(marker, cursor);
+        if (markerIndex < 0) break;
+
+        const jsonStart = content.indexOf('{', markerIndex + marker.length);
+        if (jsonStart < 0) {
+            cursor = markerIndex + marker.length;
+            continue;
+        }
+
+        let depth = 0;
+        let inString = false;
+        let escaped = false;
+        let jsonEnd = -1;
+
+        for (let i = jsonStart; i < content.length; i += 1) {
+            const ch = content[i];
+            if (inString) {
+                if (escaped) {
+                    escaped = false;
+                    continue;
+                }
+                if (ch === '\\') {
+                    escaped = true;
+                    continue;
+                }
+                if (ch === '"') {
+                    inString = false;
+                }
+                continue;
+            }
+
+            if (ch === '"') {
+                inString = true;
+                continue;
+            }
+            if (ch === '{') {
+                depth += 1;
+                continue;
+            }
+            if (ch === '}') {
+                depth -= 1;
+                if (depth === 0) {
+                    jsonEnd = i;
+                    break;
+                }
+            }
+        }
+
+        if (jsonEnd < 0) {
+            cursor = jsonStart + 1;
+            continue;
+        }
+
+        const candidate = content.slice(jsonStart, jsonEnd + 1);
+        try {
+            const parsed = JSON.parse(candidate) as Record<string, unknown>;
+            spans.push({
+                payload: parsed,
+                start: markerIndex,
+                end: jsonEnd + 1,
+            });
+        } catch {
+            // Ignore malformed payload and keep scanning
+        }
+
+        cursor = jsonEnd + 1;
+    }
+
+    return spans;
+}
+
+function extractBreakdownTaskPayloads(content: string): Array<Record<string, unknown>> {
+    return extractBreakdownTaskPayloadSpans(content).map((span) => span.payload);
+}
+
 function extractAiDraftsFromLogContent(content: string): ManualTaskDraftState[] {
     const drafts: ManualTaskDraftState[] = [];
-    const lines = content.split(/\r?\n/);
-
-    for (const line of lines) {
-        const markerIndex = line.indexOf('BREAKDOWN_TASK');
-        if (markerIndex < 0) continue;
-        const jsonStart = line.indexOf('{', markerIndex);
-        const jsonEnd = line.lastIndexOf('}');
-        if (jsonStart < 0 || jsonEnd <= jsonStart) continue;
-        try {
-            const parsed = JSON.parse(line.slice(jsonStart, jsonEnd + 1)) as Record<string, unknown>;
-            const title = String(parsed.title || '').trim();
-            if (!title) continue;
-            drafts.push(
-                createManualDraft({
-                    title,
-                    description: String(parsed.description || '').trim(),
-                    taskType: normalizeTaskType(parsed.task_type),
-                    priority: normalizePriority(parsed.priority),
-                    kind: String(parsed.kind || 'implementation').trim() || 'implementation',
-                    source: 'ai',
-                })
-            );
-        } catch {
-            // Ignore malformed lines
-        }
+    let streamedPayloads = extractBreakdownTaskPayloads(content);
+    if (streamedPayloads.length === 0 && content.includes('\\"')) {
+        const unescaped = content
+            .replace(/\\\\\"/g, '\\"')
+            .replace(/\\"/g, '"')
+            .replace(/\\n/g, '\n');
+        streamedPayloads = extractBreakdownTaskPayloads(unescaped);
+    }
+    for (const parsed of streamedPayloads) {
+        const title = String(parsed.title || '').trim();
+        if (!title) continue;
+        drafts.push(
+            createManualDraft({
+                title,
+                description: String(parsed.description || '').trim(),
+                taskType: normalizeTaskType(parsed.task_type),
+                priority: normalizePriority(parsed.priority),
+                kind: String(parsed.kind || 'implementation').trim() || 'implementation',
+                source: 'ai',
+            })
+        );
     }
 
     if (drafts.length === 0 && content.includes('"tasks"')) {
@@ -252,6 +352,10 @@ export function RequirementBreakdownModal({
 
     const seenLogIdsRef = useRef<Set<string>>(new Set());
     const seenTaskSignaturesRef = useRef<Set<string>>(new Set());
+    const appendTaskTimersRef = useRef<number[]>([]);
+    const aiAttemptId = aiAttempt?.id;
+    const { logs: aiStreamLogs, attempt: aiStreamAttempt, error: aiStreamError } =
+        useAttemptStream(aiAttemptId);
 
     const activeSprint = useMemo(
         () => sprints.find((s) => normalizeSprintStatus(s.status) === 'active') || null,
@@ -304,6 +408,8 @@ export function RequirementBreakdownModal({
         setAiStatusMessage(null);
         seenLogIdsRef.current = new Set();
         seenTaskSignaturesRef.current = new Set();
+        appendTaskTimersRef.current.forEach((timer) => window.clearTimeout(timer));
+        appendTaskTimersRef.current = [];
 
         if (activeSprint) {
             setAssignmentMode('active');
@@ -325,90 +431,87 @@ export function RequirementBreakdownModal({
     }, [members]);
 
     useEffect(() => {
-        if (!aiAttempt?.id) return;
-        if (isTerminalAttemptStatus(aiAttempt.status)) return;
+        if (!isOpen) return;
+        if (!aiAttemptId) return;
+        if (aiStreamLogs.length === 0) return;
 
-        let disposed = false;
-        const attemptId = aiAttempt.id;
+        const parsedDrafts: ManualTaskDraftState[] = [];
+        for (const log of aiStreamLogs) {
+            const logKey = `${log.id || 'no-id'}|${log.created_at ?? log.timestamp ?? ''}|${log.log_type}|${log.content}`;
+            if (seenLogIdsRef.current.has(logKey)) continue;
+            seenLogIdsRef.current.add(logKey);
+            parsedDrafts.push(...extractAiDraftsFromLogContent(log.content));
+        }
 
-        const poll = async () => {
-            try {
-                const [latestAttempt, logs] = await Promise.all([
-                    getAttempt(attemptId),
-                    getAttemptLogs(attemptId),
-                ]);
+        if (parsedDrafts.length === 0) return;
 
-                if (disposed) return;
+        const accepted = parsedDrafts.filter((draft) => {
+            const signature = [
+                draft.taskType,
+                draft.title.trim().toLowerCase(),
+                draft.description.trim().toLowerCase(),
+            ].join('|');
+            if (seenTaskSignaturesRef.current.has(signature)) return false;
+            seenTaskSignaturesRef.current.add(signature);
+            return true;
+        });
 
-                setAiAttempt(latestAttempt);
+        if (accepted.length === 0) return;
 
-                const parsedDrafts: ManualTaskDraftState[] = [];
-                for (const log of logs) {
-                    const logKey = log.id || `${log.created_at}|${log.log_type}|${log.content}`;
-                    if (seenLogIdsRef.current.has(logKey)) continue;
-                    seenLogIdsRef.current.add(logKey);
-                    parsedDrafts.push(...extractAiDraftsFromLogContent(log.content));
-                }
-
-                if (parsedDrafts.length > 0) {
-                    const accepted = parsedDrafts.filter((draft) => {
-                        const signature = [
-                            draft.taskType,
-                            draft.title.trim().toLowerCase(),
-                            draft.description.trim().toLowerCase(),
-                        ].join('|');
-                        if (seenTaskSignaturesRef.current.has(signature)) return false;
-                        seenTaskSignaturesRef.current.add(signature);
-                        return true;
+        accepted.forEach((task, index) => {
+            const appendTimer = window.setTimeout(() => {
+                setManualTasks((prev) => [...prev, task]);
+                setRecentlyAddedIds((prev) => {
+                    const next = new Set(prev);
+                    next.add(task.id);
+                    return next;
+                });
+                const removeHighlightTimer = window.setTimeout(() => {
+                    setRecentlyAddedIds((prev) => {
+                        const next = new Set(prev);
+                        next.delete(task.id);
+                        return next;
                     });
+                }, 1800);
+                appendTaskTimersRef.current.push(removeHighlightTimer);
+            }, index * 220);
+            appendTaskTimersRef.current.push(appendTimer);
+        });
+    }, [isOpen, aiAttemptId, aiStreamLogs]);
 
-                    if (accepted.length > 0) {
-                        const ids = accepted.map((task) => task.id);
-                        setManualTasks((prev) => [...prev, ...accepted]);
-                        setRecentlyAddedIds((prev) => {
-                            const next = new Set(prev);
-                            ids.forEach((id) => next.add(id));
-                            return next;
-                        });
-                        window.setTimeout(() => {
-                            setRecentlyAddedIds((prev) => {
-                                const next = new Set(prev);
-                                ids.forEach((id) => next.delete(id));
-                                return next;
-                            });
-                        }, 1800);
-                    }
-                }
-
-                const statusUpper = latestAttempt.status.toUpperCase();
-                if (statusUpper === 'SUCCESS') {
-                    setAiStatusMessage('AI analysis completed. New tasks were appended to the list.');
-                } else if (statusUpper === 'FAILED') {
-                    setAiStatusMessage(
-                        latestAttempt.error_message || 'AI analysis failed. Please review logs and retry.'
-                    );
-                } else if (statusUpper === 'CANCELLED') {
-                    setAiStatusMessage('AI analysis was cancelled.');
-                } else {
-                    setAiStatusMessage(
-                        'AI analysis is running. Suggested tasks will append to the list progressively.'
-                    );
-                }
-            } catch (err) {
-                if (!disposed) {
-                    logger.error('Failed to poll AI breakdown attempt:', err);
-                    setError(err instanceof Error ? err.message : 'Failed to refresh AI analysis');
-                }
-            }
-        };
-
-        void poll();
-        const timer = window.setInterval(poll, 2000);
+    useEffect(() => {
         return () => {
-            disposed = true;
-            window.clearInterval(timer);
+            appendTaskTimersRef.current.forEach((timer) => window.clearTimeout(timer));
+            appendTaskTimersRef.current = [];
         };
-    }, [aiAttempt?.id, aiAttempt?.status]);
+    }, []);
+
+    useEffect(() => {
+        if (!aiAttemptId) return;
+
+        if (aiStreamError) {
+            setAiStatusMessage(
+                `AI log stream interrupted: ${aiStreamError}. Please retry or reopen panel.`
+            );
+            return;
+        }
+
+        if (!aiStreamAttempt?.status) return;
+        setAiAttempt((prev) => (prev && prev.id === aiAttemptId ? { ...prev, status: aiStreamAttempt.status as TaskAttempt['status'] } : prev));
+
+        const statusUpper = String(aiStreamAttempt.status).toUpperCase();
+        if (statusUpper === 'SUCCESS') {
+            setAiStatusMessage('AI analysis completed. New tasks were appended to the list.');
+        } else if (statusUpper === 'FAILED') {
+            setAiStatusMessage('AI analysis failed. Please review logs and retry.');
+        } else if (statusUpper === 'CANCELLED') {
+            setAiStatusMessage('AI analysis was cancelled.');
+        } else {
+            setAiStatusMessage(
+                'AI analysis is running. Suggested tasks will append to the list progressively.'
+            );
+        }
+    }, [aiAttemptId, aiStreamAttempt?.status, aiStreamError]);
 
     if (!isOpen || !requirement) return null;
 
@@ -565,27 +668,45 @@ export function RequirementBreakdownModal({
         setIsStartingAi(true);
 
         try {
-            const analysisTask = await createTask({
-                project_id: projectId,
-                requirement_id: requirement.id,
-                title: `[Breakdown][AI] ${requirement.title}`,
-                description: buildAiBreakdownPrompt(requirement),
-                task_type: 'spike',
-                metadata: {
-                    breakdown_mode: 'ai_support',
-                    breakdown_kind: 'analysis_session',
-                    requirement_id: requirement.id,
-                    no_code_changes: true,
-                },
-            });
-
-            const attempt = await createTaskAttempt(analysisTask.id);
-            setAiAttempt(attempt);
-            seenLogIdsRef.current = new Set();
-            seenTaskSignaturesRef.current = new Set();
-            setAiStatusMessage(
-                'AI analysis started. Watch logs on the right panel while tasks append on the left.'
+            const existingTasks = await getTasks(projectId);
+            const analysisTaskCandidates = sortByNewest(
+                existingTasks.filter((task) => isAiBreakdownAnalysisTask(task, requirement.id))
             );
+            let analysisTask = analysisTaskCandidates[0];
+
+            if (!analysisTask) {
+                analysisTask = await createTask({
+                    project_id: projectId,
+                    requirement_id: requirement.id,
+                    title: `[Breakdown][AI] ${requirement.title}`,
+                    description: buildAiBreakdownPrompt(requirement),
+                    task_type: 'spike',
+                    metadata: {
+                        breakdown_mode: 'ai_support',
+                        breakdown_kind: 'analysis_session',
+                        requirement_id: requirement.id,
+                        no_code_changes: true,
+                    },
+                });
+            }
+
+            const attempts = await getTaskAttemptsLite(analysisTask.id);
+            const latestAttempt = sortByNewest(attempts)[0];
+            if (latestAttempt && !isTerminalAttemptStatus(latestAttempt.status)) {
+                const runningAttempt = await getAttempt(latestAttempt.id);
+                setAiAttempt(runningAttempt);
+                setAiStatusMessage(
+                    'Reusing current AI analysis attempt for this requirement. Logs are streaming now.'
+                );
+            } else {
+                const attempt = await createTaskAttempt(analysisTask.id);
+                setAiAttempt(attempt);
+                seenLogIdsRef.current = new Set();
+                seenTaskSignaturesRef.current = new Set();
+                setAiStatusMessage(
+                    'AI analysis started. Watch logs on the right panel while tasks append on the left.'
+                );
+            }
         } catch (err) {
             const message = err instanceof Error ? err.message : 'Failed to start AI support';
             setError(message);
@@ -996,15 +1117,21 @@ export function RequirementBreakdownModal({
                                     <p>AI tasks appended: {aiTaskCount}</p>
                                     {aiAttempt && <p>Status: {aiAttempt.status}</p>}
                                     {aiStatusMessage && <p className="mt-1">{aiStatusMessage}</p>}
+                                    {isAiAttemptActive && (
+                                        <p className="mt-1 inline-flex items-center gap-1.5 text-emerald-300">
+                                            <span className="inline-block w-2 h-2 rounded-full bg-emerald-400 animate-pulse" />
+                                            Agent is generating tasks...
+                                        </p>
+                                    )}
                                 </div>
 
-                                <div className="flex-1 overflow-y-auto p-3 bg-black/20 font-mono text-[11px] leading-relaxed space-y-2">
+                                <div className="flex-1 overflow-y-auto p-3 bg-black/20 text-[12px] leading-relaxed">
                                     {!aiAttempt ? (
                                         <p className="text-muted-foreground">
                                             No logs yet. Click Start to spawn AI analysis attempt.
                                         </p>
                                     ) : (
-                                        <div className="h-full min-h-[420px]">
+                                        <div className="h-full min-h-[420px] rounded-lg border border-border/60 overflow-hidden">
                                             <TimelineLogDisplay
                                                 attemptId={aiAttempt.id}
                                                 attemptStatus={aiAttempt.status}

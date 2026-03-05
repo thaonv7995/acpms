@@ -1,5 +1,5 @@
 use acpms_db::{models::*, PgPool};
-use acpms_services::{ProjectService, RequirementService, TaskService};
+use acpms_services::{ProjectService, RequirementService, TaskAttemptService, TaskService};
 use axum::{
     extract::{Path, State},
     http::StatusCode,
@@ -9,12 +9,15 @@ use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
 use sqlx::FromRow;
+use std::time::Duration;
+use tokio::time::sleep;
 use uuid::Uuid;
 
 use crate::{
     api::{ApiResponse, TaskDto},
     error::{ApiError, ApiResult},
     middleware::{AuthUser, Permission, RbacChecker},
+    routes::task_attempts,
     AppState,
 };
 
@@ -189,6 +192,7 @@ struct BreakdownJob {
     session_id: Uuid,
     project_id: Uuid,
     requirement_id: Uuid,
+    created_by: Uuid,
 }
 
 fn parse_supported_task_type(value: &str) -> Option<TaskType> {
@@ -378,6 +382,246 @@ fn parse_and_validate_breakdown_output(
     let parsed: RawBreakdownProposal = serde_json::from_value(value)
         .map_err(|e| ApiError::Internal(format!("Breakdown JSON schema mismatch: {}", e)))?;
     normalize_breakdown_proposal(parsed, requirement_title)
+}
+
+fn build_breakdown_attempt_instruction(requirement: &Requirement) -> String {
+    format!(
+        r#"
+You are an AI business/system analyst helping break one requirement into implementable tasks.
+
+Requirement title:
+{title}
+
+Requirement content:
+{content}
+
+STRICT RULES:
+1) Analysis only. Do NOT edit files. Do NOT apply code changes.
+2) Propose 3-12 implementation tasks. Keep each task small and reviewable.
+3) Allowed task_type: feature, bug, refactor, docs, test, chore, hotfix, spike, small_task.
+4) As each task is ready, emit one line in EXACT format:
+BREAKDOWN_TASK {{"title":"...","description":"...","task_type":"feature","priority":"medium","kind":"implementation"}}
+5) After emitting all BREAKDOWN_TASK lines, output one FINAL JSON object with schema:
+{{
+  "analysis": {{"summary":"...","current_system_findings":["..."],"assumptions":["..."]}},
+  "impact": [{{"area":"backend|frontend|database|api|infra|security|testing|ops|other","impact":"...","risk":"low|medium|high","mitigation":"..."}}],
+  "plan": {{"summary":"...","steps":["..."]}},
+  "tasks": [
+    {{"title":"...","description":"...","task_type":"feature","depends_on":[],"kind":"implementation"}}
+  ],
+  "suggested_sprint_id": null
+}}
+6) Do not include markdown fences around the final JSON.
+7) Keep language concise and practical.
+"#,
+        title = requirement.title,
+        content = requirement.content
+    )
+}
+
+fn extract_streamed_breakdown_tasks_from_logs(logs: &[AgentLog]) -> Vec<RawBreakdownTask> {
+    let mut out = Vec::new();
+    let mut seen = std::collections::HashSet::new();
+
+    for log in logs {
+        for line in log.content.lines() {
+            let Some(marker_index) = line.find("BREAKDOWN_TASK") else {
+                continue;
+            };
+            let Some(json_start_rel) = line[marker_index..].find('{') else {
+                continue;
+            };
+            let json_start = marker_index + json_start_rel;
+            let Some(json_end) = line.rfind('}') else {
+                continue;
+            };
+            if json_end <= json_start {
+                continue;
+            }
+
+            let candidate = &line[json_start..=json_end];
+            let Ok(value) = serde_json::from_str::<Value>(candidate) else {
+                continue;
+            };
+
+            let title = value
+                .get("title")
+                .and_then(|v| v.as_str())
+                .map(str::trim)
+                .unwrap_or("");
+            if title.is_empty() {
+                continue;
+            }
+
+            let description = value
+                .get("description")
+                .and_then(|v| v.as_str())
+                .map(str::trim)
+                .filter(|v| !v.is_empty())
+                .map(ToOwned::to_owned);
+            let task_type = value
+                .get("task_type")
+                .and_then(|v| v.as_str())
+                .map(str::trim)
+                .filter(|v| !v.is_empty())
+                .map(ToOwned::to_owned);
+            let estimate = value
+                .get("estimate")
+                .and_then(|v| v.as_str())
+                .map(str::trim)
+                .filter(|v| !v.is_empty())
+                .map(ToOwned::to_owned);
+            let kind = value
+                .get("kind")
+                .and_then(|v| v.as_str())
+                .map(str::trim)
+                .filter(|v| !v.is_empty())
+                .map(ToOwned::to_owned);
+            let depends_on = value
+                .get("depends_on")
+                .and_then(|v| v.as_array())
+                .map(|arr| {
+                    arr.iter()
+                        .filter_map(|item| item.as_str().map(str::trim))
+                        .filter(|item| !item.is_empty())
+                        .map(ToOwned::to_owned)
+                        .collect::<Vec<String>>()
+                })
+                .unwrap_or_default();
+
+            let signature = format!(
+                "{}|{}|{}",
+                task_type
+                    .as_deref()
+                    .unwrap_or("feature")
+                    .to_ascii_lowercase(),
+                title.to_ascii_lowercase(),
+                description
+                    .as_deref()
+                    .unwrap_or_default()
+                    .to_ascii_lowercase()
+            );
+            if !seen.insert(signature) {
+                continue;
+            }
+
+            out.push(RawBreakdownTask {
+                title: title.to_string(),
+                description,
+                task_type,
+                estimate,
+                depends_on,
+                kind,
+            });
+        }
+    }
+
+    out
+}
+
+async fn load_attempt_logs_for_breakdown(state: &AppState, attempt: &TaskAttempt) -> Vec<AgentLog> {
+    let local_bytes = acpms_executors::read_attempt_log_file(attempt.id)
+        .await
+        .unwrap_or_default();
+
+    let bytes = if local_bytes.is_empty() {
+        if let Some(ref s3_key) = attempt.s3_log_key {
+            state
+                .storage_service
+                .get_log_bytes_tail(s3_key, 20_000_000)
+                .await
+                .unwrap_or_default()
+        } else {
+            Vec::new()
+        }
+    } else {
+        local_bytes
+    };
+
+    acpms_executors::parse_jsonl_to_agent_logs(&bytes)
+}
+
+fn choose_breakdown_proposal_from_logs(
+    logs: &[AgentLog],
+    requirement: &Requirement,
+    project_name: &str,
+    project_type: ProjectType,
+    suggested_sprint_id: Option<Uuid>,
+) -> Result<(BreakdownProposal, String), ApiError> {
+    let mut raw_candidates: Vec<String> = logs
+        .iter()
+        .rev()
+        .map(|log| log.content.trim())
+        .filter(|content| !content.is_empty())
+        .map(ToOwned::to_owned)
+        .collect();
+
+    let combined = logs
+        .iter()
+        .map(|log| log.content.as_str())
+        .collect::<Vec<&str>>()
+        .join("\n");
+    if !combined.trim().is_empty() {
+        raw_candidates.push(combined.clone());
+    }
+
+    for candidate in &raw_candidates {
+        if let Ok(mut proposal) = parse_and_validate_breakdown_output(candidate, &requirement.title)
+        {
+            proposal.tasks.retain(|task| {
+                let kind = task.kind.trim().to_ascii_lowercase();
+                !(kind == "analysis_session" || task.title.trim().starts_with("[Breakdown]"))
+            });
+            if proposal.tasks.is_empty() {
+                continue;
+            }
+            return Ok((proposal, candidate.clone()));
+        }
+    }
+
+    let streamed_tasks = extract_streamed_breakdown_tasks_from_logs(logs);
+    if !streamed_tasks.is_empty() {
+        let raw = RawBreakdownProposal {
+            analysis: json!({
+                "summary": format!(
+                    "Breakdown proposal generated from streamed agent output for requirement '{}' in project '{}' ({})",
+                    requirement.title,
+                    project_name,
+                    project_type.display_name()
+                ),
+                "current_system_findings": [
+                    "Agent ran analysis-only requirement breakdown attempt.",
+                    "Tasks were extracted from BREAKDOWN_TASK stream lines."
+                ],
+                "assumptions": [
+                    "Final task wording may be refined by user before confirmation."
+                ]
+            }),
+            impact: infer_impact_areas(&requirement.content),
+            plan: json!({
+                "summary": "Use streamed breakdown output as draft plan, then confirm sprint assignment before task creation.",
+                "steps": [
+                    "Review streamed task proposals and adjust scope.",
+                    "Confirm sprint assignment mode.",
+                    "Create todo tasks in one batch operation."
+                ]
+            }),
+            tasks: streamed_tasks,
+            suggested_sprint_id,
+        };
+        let mut proposal = normalize_breakdown_proposal(raw, &requirement.title)?;
+        proposal.tasks.retain(|task| {
+            let kind = task.kind.trim().to_ascii_lowercase();
+            !(kind == "analysis_session" || task.title.trim().starts_with("[Breakdown]"))
+        });
+        if !proposal.tasks.is_empty() {
+            return Ok((proposal, combined));
+        }
+    }
+
+    Err(ApiError::Internal(
+        "Agent output did not produce valid breakdown proposal".to_string(),
+    ))
 }
 
 fn infer_impact_areas(content: &str) -> Vec<BreakdownImpactItem> {
@@ -641,6 +885,167 @@ async fn process_breakdown_job(state: AppState, job: BreakdownJob) {
     .await
     .unwrap_or(None);
 
+    let analysis_task = match task_service
+        .create_task(
+            job.created_by,
+            CreateTaskRequest {
+                project_id: job.project_id,
+                requirement_id: Some(job.requirement_id),
+                sprint_id: active_sprint_id,
+                title: format!("[Breakdown] {}", requirement.title.trim()),
+                description: Some(build_breakdown_attempt_instruction(&requirement)),
+                task_type: TaskType::Spike,
+                assigned_to: None,
+                metadata: Some(json!({
+                    "priority": "medium",
+                    "breakdown_session_id": job.session_id,
+                    "breakdown_mode": "ai_support",
+                    "breakdown_kind": "analysis_session",
+                    "requirement_id": job.requirement_id,
+                    "no_code_changes": true,
+                    "execution": {
+                        "no_code_changes": true,
+                        "run_build_and_tests": false,
+                        "require_review": true,
+                        "auto_deploy": false,
+                    },
+                    "skills": ["requirement-breakdown"]
+                })),
+                parent_task_id: None,
+            },
+        )
+        .await
+    {
+        Ok(task) => task,
+        Err(e) => {
+            let _ = sqlx::query(
+                r#"
+                UPDATE requirement_breakdown_sessions
+                SET status = $2, error_message = $3, completed_at = NOW(), updated_at = NOW()
+                WHERE id = $1
+                "#,
+            )
+            .bind(job.session_id)
+            .bind(BREAKDOWN_STATUS_FAILED)
+            .bind(format!("Failed to create breakdown analysis task: {}", e))
+            .execute(&state.db)
+            .await;
+            return;
+        }
+    };
+
+    let attempt_id = match task_attempts::create_task_attempt(
+        State(state.clone()),
+        AuthUser {
+            id: job.created_by,
+            jti: format!("breakdown-session-{}", job.session_id),
+        },
+        Path(analysis_task.id),
+    )
+    .await
+    {
+        Ok((_status, Json(response))) => match response.data {
+            Some(dto) => dto.id,
+            None => {
+                let _ = sqlx::query(
+                    r#"
+                    UPDATE requirement_breakdown_sessions
+                    SET status = $2, error_message = $3, completed_at = NOW(), updated_at = NOW()
+                    WHERE id = $1
+                    "#,
+                )
+                .bind(job.session_id)
+                .bind(BREAKDOWN_STATUS_FAILED)
+                .bind("Breakdown attempt started but response did not return attempt id")
+                .execute(&state.db)
+                .await;
+                return;
+            }
+        },
+        Err(e) => {
+            let _ = sqlx::query(
+                r#"
+                UPDATE requirement_breakdown_sessions
+                SET status = $2, error_message = $3, completed_at = NOW(), updated_at = NOW()
+                WHERE id = $1
+                "#,
+            )
+            .bind(job.session_id)
+            .bind(BREAKDOWN_STATUS_FAILED)
+            .bind(format!("Failed to start breakdown attempt: {}", e))
+            .execute(&state.db)
+            .await;
+            return;
+        }
+    };
+
+    let attempt_service = TaskAttemptService::new(state.db.clone());
+    let max_wait = Duration::from_secs(15 * 60);
+    let poll_interval = Duration::from_secs(2);
+    let mut waited = Duration::from_secs(0);
+    let terminal_attempt = loop {
+        let attempt = match attempt_service.get_attempt(attempt_id).await {
+            Ok(Some(a)) => a,
+            Ok(None) => {
+                let _ = sqlx::query(
+                    r#"
+                    UPDATE requirement_breakdown_sessions
+                    SET status = $2, error_message = $3, completed_at = NOW(), updated_at = NOW()
+                    WHERE id = $1
+                    "#,
+                )
+                .bind(job.session_id)
+                .bind(BREAKDOWN_STATUS_FAILED)
+                .bind("Breakdown attempt not found after start")
+                .execute(&state.db)
+                .await;
+                return;
+            }
+            Err(e) => {
+                let _ = sqlx::query(
+                    r#"
+                    UPDATE requirement_breakdown_sessions
+                    SET status = $2, error_message = $3, completed_at = NOW(), updated_at = NOW()
+                    WHERE id = $1
+                    "#,
+                )
+                .bind(job.session_id)
+                .bind(BREAKDOWN_STATUS_FAILED)
+                .bind(format!("Failed to read breakdown attempt status: {}", e))
+                .execute(&state.db)
+                .await;
+                return;
+            }
+        };
+
+        if matches!(
+            attempt.status,
+            AttemptStatus::Success | AttemptStatus::Failed | AttemptStatus::Cancelled
+        ) {
+            break attempt;
+        }
+
+        if waited >= max_wait {
+            let _ = sqlx::query(
+                r#"
+                UPDATE requirement_breakdown_sessions
+                SET status = $2, error_message = $3, completed_at = NOW(), updated_at = NOW()
+                WHERE id = $1
+                "#,
+            )
+            .bind(job.session_id)
+            .bind(BREAKDOWN_STATUS_FAILED)
+            .bind("Breakdown attempt timeout while waiting for completion")
+            .execute(&state.db)
+            .await;
+            return;
+        }
+
+        sleep(poll_interval).await;
+        waited += poll_interval;
+    };
+
+    let attempt_logs = load_attempt_logs_for_breakdown(&state, &terminal_attempt).await;
     let fallback_output = build_fallback_breakdown_output(
         &requirement,
         &project.name,
@@ -648,33 +1053,103 @@ async fn process_breakdown_job(state: AppState, job: BreakdownJob) {
         active_sprint_id,
     );
 
-    let mut proposal = match parse_and_validate_breakdown_output(
-        &fallback_output,
-        &requirement.title,
+    let (mut proposal, raw_output, parse_source) = match choose_breakdown_proposal_from_logs(
+        &attempt_logs,
+        &requirement,
+        &project.name,
+        project.project_type,
+        active_sprint_id,
     ) {
-        Ok(v) => v,
-        Err(e) => {
-            let _ = sqlx::query(
-                r#"
-                UPDATE requirement_breakdown_sessions
-                SET status = $2, raw_output = $3, error_message = $4, completed_at = NOW(), updated_at = NOW()
-                WHERE id = $1
-                "#,
-            )
-            .bind(job.session_id)
-            .bind(BREAKDOWN_STATUS_FAILED)
-            .bind(fallback_output)
-            .bind(format!("Breakdown parser failed: {}", e))
-            .execute(&state.db)
-            .await;
-            return;
+        Ok((proposal, raw)) => (proposal, raw, "agent_output"),
+        Err(parse_err) => {
+            if terminal_attempt.status == AttemptStatus::Success {
+                match parse_and_validate_breakdown_output(&fallback_output, &requirement.title) {
+                    Ok(proposal) => (proposal, fallback_output, "fallback"),
+                    Err(fallback_err) => {
+                        let _ = sqlx::query(
+                            r#"
+                            UPDATE requirement_breakdown_sessions
+                            SET status = $2, raw_output = $3, error_message = $4, completed_at = NOW(), updated_at = NOW()
+                            WHERE id = $1
+                            "#,
+                        )
+                        .bind(job.session_id)
+                        .bind(BREAKDOWN_STATUS_FAILED)
+                        .bind(
+                            attempt_logs
+                                .iter()
+                                .map(|log| log.content.as_str())
+                                .collect::<Vec<&str>>()
+                                .join("\n"),
+                        )
+                        .bind(format!(
+                            "Breakdown parser failed: {}; fallback failed: {}",
+                            parse_err, fallback_err
+                        ))
+                        .execute(&state.db)
+                        .await;
+                        return;
+                    }
+                }
+            } else {
+                let _ = sqlx::query(
+                    r#"
+                    UPDATE requirement_breakdown_sessions
+                    SET status = $2, raw_output = $3, error_message = $4, completed_at = NOW(), updated_at = NOW()
+                    WHERE id = $1
+                    "#,
+                )
+                .bind(job.session_id)
+                .bind(BREAKDOWN_STATUS_FAILED)
+                .bind(
+                    attempt_logs
+                        .iter()
+                        .map(|log| log.content.as_str())
+                        .collect::<Vec<&str>>()
+                        .join("\n"),
+                )
+                .bind(format!(
+                    "Breakdown attempt ended with status {:?}: {}. Parser error: {}",
+                    terminal_attempt.status,
+                    terminal_attempt
+                        .error_message
+                        .unwrap_or_else(|| "no provider error message".to_string()),
+                    parse_err
+                ))
+                .execute(&state.db)
+                .await;
+                return;
+            }
         }
     };
+
+    // Dedicated analysis task is already created and executed; proposal should keep implementation tasks only.
+    proposal.tasks.retain(|task| {
+        let kind = task.kind.trim().to_ascii_lowercase();
+        !(kind == "analysis_session" || task.title.trim().starts_with("[Breakdown]"))
+    });
+    if proposal.tasks.is_empty() {
+        proposal.tasks.push(BreakdownTaskDraft {
+            title: format!("Implement core changes for {}", requirement.title),
+            description: "Apply the main implementation updates required by this requirement."
+                .to_string(),
+            task_type: "feature".to_string(),
+            estimate: Some("M".to_string()),
+            depends_on: vec![],
+            kind: "implementation".to_string(),
+        });
+    }
 
     // Keep lightweight execution context in analysis for review step.
     if let Some(obj) = proposal.analysis.as_object_mut() {
         obj.insert("project_type".to_string(), json!(project.project_type));
         obj.insert("existing_task_count".to_string(), json!(task_count));
+        obj.insert(
+            "breakdown_session_task_id".to_string(),
+            json!(analysis_task.id),
+        );
+        obj.insert("breakdown_attempt_id".to_string(), json!(attempt_id));
+        obj.insert("breakdown_parse_source".to_string(), json!(parse_source));
     }
 
     let proposed_tasks_value = serde_json::to_value(&proposal.tasks).ok();
@@ -701,7 +1176,7 @@ async fn process_breakdown_job(state: AppState, job: BreakdownJob) {
     .bind(proposal.plan)
     .bind(proposed_tasks_value)
     .bind(proposal.suggested_sprint_id.or(active_sprint_id))
-    .bind(fallback_output)
+    .bind(raw_output)
     .execute(&state.db)
     .await;
 }
@@ -715,6 +1190,7 @@ async fn process_breakdown_job(state: AppState, job: BreakdownJob) {
         ("requirement_id" = Uuid, Path, description = "Requirement ID")
     ),
     responses(
+        (status = 200, description = "Breakdown session already active"),
         (status = 202, description = "Breakdown session started"),
         (status = 403, description = "Forbidden"),
         (status = 404, description = "Requirement not found")
@@ -737,6 +1213,8 @@ pub async fn start_requirement_breakdown(
     .await?;
     RbacChecker::check_permission(auth_user.id, project_id, Permission::CreateTask, &state.db)
         .await?;
+    RbacChecker::check_permission(auth_user.id, project_id, Permission::ExecuteTask, &state.db)
+        .await?;
 
     let requirement_exists: bool = sqlx::query_scalar(
         "SELECT EXISTS(SELECT 1 FROM requirements WHERE id = $1 AND project_id = $2)",
@@ -748,6 +1226,41 @@ pub async fn start_requirement_breakdown(
     .map_err(|e| ApiError::Internal(e.to_string()))?;
     if !requirement_exists {
         return Err(ApiError::NotFound("Requirement not found".to_string()));
+    }
+
+    let existing_active = sqlx::query_as::<_, RequirementBreakdownSessionRow>(
+        r#"
+        SELECT
+            id, project_id, requirement_id, created_by, status,
+            analysis, impact, plan, proposed_tasks, suggested_sprint_id,
+            error_message,
+            created_at, updated_at, started_at, completed_at, confirmed_at, cancelled_at
+        FROM requirement_breakdown_sessions
+        WHERE
+            project_id = $1
+            AND requirement_id = $2
+            AND created_by = $3
+            AND status IN ($4, $5, $6)
+        ORDER BY created_at DESC
+        LIMIT 1
+        "#,
+    )
+    .bind(project_id)
+    .bind(requirement_id)
+    .bind(auth_user.id)
+    .bind(BREAKDOWN_STATUS_QUEUED)
+    .bind(BREAKDOWN_STATUS_RUNNING)
+    .bind(BREAKDOWN_STATUS_REVIEW)
+    .fetch_optional(&state.db)
+    .await
+    .map_err(|e| ApiError::Internal(e.to_string()))?;
+
+    if let Some(session) = existing_active {
+        let response = ApiResponse::success(
+            RequirementBreakdownSessionDto::from(session),
+            "Requirement breakdown session already active",
+        );
+        return Ok((StatusCode::OK, Json(response)));
     }
 
     let session = sqlx::query_as::<_, RequirementBreakdownSessionRow>(
@@ -775,6 +1288,7 @@ pub async fn start_requirement_breakdown(
         session_id: session.id,
         project_id,
         requirement_id,
+        created_by: auth_user.id,
     };
     let state_clone = state.clone();
     tokio::spawn(async move {
@@ -1261,6 +1775,7 @@ pub async fn cancel_requirement_breakdown(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use chrono::Utc;
 
     #[test]
     fn parse_breakdown_output_accepts_json_with_missing_breakdown_task() {
@@ -1304,5 +1819,34 @@ mod tests {
         }"#;
         let parsed = parse_and_validate_breakdown_output(raw, "Req");
         assert!(parsed.is_err(), "unsupported type should fail validation");
+    }
+
+    #[test]
+    fn extract_streamed_breakdown_tasks_parses_breakdown_task_lines() {
+        let attempt_id = Uuid::new_v4();
+        let logs = vec![
+            AgentLog {
+                id: Uuid::new_v4(),
+                attempt_id,
+                log_type: "stdout".to_string(),
+                content: r#"BREAKDOWN_TASK {"title":"Create API endpoint","description":"Expose requirement breakdown endpoint","task_type":"feature","priority":"high","kind":"implementation"}"#.to_string(),
+                created_at: Utc::now(),
+            },
+            AgentLog {
+                id: Uuid::new_v4(),
+                attempt_id,
+                log_type: "stdout".to_string(),
+                content: r#"noise
+BREAKDOWN_TASK {"title":"Add tests","description":"Cover breakdown parser and RBAC","task_type":"test","priority":"medium","kind":"implementation"}"#.to_string(),
+                created_at: Utc::now(),
+            },
+        ];
+
+        let tasks = extract_streamed_breakdown_tasks_from_logs(&logs);
+        assert_eq!(tasks.len(), 2);
+        assert_eq!(tasks[0].title, "Create API endpoint");
+        assert_eq!(tasks[0].task_type.as_deref(), Some("feature"));
+        assert_eq!(tasks[1].title, "Add tests");
+        assert_eq!(tasks[1].task_type.as_deref(), Some("test"));
     }
 }
