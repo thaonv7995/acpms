@@ -19,7 +19,7 @@ export function LoadingSpinner({ size = 'md', variant = 'primary' }: LoadingSpin
   return (
     <div
       className={`
-        inline-block rounded-full animate-spin
+        inline-block rounded-full
         ${sizeClasses[size]}
         ${variantClasses[variant]}
       `}

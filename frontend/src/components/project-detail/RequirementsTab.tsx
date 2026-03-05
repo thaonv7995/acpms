@@ -15,8 +15,6 @@ interface RequirementsTabProps {
     onAddRequirement?: () => void;
     onRequirementClick?: (req: RequirementDisplay) => void;
     onStatusChange?: (reqId: string, newStatus: RequirementStatus) => void | Promise<void>;
-    onAnalyzeWithAI?: () => void;
-    onImport?: () => void;
 }
 
 const statusStyles: Record<string, { bg: string; text: string; icon: string }> = {
@@ -82,7 +80,7 @@ function dedupeLinkedTasks(tasks: Task[]): Task[] {
     return kept;
 }
 
-export function RequirementsTab({ requirements, rawTasks = [], onAddRequirement, onRequirementClick, onStatusChange, onAnalyzeWithAI, onImport }: RequirementsTabProps) {
+export function RequirementsTab({ requirements, rawTasks = [], onAddRequirement, onRequirementClick, onStatusChange }: RequirementsTabProps) {
     const [statusDropdownReqId, setStatusDropdownReqId] = useState<string | null>(null);
     const [expandedReqIds, setExpandedReqIds] = useState<Set<string>>(new Set());
 
@@ -136,18 +134,11 @@ export function RequirementsTab({ requirements, rawTasks = [], onAddRequirement,
                     <h3 className="text-sm font-bold text-card-foreground">Project Requirements Document (PRD)</h3>
                     <div className="flex gap-1.5">
                         <button
-                            onClick={onImport}
-                            className="flex items-center gap-1.5 px-2.5 py-1 bg-card border border-border text-card-foreground text-xs font-medium rounded hover:bg-muted transition-colors"
-                        >
-                            <span className="material-symbols-outlined text-[16px]">upload</span>
-                            Import
-                        </button>
-                        <button
-                            onClick={onAnalyzeWithAI}
+                            onClick={onAddRequirement}
                             className="flex items-center gap-1.5 px-2.5 py-1 bg-primary text-primary-foreground text-xs font-bold rounded hover:bg-primary/90 transition-colors shadow-md shadow-primary/20"
                         >
-                            <span className="material-symbols-outlined text-[16px]">auto_fix</span>
-                            Analyze with AI
+                            <span className="material-symbols-outlined text-[16px]">add</span>
+                            Add New Requirement
                         </button>
                     </div>
                 </div>
@@ -220,11 +211,10 @@ export function RequirementsTab({ requirements, rawTasks = [], onAddRequirement,
                                         <div className="mt-1.5 flex flex-wrap items-center gap-1.5 text-[10px] text-muted-foreground">
                                             <span className="material-symbols-outlined text-[12px]">task_alt</span>
                                             {doneCount}/{linkedCount} tasks
-                                            <span className={`inline-flex items-center gap-1 px-1.5 py-0.5 rounded ${
-                                                hasAiBreakdown
-                                                    ? 'bg-primary/15 text-primary'
-                                                    : 'bg-muted text-muted-foreground'
-                                            }`}>
+                                            <span className={`inline-flex items-center gap-1 px-1.5 py-0.5 rounded ${hasAiBreakdown
+                                                ? 'bg-primary/15 text-primary'
+                                                : 'bg-muted text-muted-foreground'
+                                                }`}>
                                                 <span className="material-symbols-outlined text-[11px]">
                                                     {hasAiBreakdown ? 'auto_fix' : 'link'}
                                                 </span>
@@ -267,7 +257,7 @@ export function RequirementsTab({ requirements, rawTasks = [], onAddRequirement,
                                             title={isAutoStatus ? 'Status is auto-derived from linked tasks' : 'Change requirement status'}
                                         >
                                             {isInProgressStatus ? (
-                                                <span className="inline-block w-3 h-3 rounded-full border-2 border-current/35 border-t-current animate-spin" />
+                                                <span className="inline-block w-3 h-3 rounded-full border-2 border-current/35 border-t-current" />
                                             ) : (
                                                 <span className="material-symbols-outlined text-[12px]">{statusStyle.icon}</span>
                                             )}
@@ -303,15 +293,7 @@ export function RequirementsTab({ requirements, rawTasks = [], onAddRequirement,
                     })}
                 </div>
 
-                <div className="p-2 bg-muted/50 border-t border-border text-center">
-                    <button
-                        onClick={onAddRequirement}
-                        className="text-xs text-muted-foreground hover:text-primary font-medium transition-colors flex items-center justify-center gap-1.5"
-                    >
-                        <span className="material-symbols-outlined text-[16px]">add</span>
-                        Add New Requirement
-                    </button>
-                </div>
+
             </div>
         </div>
     );

@@ -21,6 +21,7 @@ interface SummaryTabProps {
     onSelectSprint: (sprintId: string | null) => void;
     onNavigateTab: (tab: SummaryNavigationTab) => void;
     onRefreshProject: () => Promise<void> | void;
+    onRequirementClick?: (reqId: string) => void;
 }
 
 // Tech stack icon mapping (lowercase keys)
@@ -91,6 +92,7 @@ export function SummaryTab({
     onSelectSprint,
     onNavigateTab,
     onRefreshProject,
+    onRequirementClick,
 }: SummaryTabProps) {
     const techStack = useMemo(
         () => (rawProject ? resolveTechStack(rawProject) : (metadata?.techStack || [])),
@@ -312,36 +314,38 @@ export function SummaryTab({
                         {requirements.length > 0 ? (
                             <div className="space-y-3">
                                 {requirements.slice(0, 5).map((req) => (
-                                    <div
+                                    <button
                                         key={req.id}
-                                        className="p-3 bg-muted/50 rounded-lg border border-border"
+                                        onClick={() => onRequirementClick?.(req.id)}
+                                        className="w-full text-left p-4 bg-transparent border border-border rounded-xl hover:bg-muted/50 transition-colors focus:outline-none focus:ring-2 focus:ring-primary/20"
                                     >
-                                        <div className="flex items-start gap-3">
-                                            {req.status === 'in_progress' ? (
-                                                <span className="inline-block w-4 h-4 rounded-full border-2 border-blue-500/35 border-t-blue-500 animate-spin mt-0.5" />
-                                            ) : (
-                                                <span className={`material-symbols-outlined text-lg ${
-                                                    req.status === 'done' ? 'text-green-500' : 'text-muted-foreground'
-                                                }`}>
-                                                    {req.status === 'done' ? 'check_circle' : 'radio_button_unchecked'}
-                                                </span>
-                                            )}
+                                        <div className="flex items-start gap-4">
+                                            <div className="mt-1 flex-shrink-0">
+                                                {req.status === 'in_progress' ? (
+                                                    <span className="inline-block w-4 h-4 rounded-full border-2 border-blue-500/35 border-t-blue-500" />
+                                                ) : req.status === 'done' ? (
+                                                    <span className="material-symbols-outlined text-lg text-green-500">check_circle</span>
+                                                ) : (
+                                                    <span className="inline-block w-4 h-4 rounded-full border-2 border-muted-foreground" />
+                                                )}
+                                            </div>
                                             <div className="flex-1 min-w-0">
-                                                <p className="font-medium text-card-foreground truncate">{req.title}</p>
-                                                <div className="flex items-center gap-2 mt-1">
-                                                    <span className={`text-xs px-2 py-0.5 rounded capitalize ${
-                                                        req.priority === 'critical' ? 'bg-red-100 text-red-600 dark:bg-red-500/20 dark:text-red-400' :
-                                                            req.priority === 'high' ? 'bg-orange-100 text-orange-600 dark:bg-orange-500/20 dark:text-orange-400' :
-                                                                req.priority === 'medium' ? 'bg-blue-100 text-blue-600 dark:bg-blue-500/20 dark:text-blue-400' :
-                                                                    'bg-muted text-card-foreground'
+                                                <p className="text-base font-bold text-card-foreground truncate mb-2 leading-tight">{req.title}</p>
+                                                <div className="flex items-center gap-3">
+                                                    <span className={`text-[11px] font-bold px-2 py-0.5 rounded capitalize ${req.priority === 'critical' ? 'bg-red-500/10 text-red-500' :
+                                                        req.priority === 'high' ? 'bg-orange-500/10 text-orange-500' :
+                                                            req.priority === 'medium' ? 'bg-blue-500/10 text-blue-500' :
+                                                                'bg-muted text-muted-foreground'
                                                         }`}>
                                                         {req.priority}
                                                     </span>
-                                                    <span className="text-xs text-muted-foreground">{req.status === 'in_progress' ? 'In Progress' : req.status.charAt(0).toUpperCase() + req.status.slice(1)}</span>
+                                                    <span className="text-xs font-medium text-muted-foreground whitespace-nowrap">
+                                                        {req.status === 'in_progress' ? 'In Progress' : req.status.charAt(0).toUpperCase() + req.status.slice(1)}
+                                                    </span>
                                                 </div>
                                             </div>
                                         </div>
-                                    </div>
+                                    </button>
                                 ))}
                                 {requirements.length > 5 && (
                                     <p className="text-center text-sm text-muted-foreground">
@@ -388,9 +392,8 @@ export function SummaryTab({
                                             </p>
                                         </div>
                                         <span
-                                            className={`inline-flex items-center gap-1 px-2 py-1 rounded text-[10px] font-semibold uppercase ${
-                                                (sprintStatusStyles[normalizeSprintStatus(overviewSprint.status)] || sprintStatusStyles.planned).bg
-                                            } ${(sprintStatusStyles[normalizeSprintStatus(overviewSprint.status)] || sprintStatusStyles.planned).text}`}
+                                            className={`inline-flex items-center gap-1 px-2 py-1 rounded text-[10px] font-semibold uppercase ${(sprintStatusStyles[normalizeSprintStatus(overviewSprint.status)] || sprintStatusStyles.planned).bg
+                                                } ${(sprintStatusStyles[normalizeSprintStatus(overviewSprint.status)] || sprintStatusStyles.planned).text}`}
                                         >
                                             <span className={`size-1.5 rounded-full ${(sprintStatusStyles[normalizeSprintStatus(overviewSprint.status)] || sprintStatusStyles.planned).dot}`}></span>
                                             {normalizeSprintStatus(overviewSprint.status)}
@@ -443,11 +446,10 @@ export function SummaryTab({
                                                         <button
                                                             key={sprint.id}
                                                             onClick={() => onSelectSprint(sprint.id)}
-                                                            className={`w-full flex items-center justify-between gap-2 rounded-lg border px-2.5 py-2 text-left transition-colors ${
-                                                                isSelected
-                                                                    ? 'border-primary/50 bg-primary/5'
-                                                                    : 'border-border hover:bg-muted/60'
-                                                            }`}
+                                                            className={`w-full flex items-center justify-between gap-2 rounded-lg border px-2.5 py-2 text-left transition-colors ${isSelected
+                                                                ? 'border-primary/50 bg-primary/5'
+                                                                : 'border-border hover:bg-muted/60'
+                                                                }`}
                                                         >
                                                             <div className="min-w-0">
                                                                 <p className="text-sm font-medium text-card-foreground truncate">#{sequence} {sprint.name}</p>

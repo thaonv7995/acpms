@@ -87,7 +87,7 @@ async fn test_create_preview_rejects_when_preview_disabled_in_project_settings()
 }
 
 #[tokio::test]
-async fn test_create_preview_rejects_when_cloudflare_config_missing() {
+async fn test_create_preview_missing_cloudflare_does_not_block_local_preview_mode() {
     let pool = setup_test_db().await;
     let state = create_test_app_state(pool.clone()).await;
     let router = create_router(state);
@@ -99,7 +99,7 @@ async fn test_create_preview_rejects_when_cloudflare_config_missing() {
         create_test_task(&pool, project_id, user_id, Some("Preview Missing CF Task")).await;
     let attempt_id = create_test_attempt(&pool, task_id, Some("success")).await;
 
-    // Ensure Cloudflare settings are not configured so route is blocked before runtime/cloudflare calls.
+    // Ensure Cloudflare settings are absent; preview should no longer be blocked solely by this.
     sqlx::query(
         r#"
         UPDATE system_settings
@@ -123,10 +123,15 @@ async fn test_create_preview_rejects_when_cloudflare_config_missing() {
     )
     .await;
 
-    assert_eq!(status, 400, "Expected 400, got {}: {}", status, body);
     assert!(
-        body.contains("Preview unavailable: missing Cloudflare config"),
-        "Expected missing cloudflare config message, got: {}",
+        status == 200 || status == 400 || status == 500,
+        "Expected 200, 400, or 500, got {}: {}",
+        status,
+        body
+    );
+    assert!(
+        !body.contains("Preview unavailable: missing Cloudflare config"),
+        "Cloudflare config should not be a hard blocker anymore, got: {}",
         body
     );
 

@@ -63,18 +63,6 @@ async fn create_preview(
         ));
     }
 
-    let settings = state
-        .settings_service
-        .get_response()
-        .await
-        .map_err(|e| ApiError::Internal(e.to_string()))?;
-    let missing_cloudflare_fields = missing_cloudflare_config_fields(&settings);
-    if !missing_cloudflare_fields.is_empty() {
-        return Err(ApiError::BadRequest(format!(
-            "Preview unavailable: missing Cloudflare config: {}",
-            missing_cloudflare_fields.join(", ")
-        )));
-    }
     if !state.preview_manager.runtime_enabled() {
         return Err(ApiError::BadRequest(
             "Preview unavailable: Docker preview runtime is disabled".to_string(),
@@ -180,7 +168,7 @@ async fn get_preview_for_attempt(
     Ok(Json(preview))
 }
 
-/// Get preview readiness for an attempt (project type + project settings + cloudflare config)
+/// Get preview readiness for an attempt (project type + project settings + runtime capability).
 async fn get_preview_readiness_for_attempt(
     auth_user: AuthUser,
     State(state): State<AppState>,
@@ -215,8 +203,7 @@ async fn get_preview_readiness_for_attempt(
     };
 
     let cloudflare_ready = missing_cloudflare_fields.is_empty();
-    let ready =
-        preview_supported && attempt_context.preview_enabled && cloudflare_ready && runtime_enabled;
+    let ready = preview_supported && attempt_context.preview_enabled && runtime_enabled;
 
     let reason = if !preview_supported {
         Some(format!(
@@ -227,11 +214,6 @@ async fn get_preview_readiness_for_attempt(
         Some("Preview is disabled in project settings".to_string())
     } else if !runtime_enabled {
         Some("Preview unavailable: Docker preview runtime is disabled".to_string())
-    } else if !cloudflare_ready {
-        Some(format!(
-            "Preview unavailable: missing Cloudflare config: {}",
-            missing_cloudflare_fields.join(", ")
-        ))
     } else {
         None
     };

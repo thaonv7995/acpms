@@ -1,5 +1,6 @@
 use acpms_db::models::{
-    CloudflareTunnel, PreviewDeployment, PreviewInfo, Project, ProjectType, TunnelStatus,
+    CloudflareTunnel, PreviewDeployment, PreviewInfo, Project, ProjectType, SystemSettings,
+    TunnelStatus,
 };
 use acpms_deployment::CloudflareClient;
 use acpms_services::{EncryptionService, SystemSettingsService};
@@ -33,6 +34,18 @@ enum PackageManager {
     Pnpm,
     Yarn,
     Bun,
+}
+
+const LOCAL_PREVIEW_TUNNEL_PREFIX: &str = "local-preview-";
+
+enum PreviewExposureMode {
+    Cloudflare {
+        credentials_path: PathBuf,
+        tunnel_id: String,
+    },
+    Local {
+        host_port: u16,
+    },
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -119,6 +132,14 @@ impl PreviewManager {
                 attempt_id, existing.preview_url
             );
             return Ok(existing);
+        }
+
+        if !self.cloudflare_preview_configured().await? {
+            info!(
+                "Cloudflare preview config missing; falling back to local preview URL for attempt {}",
+                attempt_id
+            );
+            return self.create_local_preview(attempt_id, task_name).await;
         }
 
         // Generate tunnel name (sanitized, with timestamp)
@@ -258,6 +279,102 @@ impl PreviewManager {
         })
     }
 
+    async fn cloudflare_preview_configured(&self) -> Result<bool> {
+        let settings = self
+            .settings_service
+            .get()
+            .await
+            .context("Failed to load system settings for preview mode decision")?;
+        Ok(has_complete_cloudflare_config(&settings))
+    }
+
+    pub async fn create_local_preview(
+        &self,
+        attempt_id: Uuid,
+        task_name: &str,
+    ) -> Result<PreviewInfo> {
+        if let Some(existing) = self.get_preview(attempt_id).await? {
+            return Ok(existing);
+        }
+
+        let tunnel = self
+            .create_local_preview_tunnel(attempt_id, task_name, self.preview_ttl_days)
+            .await?;
+
+        Ok(PreviewInfo {
+            id: tunnel.id,
+            attempt_id: tunnel.attempt_id,
+            preview_url: tunnel.preview_url,
+            status: tunnel.status,
+            created_at: tunnel.created_at,
+            expires_at: tunnel.expires_at,
+        })
+    }
+
+    async fn create_local_preview_tunnel(
+        &self,
+        attempt_id: Uuid,
+        task_name: &str,
+        ttl_days: i64,
+    ) -> Result<CloudflareTunnel> {
+        if let Some(existing_tunnel) = sqlx::query_as::<_, CloudflareTunnel>(
+            r#"
+            SELECT * FROM cloudflare_tunnels
+            WHERE attempt_id = $1 AND deleted_at IS NULL
+            LIMIT 1
+            "#,
+        )
+        .bind(attempt_id)
+        .fetch_optional(&self.db)
+        .await
+        .context("Failed to query existing preview metadata before local preview creation")?
+        {
+            return Ok(existing_tunnel);
+        }
+
+        let tunnel_name = format!("local-{}", self.generate_tunnel_name(task_name, attempt_id));
+        let tunnel_id = format!("{}{}", LOCAL_PREVIEW_TUNNEL_PREFIX, Uuid::new_v4());
+        let preview_url = local_preview_url(attempt_id);
+        let credentials_encrypted = self
+            .encryption
+            .encrypt("{}")
+            .context("Failed to encrypt local preview placeholder credentials")?;
+        let expires_at = Utc::now() + Duration::days(ttl_days);
+
+        let tunnel = sqlx::query_as::<_, CloudflareTunnel>(
+            r#"
+            INSERT INTO cloudflare_tunnels (
+                attempt_id, tunnel_id, tunnel_name, credentials_encrypted,
+                preview_url, status, expires_at, dns_record_id
+            )
+            VALUES ($1, $2, $3, $4, $5, $6, $7, NULL)
+            RETURNING *
+            "#,
+        )
+        .bind(attempt_id)
+        .bind(&tunnel_id)
+        .bind(&tunnel_name)
+        .bind(&credentials_encrypted)
+        .bind(&preview_url)
+        .bind(TunnelStatus::Active)
+        .bind(expires_at)
+        .fetch_one(&self.db)
+        .await
+        .with_context(|| {
+            format!(
+                "Failed to insert local preview metadata for attempt {}",
+                attempt_id
+            )
+        })?;
+
+        info!(
+            "Local preview metadata created for attempt {} at {}",
+            attempt_id, preview_url
+        );
+
+        Ok(tunnel)
+    }
+
     /// Mark preview as deleted in DB (fast). Returns tunnel info for resource cleanup.
     /// Caller should spawn cleanup_preview_resources in background.
     pub async fn mark_preview_deleted(
@@ -310,6 +427,14 @@ impl PreviewManager {
                 "Failed to stop preview runtime for attempt {} during cleanup: {}",
                 attempt_id, e
             );
+        }
+
+        if is_local_preview_tunnel_id(&tunnel_id) {
+            debug!(
+                "Skip Cloudflare cleanup for local preview tunnel {} (attempt {})",
+                tunnel_id, attempt_id
+            );
+            return;
         }
 
         let cloudflare = match self.get_client().await {
@@ -434,6 +559,68 @@ impl PreviewManager {
             "Creating preview for project {} (TTL: {} days)",
             project.name, ttl_days
         );
+
+        if !self.cloudflare_preview_configured().await? {
+            info!(
+                "Cloudflare preview config missing; using local preview URL for project {} attempt {}",
+                project.name, attempt_id
+            );
+
+            let tunnel = self
+                .create_local_preview_tunnel(attempt_id, task_name, ttl_days)
+                .await?;
+            let preview_url = tunnel.preview_url.clone();
+
+            let preview_deployment_result = sqlx::query_as::<_, PreviewDeployment>(
+                r#"
+                INSERT INTO preview_deployments (
+                    attempt_id, project_id, artifact_id, url, tunnel_id,
+                    dns_record_id, status, expires_at, metadata
+                )
+                VALUES ($1, $2, $3, $4, $5, $6, 'active', $7, $8)
+                RETURNING *
+                "#,
+            )
+            .bind(attempt_id)
+            .bind(project.id)
+            .bind(artifact_id)
+            .bind(&preview_url)
+            .bind(&tunnel.tunnel_id)
+            .bind(Option::<String>::None)
+            .bind(tunnel.expires_at)
+            .bind(serde_json::json!({
+                "preview_target": preview_target,
+                "target_source": if preview_target.is_some() { "agent_output" } else { "unspecified" },
+                "delivery_mode": "local_runtime",
+            }))
+            .fetch_one(&self.db)
+            .await;
+
+            if let Err(error) = preview_deployment_result {
+                let _ = sqlx::query(
+                    r#"
+                    UPDATE cloudflare_tunnels
+                    SET status = $1, deleted_at = NOW(), stopped_at = COALESCE(stopped_at, NOW())
+                    WHERE id = $2
+                    "#,
+                )
+                .bind(TunnelStatus::Deleted)
+                .bind(tunnel.id)
+                .execute(&self.db)
+                .await;
+
+                return Err(error).context("Failed to insert local preview deployment record");
+            }
+
+            return Ok(Some(PreviewInfo {
+                id: tunnel.id,
+                attempt_id: tunnel.attempt_id,
+                preview_url: tunnel.preview_url,
+                status: tunnel.status,
+                created_at: tunnel.created_at,
+                expires_at: tunnel.expires_at,
+            }));
+        }
 
         // Generate tunnel name
         let tunnel_name = self.generate_tunnel_name(task_name, attempt_id);
@@ -700,18 +887,24 @@ impl PreviewManager {
         let count = expired_tunnels.len();
         info!("Found {} expired previews to cleanup", count);
 
-        // Initialize Cloudflare client
-        let cloudflare = match self.get_client().await {
-            Ok(c) => Some(c),
-            Err(e) => {
-                error!(
-                    "Failed to initialize Cloudflare client for cleanup job: {}",
-                    e
-                );
-                // We should probably abort or skip Cloudflare deletion but still clean DB?
-                // For now, let's treat it as None and skip Cloudflare ops.
-                None
+        let requires_cloudflare_cleanup = expired_tunnels
+            .iter()
+            .any(|tunnel| !is_local_preview_tunnel_id(&tunnel.tunnel_id));
+        let cloudflare = if requires_cloudflare_cleanup {
+            match self.get_client().await {
+                Ok(c) => Some(c),
+                Err(e) => {
+                    error!(
+                        "Failed to initialize Cloudflare client for cleanup job: {}",
+                        e
+                    );
+                    // We should probably abort or skip Cloudflare deletion but still clean DB?
+                    // For now, let's treat it as None and skip Cloudflare ops.
+                    None
+                }
             }
+        } else {
+            None
         };
 
         for tunnel in expired_tunnels {
@@ -722,34 +915,44 @@ impl PreviewManager {
                 );
             }
 
-            if let Some(cf) = &cloudflare {
-                // Delete from Cloudflare (Tunnel)
-                match cf.delete_tunnel(&tunnel.tunnel_id).await {
-                    Ok(_) => {
-                        debug!("Deleted expired tunnel {}", tunnel.tunnel_id);
+            if !is_local_preview_tunnel_id(&tunnel.tunnel_id) {
+                if let Some(cf) = &cloudflare {
+                    // Delete from Cloudflare (Tunnel)
+                    match cf.delete_tunnel(&tunnel.tunnel_id).await {
+                        Ok(_) => {
+                            debug!("Deleted expired tunnel {}", tunnel.tunnel_id);
+                        }
+                        Err(e) => {
+                            error!(
+                                "Failed to delete expired tunnel {}: {}",
+                                tunnel.tunnel_id, e
+                            );
+                            // Continue with next tunnel
+                            // continue; // Actually we want to try DNS too
+                        }
                     }
-                    Err(e) => {
-                        error!(
-                            "Failed to delete expired tunnel {}: {}",
-                            tunnel.tunnel_id, e
-                        );
-                        // Continue with next tunnel
-                        // continue; // Actually we want to try DNS too
-                    }
-                }
 
-                // Delete DNS record if exists
-                if let Some(record_id) = &tunnel.dns_record_id {
-                    if let Ok(settings) = self.settings_service.get().await {
-                        if let Some(zone_id) = settings.cloudflare_zone_id {
-                            if let Err(e) = cf.delete_dns_record(&zone_id, record_id).await {
-                                error!("Failed to delete expired DNS record {}: {}", record_id, e);
-                            } else {
-                                debug!("Deleted expired DNS record {}", record_id);
+                    // Delete DNS record if exists
+                    if let Some(record_id) = &tunnel.dns_record_id {
+                        if let Ok(settings) = self.settings_service.get().await {
+                            if let Some(zone_id) = settings.cloudflare_zone_id {
+                                if let Err(e) = cf.delete_dns_record(&zone_id, record_id).await {
+                                    error!(
+                                        "Failed to delete expired DNS record {}: {}",
+                                        record_id, e
+                                    );
+                                } else {
+                                    debug!("Deleted expired DNS record {}", record_id);
+                                }
                             }
                         }
                     }
                 }
+            } else {
+                debug!(
+                    "Skip Cloudflare cleanup for expired local preview tunnel {}",
+                    tunnel.tunnel_id
+                );
             }
 
             // Mark as deleted in database
@@ -800,6 +1003,7 @@ impl PreviewManager {
         .await
         .context("Failed to load tunnel for preview runtime startup")?
         .context("No active tunnel found for runtime startup")?;
+        let local_only_exposure = is_local_preview_tunnel_id(&tunnel.tunnel_id);
 
         let worktree_path = self
             .resolve_attempt_worktree_path(attempt_id)
@@ -825,31 +1029,41 @@ impl PreviewManager {
             )
         })?;
 
-        let credentials_json = self
-            .encryption
-            .decrypt(&tunnel.credentials_encrypted)
-            .context("Failed to decrypt tunnel credentials for runtime startup")?;
-
-        let credentials_path = runtime_dir.join("tunnel-credentials.json");
-        fs::write(&credentials_path, credentials_json).with_context(|| {
-            format!(
-                "Failed to write tunnel credentials file: {}",
-                credentials_path.display()
-            )
-        })?;
-
-        let port = preview_dev_port();
-        let dev_command = resolve_preview_dev_command(&worktree_path, project_type, port)
+        let container_port = preview_dev_port();
+        let dev_command = resolve_preview_dev_command(&worktree_path, project_type, container_port)
             .context("Failed to resolve preview dev command")?;
         let dev_image = resolve_preview_dev_image(&worktree_path, &dev_command);
         let compose_path = runtime_dir.join("docker-compose.preview.yml");
+        let exposure = if local_only_exposure {
+            PreviewExposureMode::Local {
+                host_port: preview_local_public_port(attempt_id),
+            }
+        } else {
+            let credentials_json = self
+                .encryption
+                .decrypt(&tunnel.credentials_encrypted)
+                .context("Failed to decrypt tunnel credentials for runtime startup")?;
+
+            let credentials_path = runtime_dir.join("tunnel-credentials.json");
+            fs::write(&credentials_path, credentials_json).with_context(|| {
+                format!(
+                    "Failed to write tunnel credentials file: {}",
+                    credentials_path.display()
+                )
+            })?;
+
+            PreviewExposureMode::Cloudflare {
+                credentials_path,
+                tunnel_id: tunnel.tunnel_id.clone(),
+            }
+        };
+
         let compose_content = build_compose_content(
             &worktree_path,
-            &credentials_path,
-            &tunnel.tunnel_id,
             &dev_image,
             &dev_command,
-            port,
+            container_port,
+            exposure,
         )
         .context("Failed to build docker compose content")?;
         fs::write(&compose_path, compose_content)
@@ -899,7 +1113,13 @@ impl PreviewManager {
         }
 
         if let Err(error) = self
-            .wait_for_runtime_ready(attempt_id, &runtime_dir, &compose_path, &project_name)
+            .wait_for_runtime_ready(
+                attempt_id,
+                &runtime_dir,
+                &compose_path,
+                &project_name,
+                !local_only_exposure,
+            )
             .await
         {
             let message = format!(
@@ -1041,6 +1261,10 @@ impl PreviewManager {
         let stopped_at = runtime_metadata
             .as_ref()
             .and_then(|metadata| metadata.stopped_at);
+        let requires_cloudflared = runtime_metadata
+            .as_ref()
+            .map(|metadata| !is_local_preview_tunnel_id(&metadata.tunnel_id))
+            .unwrap_or(true);
 
         let worktree_path = match self.resolve_attempt_worktree_path(attempt_id).await {
             Ok(path) => path,
@@ -1137,7 +1361,7 @@ impl PreviewManager {
                     compose_file_exists,
                     docker_project_name,
                     compose_file_path: Some(compose_file_path),
-                    runtime_ready: runtime_services_ready(&running_services),
+                    runtime_ready: runtime_services_ready(&running_services, requires_cloudflared),
                     running_services,
                     last_error,
                     started_at,
@@ -1377,6 +1601,7 @@ impl PreviewManager {
         runtime_dir: &Path,
         compose_path: &Path,
         project_name: &str,
+        require_cloudflared: bool,
     ) -> Result<()> {
         let timeout = TokioDuration::from_secs(preview_runtime_start_timeout_secs());
         let poll_interval = TokioDuration::from_secs(2);
@@ -1400,7 +1625,7 @@ impl PreviewManager {
                 Ok(output) if output.status.success() => {
                     let stdout = String::from_utf8_lossy(&output.stdout);
                     let running_services = parse_running_services_output(&stdout);
-                    if runtime_services_ready(&running_services) {
+                    if runtime_services_ready(&running_services, require_cloudflared) {
                         return Ok(());
                     }
                 }
@@ -1422,9 +1647,15 @@ impl PreviewManager {
             }
 
             if Instant::now() >= deadline {
+                let required_services_label = if require_cloudflared {
+                    "dev-server and cloudflared"
+                } else {
+                    "dev-server"
+                };
                 anyhow::bail!(
-                    "Timed out after {}s waiting for dev-server and cloudflared to be running",
-                    timeout.as_secs()
+                    "Timed out after {}s waiting for {} to be running",
+                    timeout.as_secs(),
+                    required_services_label
                 );
             }
 
@@ -1660,6 +1891,67 @@ fn preview_dev_port() -> u16 {
         .and_then(|value| value.parse::<u16>().ok())
         .filter(|port| *port > 0)
         .unwrap_or(3000)
+}
+
+fn preview_local_port_base() -> u16 {
+    std::env::var("PREVIEW_LOCAL_PORT_BASE")
+        .ok()
+        .and_then(|value| value.parse::<u16>().ok())
+        .filter(|port| *port > 0)
+        .unwrap_or(42000)
+}
+
+fn preview_local_port_span() -> u16 {
+    std::env::var("PREVIEW_LOCAL_PORT_SPAN")
+        .ok()
+        .and_then(|value| value.parse::<u16>().ok())
+        .filter(|span| *span > 0)
+        .unwrap_or(1000)
+}
+
+fn preview_local_public_port(attempt_id: Uuid) -> u16 {
+    let base = preview_local_port_base() as u32;
+    let span = preview_local_port_span() as u32;
+    let hash = attempt_id.as_bytes().iter().fold(0u32, |acc, byte| {
+        acc.wrapping_mul(31).wrapping_add(*byte as u32)
+    });
+    let offset = if span == 0 { 0 } else { hash % span };
+    base.saturating_add(offset).min(u16::MAX as u32) as u16
+}
+
+fn local_preview_url(attempt_id: Uuid) -> String {
+    format!("http://localhost:{}", preview_local_public_port(attempt_id))
+}
+
+fn is_local_preview_tunnel_id(tunnel_id: &str) -> bool {
+    tunnel_id.starts_with(LOCAL_PREVIEW_TUNNEL_PREFIX)
+}
+
+fn has_complete_cloudflare_config(settings: &SystemSettings) -> bool {
+    settings
+        .cloudflare_account_id
+        .as_deref()
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+        .is_some()
+        && settings
+            .cloudflare_api_token_encrypted
+            .as_deref()
+            .map(str::trim)
+            .filter(|value| !value.is_empty())
+            .is_some()
+        && settings
+            .cloudflare_zone_id
+            .as_deref()
+            .map(str::trim)
+            .filter(|value| !value.is_empty())
+            .is_some()
+        && settings
+            .cloudflare_base_domain
+            .as_deref()
+            .map(str::trim)
+            .filter(|value| !value.is_empty())
+            .is_some()
 }
 
 fn preview_dev_image_override() -> Option<String> {
@@ -2026,26 +2318,27 @@ fn parse_running_services_output(stdout: &str) -> Vec<String> {
         .collect()
 }
 
-fn runtime_services_ready(services: &[String]) -> bool {
+fn runtime_services_ready(services: &[String], require_cloudflared: bool) -> bool {
     let has_dev_server = services.iter().any(|service| service == "dev-server");
+    if !require_cloudflared {
+        return has_dev_server;
+    }
+
     let has_cloudflared = services.iter().any(|service| service == "cloudflared");
     has_dev_server && has_cloudflared
 }
 
 fn build_compose_content(
-    worktree_path: &PathBuf,
-    credentials_path: &PathBuf,
-    tunnel_id: &str,
+    worktree_path: &Path,
     dev_image: &str,
     dev_command: &str,
     port: u16,
+    exposure_mode: PreviewExposureMode,
 ) -> Result<String> {
     let worktree = yaml_single_quote(&worktree_path.to_string_lossy());
-    let credentials = yaml_single_quote(&credentials_path.to_string_lossy());
     let command_json =
         serde_json::to_string(dev_command).context("Failed to JSON-encode dev command")?;
-
-    Ok(format!(
+    let dev_server_base = format!(
         r#"services:
   dev-server:
     image: {dev_image}
@@ -2058,7 +2351,17 @@ fn build_compose_content(
     restart: unless-stopped
     networks:
       - previewnet
+"#
+    );
 
+    match exposure_mode {
+        PreviewExposureMode::Cloudflare {
+            credentials_path,
+            tunnel_id,
+        } => {
+            let credentials = yaml_single_quote(&credentials_path.to_string_lossy());
+            Ok(format!(
+                r#"{dev_server_base}
   cloudflared:
     image: cloudflare/cloudflared:latest
     command: ["tunnel", "--no-autoupdate", "run", "--credentials-file", "/etc/cloudflared/credentials.json", "--url", "http://dev-server:{port}", "{tunnel_id}"]
@@ -2074,7 +2377,19 @@ networks:
   previewnet:
     driver: bridge
 "#
-    ))
+            ))
+        }
+        PreviewExposureMode::Local { host_port } => Ok(format!(
+            r#"{dev_server_base}
+    ports:
+      - "127.0.0.1:{host_port}:{port}"
+
+networks:
+  previewnet:
+    driver: bridge
+"#
+        )),
+    }
 }
 
 fn yaml_single_quote(value: &str) -> String {
@@ -2253,11 +2568,13 @@ mod tests {
 
         let compose = build_compose_content(
             &quoted_worktree,
-            &credentials_path,
-            "tunnel-123",
             "node:20-alpine",
             "pnpm run dev -- --host 0.0.0.0 --port 3000",
             3000,
+            PreviewExposureMode::Cloudflare {
+                credentials_path: credentials_path.clone(),
+                tunnel_id: "tunnel-123".to_string(),
+            },
         )
         .unwrap();
 
@@ -2267,6 +2584,24 @@ mod tests {
         assert!(compose.contains("http://dev-server:3000"));
         assert!(compose.contains("repo''with-quote"));
         assert!(compose.contains("creds''.json"));
+        let _ = fs::remove_dir_all(worktree);
+    }
+
+    #[test]
+    fn build_compose_content_local_mode_exposes_host_port_without_cloudflared() {
+        let worktree = create_temp_worktree("compose-local");
+        let compose = build_compose_content(
+            &worktree,
+            "node:20-alpine",
+            "npm run dev",
+            3000,
+            PreviewExposureMode::Local { host_port: 43123 },
+        )
+        .unwrap();
+
+        assert!(compose.contains("dev-server:"));
+        assert!(compose.contains("127.0.0.1:43123:3000"));
+        assert!(!compose.contains("cloudflared:"));
         let _ = fs::remove_dir_all(worktree);
     }
 
@@ -2317,18 +2652,24 @@ mod tests {
 
     #[test]
     fn runtime_services_ready_requires_dev_server_and_cloudflared() {
-        assert!(!runtime_services_ready(&[]));
-        assert!(!runtime_services_ready(&["dev-server".to_string()]));
-        assert!(!runtime_services_ready(&["cloudflared".to_string()]));
-        assert!(runtime_services_ready(&[
-            "dev-server".to_string(),
-            "cloudflared".to_string()
-        ]));
-        assert!(runtime_services_ready(&[
-            "cloudflared".to_string(),
-            "dev-server".to_string(),
-            "postgres".to_string(),
-        ]));
+        assert!(!runtime_services_ready(&[], true));
+        assert!(!runtime_services_ready(&["dev-server".to_string()], true));
+        assert!(!runtime_services_ready(&["cloudflared".to_string()], true));
+        assert!(runtime_services_ready(
+            &["dev-server".to_string(), "cloudflared".to_string()],
+            true
+        ));
+        assert!(runtime_services_ready(
+            &[
+                "cloudflared".to_string(),
+                "dev-server".to_string(),
+                "postgres".to_string(),
+            ],
+            true
+        ));
+
+        assert!(!runtime_services_ready(&["cloudflared".to_string()], false));
+        assert!(runtime_services_ready(&["dev-server".to_string()], false));
     }
 
     #[test]

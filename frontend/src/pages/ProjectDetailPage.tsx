@@ -444,11 +444,12 @@ export function ProjectDetailPage() {
               {visibleTabs.map((tab) => (
                 <button
                   key={tab.id}
-                  onClick={() => setActiveTab(tab.id)}
-                  className={`flex items-center gap-2 px-5 py-3 text-sm font-medium border-b-2 transition-colors whitespace-nowrap ${activeTab === tab.id
+                  onClick={() => tab.id !== 'deployments' && setActiveTab(tab.id)}
+                  className={`flex items-center gap-2 px-5 py-3 text-sm font-medium border-b-2 transition-colors whitespace-nowrap ${tab.id === 'deployments' ? 'opacity-50 cursor-not-allowed' : ''} ${activeTab === tab.id
                     ? 'border-primary text-primary'
                     : 'border-transparent text-muted-foreground hover:text-card-foreground hover:border-border/80'
                     }`}
+                  title={tab.id === 'deployments' ? 'Coming soon' : undefined}
                 >
                   <span className="material-symbols-outlined text-[18px]">{tab.icon}</span>
                   {tab.label}
@@ -485,6 +486,13 @@ export function ProjectDetailPage() {
                   onSelectSprint={setSelectedSprintId}
                   onNavigateTab={setActiveTab}
                   onRefreshProject={refetch}
+                  onRequirementClick={(reqId) => {
+                    const req = requirements.find((r) => r.id === reqId);
+                    if (req) {
+                      setViewingRequirement(req);
+                      setShowRequirementDetail(true);
+                    }
+                  }}
                 />
               )}
               {activeTab === 'kanban' && (
@@ -517,8 +525,6 @@ export function ProjectDetailPage() {
                     if (project) await updateRequirement(project.id, reqId, { status: newStatus });
                     refetch();
                   }}
-                  onAnalyzeWithAI={() => {/* Phase 3 */ }}
-                  onImport={() => {/* Phase 2 placeholder */ }}
                 />
               )}
               {activeTab === 'architecture' && (
