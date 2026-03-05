@@ -355,6 +355,17 @@ check_agent_cli_providers() {
     log "Installing Claude Code..."
     if curl -fsSL https://claude.ai/install.sh | bash 2>/dev/null; then
       log "  Claude Code installed."
+      # Auto-setup PATH for ~/.local/bin if not present
+      if [[ ":$PATH:" != *":$HOME/.local/bin:"* ]]; then
+        log "  Adding ~/.local/bin to shell profile..."
+        for profile_file in "$HOME/.bashrc" "$HOME/.zshrc" "$HOME/.profile"; do
+          if [ -f "$profile_file" ] && ! grep -q 'export PATH="$HOME/.local/bin:$PATH"' "$profile_file"; then
+            echo 'export PATH="$HOME/.local/bin:$PATH"' >> "$profile_file"
+            log "    Added to $profile_file"
+          fi
+        done
+        export PATH="$HOME/.local/bin:$PATH"
+      fi
     else
       err "Failed to install Claude Code. Run manually: curl -fsSL https://claude.ai/install.sh | bash"
     fi
@@ -602,6 +613,8 @@ generate_env() {
   case "$worktrees_path" in ~*) worktrees_path=$(eval echo "$worktrees_path") ;; esac
   [ -z "$worktrees_path" ] && worktrees_path="/var/acpms/worktrees"
   # Capture absolute CLI paths at install time so runtime (systemd/launchd) does not depend on shell PATH.
+  # Ensure ~/.local/bin and ~/.cursor/bin are in PATH during capture (where Claude and Cursor install)
+  export PATH="$HOME/.local/bin:$HOME/.cursor/bin:$PATH"
   local claude_bin codex_bin gemini_bin cursor_bin npx_bin
   claude_bin="$(command -v claude 2>/dev/null || true)"
   codex_bin="$(command -v codex 2>/dev/null || true)"
