@@ -32,7 +32,7 @@ import { useKeyboardShortcuts } from './project-tasks/use-keyboard-shortcuts';
 import { ProjectTasksHeader } from './project-tasks/project-tasks-header';
 import { PreviewPanelWrapper } from './project-tasks/preview-panel-wrapper';
 import { usePreviewReadiness } from '../hooks/usePreviewReadiness';
-import { createTaskAttempt, cancelAttempt, getTaskAttempts } from '../api/taskAttempts';
+import { createTaskAttempt, cancelAttempt, getTaskAttempts, getAttempt } from '../api/taskAttempts';
 import { deleteTask } from '../api/tasks';
 
 type PreviewDeliveryKind = 'live_preview' | 'artifact_download' | 'unsupported';
@@ -411,9 +411,16 @@ export function ProjectTasksPage() {
         return;
       }
 
-      await moveTaskToColumn(targetTaskId, targetColumnId, 0);
+      try {
+        await moveTaskToColumn(targetTaskId, targetColumnId, 0);
+      } catch (error) {
+        const message =
+          error instanceof Error ? error.message : 'Failed to move task.';
+        showToast(message, 'error');
+        throw error;
+      }
     },
-    [columns, moveTaskToColumn]
+    [columns, moveTaskToColumn, showToast]
   );
 
   const refreshKanbanAfterExecutionAction = useCallback(async () => {
@@ -479,7 +486,15 @@ export function ProjectTasksPage() {
     async (targetTaskId: string): Promise<string | null> => {
       const task = findTaskById(targetTaskId);
       if (task?.latestAttemptId) {
-        return task.latestAttemptId;
+        try {
+          const latestAttempt = await getAttempt(task.latestAttemptId);
+          const status = latestAttempt.status.toLowerCase();
+          if (status === 'running' || status === 'queued') {
+            return latestAttempt.id;
+          }
+        } catch {
+          // Fallback to listing attempts below
+        }
       }
 
       const attempts = await getTaskAttempts(targetTaskId);
@@ -507,17 +522,23 @@ export function ProjectTasksPage() {
     async (targetTaskId: string) => {
       const attemptId = await resolveControllableAttemptId(targetTaskId);
       if (!attemptId) {
+        showToast('No active run to cancel.', 'info');
         await refreshKanbanAfterExecutionAction();
         return;
       }
 
       try {
         await cancelAttempt(attemptId);
+        showToast('Cancellation requested.', 'info');
+      } catch (error) {
+        const message =
+          error instanceof Error ? error.message : 'Failed to cancel current run.';
+        showToast(message, 'error');
       } finally {
         await refreshKanbanAfterExecutionAction();
       }
     },
-    [resolveControllableAttemptId, refreshKanbanAfterExecutionAction]
+    [resolveControllableAttemptId, refreshKanbanAfterExecutionAction, showToast]
   );
 
   const handleViewDetailsFromKanban = useCallback(

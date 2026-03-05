@@ -78,8 +78,7 @@ export function resolveKanbanColumnStatus(
   const config = normalizeKanbanColumnConfig(columnConfig);
   switch (status) {
     case 'backlog':
-      // When backlog column is hidden, keep backlog tasks visible under TODO.
-      return config.showBacklog ? 'backlog' : 'todo';
+      return config.showBacklog ? 'backlog' : null;
     case 'blocked':
       return 'in_review';
     case 'archived':

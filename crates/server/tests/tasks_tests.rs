@@ -662,9 +662,9 @@ async fn test_update_task_rejects_invalid_status_transition() {
     let project_id = create_test_project(&pool, user_id, None).await;
     let task_id = create_test_task(&pool, project_id, user_id, None).await;
 
-    // todo -> done is invalid in TaskService::validate_status_transition
+    // todo -> in_review is invalid in TaskService::validate_status_transition
     let request_body = json!({
-        "status": "done"
+        "status": "in_review"
     });
 
     let (status, body): (axum::http::StatusCode, String) = make_request_with_string_headers(
@@ -705,9 +705,9 @@ async fn test_update_task_status_rejects_invalid_transition() {
     let project_id = create_test_project(&pool, user_id, None).await;
     let task_id = create_test_task(&pool, project_id, user_id, None).await;
 
-    // todo -> done is invalid transition
+    // todo -> in_review is invalid transition
     let request_body = json!({
-        "status": "done"
+        "status": "in_review"
     });
 
     let (status, body): (axum::http::StatusCode, String) = make_request_with_string_headers(

@@ -118,6 +118,7 @@ export function KanbanColumn({
                     <div key={task.id} className="relative group/close">
                         <DraggableTaskCard
                             task={task}
+                            columnId={column.id}
                             onClick={onTaskClick}
                             isSelected={selectedTaskId === task.id}
                             onTaskStart={onTaskStart}
@@ -151,6 +152,7 @@ export function KanbanColumn({
  */
 function DraggableTaskCard({
     task,
+    columnId,
     onClick,
     isSelected,
     onTaskStart,
@@ -163,6 +165,7 @@ function DraggableTaskCard({
     isAllProjects,
 }: {
     task: any;
+    columnId: string;
     onClick: (id: string, title: string) => void;
     isSelected: boolean;
     onTaskStart?: (taskId: string) => Promise<void> | void;
@@ -176,6 +179,7 @@ function DraggableTaskCard({
 }) {
     const { attributes, listeners, setNodeRef, isDragging } = useDraggable({
         id: task.id,
+        data: { columnId },
     });
 
     return (

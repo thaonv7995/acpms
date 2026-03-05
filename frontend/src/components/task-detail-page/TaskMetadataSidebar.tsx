@@ -24,7 +24,7 @@ const priorityColors: Record<string, string> = {
 
 const allowedTransitions: Record<TaskStatus, TaskStatus[]> = {
     backlog: ['todo', 'in_progress'],
-    todo: ['in_progress'],
+    todo: ['in_progress', 'done', 'archived'],
     in_progress: ['backlog', 'todo', 'in_review', 'done'],
     in_review: ['in_progress', 'done'],
     blocked: ['backlog', 'todo', 'in_progress'],

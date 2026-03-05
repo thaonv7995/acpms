@@ -8,7 +8,7 @@ import {
   AlertTriangle,
   Play,
   Square,
-  Trash2,
+  Eye,
 } from 'lucide-react';
 import { cn } from '@/lib/utils';
 import type { KanbanTask } from '@/types/project';
@@ -83,7 +83,7 @@ export function TaskCard({
 }: TaskCardProps) {
   const cardRef = React.useRef<HTMLDivElement>(null);
   const [pendingAction, setPendingAction] = React.useState<
-    'start' | 'cancel' | 'delete' | null
+    'start' | 'cancel' | null
   >(null);
 
   // Auto-scroll to card when selected
@@ -104,6 +104,7 @@ export function TaskCard({
   const lastAttemptFailed = task.status !== 'in_progress' && task.status !== 'done' && !!task.latestAttemptId;
   const hasParentTask = false; // TODO: Add parent_workspace_id to KanbanTask type when backend supports it
   const isInProgressTask = task.status === 'in_progress';
+  const canStartTask = !isInProgressTask && task.status !== 'backlog';
   const isActionPending = pendingAction !== null;
 
   // Executor from agentWorking field
@@ -116,7 +117,7 @@ export function TaskCard({
 
   const runAction = async (
     event: React.MouseEvent<HTMLButtonElement>,
-    action: 'start' | 'cancel' | 'delete',
+    action: 'start' | 'cancel',
     handler?: (taskId: string) => Promise<void> | void
   ) => {
     event.stopPropagation();
@@ -157,7 +158,7 @@ export function TaskCard({
           right={
             <div className="flex items-center gap-1">
               {/* Start action (when not in progress) */}
-              {!isInProgressTask && (
+              {canStartTask && (
                 <button
                   type="button"
                   className="h-6 w-6 inline-flex items-center justify-center rounded text-muted-foreground hover:text-foreground hover:bg-muted transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
@@ -177,7 +178,7 @@ export function TaskCard({
                 </button>
               )}
 
-              {/* Cancel/Delete action */}
+              {/* Cancel action */}
               {isInProgressTask ? (
                 <button
                   type="button"
@@ -196,25 +197,25 @@ export function TaskCard({
                     <Square className="w-4 h-4" />
                   )}
                 </button>
-              ) : (
-                <button
-                  type="button"
-                  className="h-6 w-6 inline-flex items-center justify-center rounded text-destructive/80 hover:text-destructive hover:bg-destructive/10 transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
-                  aria-label="Delete task"
-                  title="Delete task"
-                  onPointerDown={stopCardClick}
-                  onMouseDown={stopCardClick}
-                  onTouchStart={stopCardClick}
-                  onClick={(event) => runAction(event, 'delete', onDelete)}
-                  disabled={isActionPending || !onDelete}
-                >
-                  {pendingAction === 'delete' ? (
-                    <Loader2 className="w-4 h-4 animate-spin" />
-                  ) : (
-                    <Trash2 className="w-4 h-4" />
-                  )}
-                </button>
-              )}
+              ) : null}
+
+              {/* View details quick action */}
+              <button
+                type="button"
+                className="h-6 w-6 inline-flex items-center justify-center rounded text-muted-foreground hover:text-foreground hover:bg-muted transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
+                aria-label="View task details"
+                title="View task details"
+                onPointerDown={stopCardClick}
+                onMouseDown={stopCardClick}
+                onTouchStart={stopCardClick}
+                onClick={(event) => {
+                  event.stopPropagation();
+                  onViewDetails?.(task.id);
+                }}
+                disabled={!onViewDetails}
+              >
+                <Eye className="w-4 h-4" />
+              </button>
 
               {/* In Progress Indicator */}
               {hasInProgressAttempt && (

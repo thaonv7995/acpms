@@ -451,6 +451,8 @@ impl TaskService {
             // From TODO
             (Todo, Backlog) => true,
             (Todo, InProgress) => true,
+            (Todo, Done) => true,
+            (Todo, Archived) => true,
             // From IN_PROGRESS
             (InProgress, Backlog) => true,
             (InProgress, Todo) => true,
