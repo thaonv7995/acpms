@@ -23,3 +23,10 @@ Docker container isolation for AI agent execution to ensure system security and 
 
 - [01_overview.md](ephemeral-sandbox/01_overview.md) - Architecture & Overview
 - [02_execution_flow.md](ephemeral-sandbox/02_execution_flow.md) - Docker Volume Mount Execution Flow
+
+## [global-knowledge-base](global-knowledge-base/)
+
+A retrieval-augmented generation (RAG) system for AI agents to pull community "SKILLs", coding conventions, and official documentation from GitHub and the internet.
+
+- [01_concept.md](global-knowledge-base/01_concept.md) - The Global Knowledge Base vision
+- [02_retrieval_architecture.md](global-knowledge-base/02_retrieval_architecture.md) - Architecture for ingesting and retrieving SKILLs
