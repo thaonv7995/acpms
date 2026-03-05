@@ -27,13 +27,52 @@ pub struct TaskSummary {
 
 /// Language hint line for agent (when preferred language is set).
 fn language_instruction_line(preferred_language: Option<&str>) -> Option<&'static str> {
-    match preferred_language
-        .map(|s| s.trim())
-        .filter(|s| !s.is_empty())
-    {
+    match normalize_preferred_agent_language(preferred_language) {
         Some("vi") => Some("Always respond in Vietnamese.\n\n"),
         Some("en") => Some("Always respond in English.\n\n"),
         _ => None,
+    }
+}
+
+/// Normalize preferred language from settings/user input to canonical language code.
+/// Supported canonical values: `vi` and `en`.
+pub fn normalize_preferred_agent_language(
+    preferred_language: Option<&str>,
+) -> Option<&'static str> {
+    let raw = preferred_language
+        .map(|s| s.trim())
+        .filter(|s| !s.is_empty())?;
+    let lower = raw.to_ascii_lowercase();
+    if lower == "vi"
+        || lower.starts_with("vi-")
+        || lower == "vietnamese"
+        || lower == "tiếng việt"
+        || lower == "tieng viet"
+    {
+        return Some("vi");
+    }
+    if lower == "en" || lower.starts_with("en-") || lower == "english" {
+        return Some("en");
+    }
+    None
+}
+
+/// Apply language preference to a follow-up input turn for long-running provider sessions.
+/// This helps non-restarted chat sessions consistently follow language preference.
+pub fn apply_preferred_language_to_follow_up_input(
+    content: &str,
+    preferred_language: Option<&str>,
+) -> String {
+    match normalize_preferred_agent_language(preferred_language) {
+        Some("vi") => format!(
+            "[Language preference: Reply in Vietnamese unless user explicitly requests another language.]\n\n{}",
+            content
+        ),
+        Some("en") => format!(
+            "[Language preference: Reply in English unless user explicitly requests another language.]\n\n{}",
+            content
+        ),
+        _ => content.to_string(),
     }
 }
 
@@ -193,4 +232,51 @@ fn truncate_str(s: &str, max: usize) -> String {
         cut -= 1;
     }
     format!("{}... (truncated)", &s[..cut])
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{apply_preferred_language_to_follow_up_input, normalize_preferred_agent_language};
+
+    #[test]
+    fn normalize_preferred_language_accepts_vi_variants() {
+        assert_eq!(normalize_preferred_agent_language(Some("vi")), Some("vi"));
+        assert_eq!(
+            normalize_preferred_agent_language(Some("vi-VN")),
+            Some("vi")
+        );
+        assert_eq!(
+            normalize_preferred_agent_language(Some("Vietnamese")),
+            Some("vi")
+        );
+    }
+
+    #[test]
+    fn normalize_preferred_language_accepts_en_variants() {
+        assert_eq!(normalize_preferred_agent_language(Some("en")), Some("en"));
+        assert_eq!(
+            normalize_preferred_agent_language(Some("en-US")),
+            Some("en")
+        );
+        assert_eq!(
+            normalize_preferred_agent_language(Some("English")),
+            Some("en")
+        );
+    }
+
+    #[test]
+    fn follow_up_input_includes_language_pref_for_vi() {
+        let wrapped = apply_preferred_language_to_follow_up_input("Xin chao", Some("vi"));
+        assert!(wrapped.contains("Reply in Vietnamese"));
+        assert!(wrapped.ends_with("Xin chao"));
+    }
+
+    #[test]
+    fn follow_up_input_keeps_original_when_language_unknown() {
+        let original = "hello";
+        assert_eq!(
+            apply_preferred_language_to_follow_up_input(original, Some("jp")),
+            original
+        );
+    }
 }

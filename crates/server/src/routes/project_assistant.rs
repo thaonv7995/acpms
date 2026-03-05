@@ -10,8 +10,9 @@ use acpms_executors::{
     AssistantLogMessage, AssistantMessage, ProjectAssistantJob,
 };
 use acpms_services::{
-    build_instruction, AssistantMessage as ServiceAssistantMessage, AttachmentContent,
-    ProjectAssistantSessionService, ProjectService, RequirementService, TaskService, TaskSummary,
+    apply_preferred_language_to_follow_up_input, build_instruction,
+    AssistantMessage as ServiceAssistantMessage, AttachmentContent, ProjectAssistantSessionService,
+    ProjectService, RequirementService, TaskService, TaskSummary,
 };
 use axum::extract::{Path, State};
 use axum::http::StatusCode;
@@ -658,9 +659,20 @@ pub async fn post_input(
         ));
     }
 
+    let preferred_language = state
+        .settings_service
+        .get()
+        .await
+        .ok()
+        .and_then(|s| s.preferred_agent_language);
+    let provider_input = apply_preferred_language_to_follow_up_input(
+        &payload.content,
+        preferred_language.as_deref(),
+    );
+
     state
         .orchestrator
-        .send_input_to_assistant_session(session_id, &payload.content)
+        .send_input_to_assistant_session(session_id, &provider_input)
         .await
         .map_err(|e| ApiError::NotFound(e.to_string()))?;
 

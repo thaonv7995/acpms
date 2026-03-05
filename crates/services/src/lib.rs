@@ -83,7 +83,8 @@ pub use gitlab_sync_service::{GitLabSyncService, SyncResult};
 pub use normalized_logs::NormalizedLogService;
 pub use project::ProjectService;
 pub use project_assistant_instruction::{
-    build_instruction, build_start_instruction, AssistantMessage, AttachmentContent, TaskSummary,
+    apply_preferred_language_to_follow_up_input, build_instruction, build_start_instruction,
+    normalize_preferred_agent_language, AssistantMessage, AttachmentContent, TaskSummary,
 };
 pub use project_assistant_session::ProjectAssistantSessionService;
 pub use project_assistant_tools::{parse_tool_call_line, ToolCall};

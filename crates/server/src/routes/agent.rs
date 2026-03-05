@@ -2708,10 +2708,10 @@ mod tests {
     use super::{
         extract_claude_oauth_url_start, extract_cursor_oauth_url_start,
         is_auth_url_continuation_fragment, looks_like_claude_authenticated_output,
-        looks_like_claude_unauthenticated_output, looks_like_http_url, parse_claude_logged_in_flag,
+        looks_like_claude_unauthenticated_output, looks_like_http_url,
         looks_like_loopback_callback, normalize_agent_cli_provider,
-        parse_auth_required_action_by_provider, parse_loopback_port, redact_callback_target,
-        select_auth_command_for_provider, strip_ansi_sequences,
+        parse_auth_required_action_by_provider, parse_claude_logged_in_flag, parse_loopback_port,
+        redact_callback_target, select_auth_command_for_provider, strip_ansi_sequences,
         validate_loopback_callback_url, CLAUDE_AUTH_LOGIN_ARGS, CLAUDE_NPX_AUTH_LOGIN_ARGS,
         CLAUDE_NPX_SCRIPT_AUTH_LOGIN_ARGS, CLAUDE_SCRIPT_AUTH_LOGIN_ARGS, CODEX_AUTH_DEVICE_ARGS,
         CODEX_NPX_AUTH_DEVICE_ARGS, GEMINI_NPX_SCRIPT_ARGS, GEMINI_SCRIPT_ARGS,
