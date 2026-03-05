@@ -321,13 +321,39 @@ pub async fn create_session(
             .await
             .map_err(|e| ApiError::Internal(e.to_string()))?
         {
+            // Terminate the running agent and end the DB row synchronously so the
+            // UNIQUE partial index (one active session per user/project) is satisfied
+            // before the INSERT below.
+            let _ = state
+                .orchestrator
+                .terminate_assistant_session(active_session.id)
+                .await;
+            service
+                .end_session(active_session.id, active_session.s3_log_key.as_deref().unwrap_or(""))
+                .await
+                .map_err(|e| ApiError::Internal(e.to_string()))?;
+
+            // Archive logs to S3 in the background (non-critical).
             let state_clone = state.clone();
-            let service_clone = ProjectAssistantSessionService::new(state.db.clone());
+            let old_session_id = active_session.id;
             tokio::spawn(async move {
-                if let Err(e) =
-                    archive_and_end_session(&state_clone, &service_clone, &active_session).await
+                let bytes = read_assistant_log_file(old_session_id)
+                    .await
+                    .unwrap_or_default();
+                match state_clone
+                    .storage_service
+                    .upload_assistant_log_jsonl(old_session_id, &bytes)
+                    .await
                 {
-                    tracing::error!("Failed to archive background session: {:?}", e);
+                    Ok(s3_key) => {
+                        let svc = ProjectAssistantSessionService::new(state_clone.db.clone());
+                        if let Err(e) = svc.update_s3_log_key(old_session_id, &s3_key).await {
+                            tracing::error!(session_id = %old_session_id, "Failed to update s3_log_key after archive: {:?}", e);
+                        }
+                    }
+                    Err(e) => {
+                        tracing::error!(session_id = %old_session_id, "Failed to upload assistant logs to S3: {:?}", e);
+                    }
                 }
             });
         }

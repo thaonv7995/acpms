@@ -3,6 +3,7 @@ use acpms_db::{
     repositories::{
         create, delete_beyond_recent, end_session as repo_end_session,
         find_active_by_project_and_user, get_by_id, list_by_project_and_user,
+        update_s3_log_key,
     },
     PgPool,
 };
@@ -79,5 +80,13 @@ impl ProjectAssistantSessionService {
         repo_end_session(&self.pool, session_id, s3_log_key)
             .await
             .context("Failed to end session")
+    }
+
+    /// Update only the s3_log_key on an already-ended session (used when archiving
+    /// logs in the background after the session row has been ended synchronously).
+    pub async fn update_s3_log_key(&self, session_id: Uuid, s3_log_key: &str) -> Result<u64> {
+        update_s3_log_key(&self.pool, session_id, s3_log_key)
+            .await
+            .context("Failed to update s3_log_key")
     }
 }

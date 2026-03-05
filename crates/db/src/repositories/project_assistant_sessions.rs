@@ -141,6 +141,27 @@ pub async fn delete_beyond_recent(
     Ok(result.rows_affected())
 }
 
+/// Update only the s3_log_key on a session (e.g. after background S3 upload).
+pub async fn update_s3_log_key(
+    pool: &PgPool,
+    session_id: Uuid,
+    s3_log_key: &str,
+) -> Result<u64, sqlx::Error> {
+    let result = sqlx::query(
+        r#"
+        UPDATE project_assistant_sessions
+        SET s3_log_key = $1
+        WHERE id = $2
+        "#,
+    )
+    .bind(s3_log_key)
+    .bind(session_id)
+    .execute(pool)
+    .await?;
+
+    Ok(result.rows_affected())
+}
+
 /// End session and set s3_log_key
 pub async fn end_session(
     pool: &PgPool,
