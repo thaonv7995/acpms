@@ -11,12 +11,11 @@ import {
   useSensor,
   useSensors,
 } from '@dnd-kit/core';
-import { statusOrder } from '../../utils/statusLabels';
 import { logger } from '@/lib/logger';
 
 interface KanbanProviderProps {
   children: React.ReactNode;
-  onTaskMove?: (taskId: string, newStatus: string) => Promise<void>;
+  onTaskMove?: (taskId: string, newColumnId: string) => Promise<void>;
   onDragStart?: (taskId: string) => void;
   onDragEnd?: () => void;
 }
@@ -73,26 +72,23 @@ export function KanbanProvider({
         return;
       }
 
-      // Extract column status from drop zone ID (format: "column-{status}")
+      // Extract column ID from drop zone ID (format: "column-{columnId}")
       const overColumnId = over.id as string;
       if (!overColumnId.startsWith('column-')) {
         onDragEnd?.();
         return;
       }
 
-      // Parse status from column ID (e.g., "column-in_progress" -> "in_progress")
-      const newStatus = overColumnId.replace('column-', '');
-
-      // Validate status
-      if (!isValidStatus(newStatus)) {
-        logger.warn(`Invalid status: ${newStatus}`);
+      // Parse column ID (e.g., "column-col-in-review" -> "col-in-review")
+      const newColumnId = overColumnId.replace('column-', '');
+      if (!newColumnId) {
         onDragEnd?.();
         return;
       }
 
       // Call move handler if provided
       try {
-        await onTaskMove?.(active.id as string, newStatus);
+        await onTaskMove?.(active.id as string, newColumnId);
       } catch (error) {
         logger.error('Failed to move task:', error);
         // Error handling will be managed by parent component
@@ -130,13 +126,6 @@ export function KanbanProvider({
       </DragOverlay>
     </DndContext>
   );
-}
-
-/**
- * Validate if a string is a valid task status
- */
-function isValidStatus(value: unknown): value is string {
-  return typeof value === 'string' && statusOrder.includes(value as any);
 }
 
 export type { KanbanProviderProps };

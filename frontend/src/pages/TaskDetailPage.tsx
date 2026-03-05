@@ -4,24 +4,30 @@ import { AppShell } from '../components/layout/AppShell';
 import { ConfigureAgentModal, ViewLogsModal } from '../components/modals';
 import { TaskDetailHeader, TaskMetadataSidebar, DiffViewerModal, TaskStatusContent } from '../components/task-detail-page';
 import { prefetchDiffData } from '../components/diff-viewer/useDiff';
-import { getTask, Task } from '../api/tasks';
+import { getTask, Task, type TaskStatus } from '../api/tasks';
 import { getTaskAttempts, createTaskAttempt, TaskAttempt } from '../api/taskAttempts';
 import type { KanbanTask } from '../types/project';
 import { logger } from '@/lib/logger';
 
 // Status display helpers
 const statusLabels: Record<string, string> = {
+    backlog: 'BACKLOG', Backlog: 'BACKLOG',
     todo: 'TO DO', Todo: 'TO DO',
     in_progress: 'IN PROGRESS', InProgress: 'IN PROGRESS',
     in_review: 'IN REVIEW', InReview: 'IN REVIEW',
+    blocked: 'BLOCKED', Blocked: 'BLOCKED',
     done: 'DONE', Done: 'DONE',
+    archived: 'ARCHIVED', Archived: 'ARCHIVED',
 };
 
 const statusColors: Record<string, string> = {
+    backlog: 'bg-slate-500', Backlog: 'bg-slate-500',
     todo: 'bg-slate-400', Todo: 'bg-slate-400',
     in_progress: 'bg-blue-500', InProgress: 'bg-blue-500',
     in_review: 'bg-yellow-500', InReview: 'bg-yellow-500',
+    blocked: 'bg-red-500', Blocked: 'bg-red-500',
     done: 'bg-green-500', Done: 'bg-green-500',
+    archived: 'bg-slate-500', Archived: 'bg-slate-500',
 };
 
 function TaskDetailSkeleton() {
@@ -185,10 +191,10 @@ export function TaskDetailPage() {
 
                         <TaskMetadataSidebar
                             taskId={task.id}
+                            status={normalizedStatus as TaskStatus}
                             priority={(task.metadata?.priority as string) || 'medium'}
                             type={task.task_type || 'feature'}
                             createdAt={task.created_at}
-                            isInReview={isInReview}
                             onStatusChange={async () => {
                                 // Refetch task data after status change
                                 const taskData = await getTask(task.id);

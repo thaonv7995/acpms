@@ -3,12 +3,13 @@
  * ACPMS has 6 task statuses (vibe-kanban has 5)
  */
 
-export type TaskStatus = 'todo' | 'in_progress' | 'in_review' | 'blocked' | 'done' | 'archived';
+export type TaskStatus = 'backlog' | 'todo' | 'in_progress' | 'in_review' | 'blocked' | 'done' | 'archived';
 
 /**
  * Human-readable labels for task statuses
  */
 export const statusLabels: Record<TaskStatus, string> = {
+  backlog: 'Backlog',
   todo: 'To Do',
   in_progress: 'In Progress',
   in_review: 'In Review',
@@ -27,6 +28,12 @@ export const statusBoardColors: Record<TaskStatus, {
   dot: string;
   header: string;
 }> = {
+  backlog: {
+    bg: 'bg-slate-50 dark:bg-slate-900/50',
+    text: 'text-slate-700 dark:text-slate-300',
+    dot: 'bg-slate-400 dark:bg-slate-500',
+    header: 'bg-slate-100 dark:bg-slate-800 border-slate-200 dark:border-slate-700',
+  },
   todo: {
     bg: 'bg-slate-50 dark:bg-slate-900/50',
     text: 'text-slate-700 dark:text-slate-300',
@@ -69,6 +76,7 @@ export const statusBoardColors: Record<TaskStatus, {
  * Canonical order of statuses on the kanban board (left to right)
  */
 export const statusOrder: TaskStatus[] = [
+  'backlog',
   'todo',
   'in_progress',
   'in_review',

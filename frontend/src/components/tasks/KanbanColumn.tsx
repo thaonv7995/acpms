@@ -10,6 +10,7 @@ interface KanbanColumnProps {
 }
 
 const statusLabels: Record<TaskStatus, string> = {
+  backlog: 'Backlog',
   todo: 'To Do',
   in_progress: 'In Progress',
   in_review: 'Review',
@@ -19,6 +20,7 @@ const statusLabels: Record<TaskStatus, string> = {
 };
 
 const statusColors: Record<TaskStatus, string> = {
+  backlog: 'bg-gray-200',
   todo: 'bg-gray-100',
   in_progress: 'bg-blue-100',
   in_review: 'bg-yellow-100',

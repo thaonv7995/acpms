@@ -38,7 +38,7 @@ export interface KanbanTask {
     metadata?: Record<string, unknown>;
     requirement_id?: string;
     type: 'feature' | 'bug' | 'hotfix' | 'refactor' | 'docs' | 'test' | 'chore' | 'spike' | 'small_task' | 'deploy' | 'init';
-    status: 'todo' | 'in_progress' | 'in_review' | 'done' | 'archived';
+    status: 'backlog' | 'todo' | 'in_progress' | 'in_review' | 'blocked' | 'done' | 'archived';
     priority: 'low' | 'medium' | 'high' | 'critical';
     progress?: number;
     assignee?: {

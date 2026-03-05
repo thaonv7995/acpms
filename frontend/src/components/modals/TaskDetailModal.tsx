@@ -10,6 +10,7 @@ interface TaskDetailModalProps {
 }
 
 const statusLabels: Record<string, string> = {
+  backlog: 'Backlog',
   todo: 'To Do',
   in_progress: 'In Progress',
   in_review: 'In Review',
@@ -17,6 +18,7 @@ const statusLabels: Record<string, string> = {
 };
 
 const statusColors: Record<string, string> = {
+  backlog: 'bg-muted-foreground/60',
   todo: 'bg-muted-foreground/60',
   in_progress: 'bg-blue-500',
   in_review: 'bg-amber-500',
@@ -39,7 +41,7 @@ export function TaskDetailModal({
 
   const displayStatus = statusLabels[task.status] || task.status;
   const statusColor = statusColors[task.status] || statusColors.todo;
-  const canEdit = task.status === 'todo' || task.status === 'in_review';
+  const canEdit = task.status === 'backlog' || task.status === 'todo' || task.status === 'in_review';
 
   return (
     <div className="fixed inset-0 z-50 flex items-center justify-center p-4 sm:p-6 font-display">

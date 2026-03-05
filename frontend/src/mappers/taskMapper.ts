@@ -6,6 +6,8 @@
 
 import type { TaskDto } from '../api/generated/models';
 import type { KanbanTask, KanbanColumn } from '../types/project';
+import type { KanbanColumnConfig } from '../utils/kanbanColumns';
+import { createKanbanColumns, resolveKanbanColumnId } from '../utils/kanbanColumns';
 
 export type CreatedDateFilter =
   | 'all'
@@ -18,24 +20,31 @@ export type CreatedDateFilter =
 // Backend returns PascalCase (Todo, InProgress, Done) or snake_case
 const statusMap: Record<string, KanbanTask['status']> = {
   // PascalCase from API
+  Backlog: 'backlog',
   Todo: 'todo',
   InProgress: 'in_progress',
   InReview: 'in_review',
-  Blocked: 'todo',
+  Blocked: 'blocked',
   Done: 'done',
   Archived: 'archived',
   // Lowercase fallbacks
   todo: 'todo',
   pending: 'todo',
-  backlog: 'todo',
+  backlog: 'backlog',
   in_progress: 'in_progress',
   in_review: 'in_review',
+  blocked: 'blocked',
   testing: 'in_progress',
   done: 'done',
   completed: 'done',
   closed: 'done',
   archived: 'archived',
 };
+
+export function mapBackendStatusToFrontend(status: string): KanbanTask['status'] {
+  const normalizedStatus = typeof status === 'string' ? status.toLowerCase() : '';
+  return statusMap[status] || statusMap[normalizedStatus] || 'todo';
+}
 
 // Task type mapping: Backend task_type → Frontend type
 // Backend returns PascalCase (Feature, Bug, etc.)
@@ -87,7 +96,7 @@ export function mapBackendTask(
   const priority = (task.metadata?.priority as KanbanTask['priority']) || 'medium';
 
   // Map status (API returns PascalCase like "InProgress", statusMap handles both)
-  const status = statusMap[task.status] || statusMap[task.status.toLowerCase()] || 'todo';
+  const status = mapBackendStatusToFrontend(task.status);
 
   // Map type (API returns PascalCase like "Feature", typeMap handles both)
   const type = typeMap[task.task_type] || typeMap[task.task_type.toLowerCase()] || 'feature';
@@ -151,47 +160,19 @@ export function mapBackendTasks(
 /**
  * Group tasks into Kanban columns
  */
-export function groupTasksIntoColumns(tasks: KanbanTask[]): KanbanColumn[] {
-  const columns: KanbanColumn[] = [
-    {
-      id: 'col-backlog',
-      title: 'BACKLOG',
-      status: 'todo',
-      color: 'slate',
-      tasks: [],
-    },
-    {
-      id: 'col-in-progress',
-      title: 'AGENT PROCESSING',
-      status: 'in_progress',
-      color: 'blue',
-      tasks: [],
-    },
-    {
-      id: 'col-in-review',
-      title: 'IN REVIEW',
-      status: 'in_review',
-      color: 'yellow',
-      tasks: [],
-    },
-    {
-      id: 'col-done',
-      title: 'COMPLETED',
-      status: 'done',
-      color: 'green',
-      tasks: [],
-    },
-  ];
+export function groupTasksIntoColumns(
+  tasks: KanbanTask[],
+  columnConfig?: Partial<KanbanColumnConfig>
+): KanbanColumn[] {
+  const columns = createKanbanColumns(columnConfig);
+  const columnsById = new Map(columns.map((column) => [column.id, column]));
 
   // Group tasks by status
   for (const task of tasks) {
-    const column = columns.find((col) => col.status === task.status);
-    if (column) {
-      column.tasks.push(task);
-    } else {
-      // Default to backlog if status doesn't match
-      columns[0].tasks.push(task);
-    }
+    const targetColumnId = resolveKanbanColumnId(task, columnConfig);
+    if (!targetColumnId) continue;
+    const column = columnsById.get(targetColumnId);
+    if (column) column.tasks.push(task);
   }
 
   return columns;
@@ -207,8 +188,9 @@ export function applyTaskFilters(
   let filtered = [...tasks];
 
   if (filters.agentOnly) {
-    // "Execution only" excludes support task types (docs, spike, init).
-    const SUPPORT_TASK_TYPES: string[] = ['docs', 'spike', 'init'];
+    // "Execution only" excludes non-coding support task types (docs, spike).
+    // Keep "init" included because it can produce real code changes.
+    const SUPPORT_TASK_TYPES: string[] = ['docs', 'spike'];
     filtered = filtered.filter((task) => !SUPPORT_TASK_TYPES.includes(task.type));
   }
 
@@ -276,9 +258,11 @@ function generateInitials(name: string): string {
  */
 export function mapFrontendStatusToBackend(status: KanbanTask['status']): string {
   const reverseMap: Record<KanbanTask['status'], string> = {
+    backlog: 'backlog',
     todo: 'todo',
     in_progress: 'in_progress',
     in_review: 'in_review',
+    blocked: 'blocked',
     done: 'done',
     archived: 'archived',
   };

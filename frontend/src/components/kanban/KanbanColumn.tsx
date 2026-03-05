@@ -46,14 +46,15 @@ export function KanbanColumn({
 }: KanbanColumnProps) {
     // Make column a drop target
     const { setNodeRef, isOver } = useDroppable({
-        id: `column-${column.status}`,
+        id: `column-${column.id}`,
     });
 
     // Get status label
-    const statusLabel = statusLabels[column.status] || column.title;
+    const statusLabel = column.title || statusLabels[column.status];
 
     // Map status to CSS variable name for gradient background
     const statusColorVar: Record<string, string> = {
+        'backlog': '--neutral',
         'todo': '--neutral',
         'in_progress': '--info',
         'in_review': '--warning',

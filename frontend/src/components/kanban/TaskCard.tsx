@@ -16,6 +16,7 @@ import { TaskCardHeader } from './TaskCardHeader';
 import { TaskCardDropdown } from './TaskCardDropdown';
 import { Card } from '../ui/card';
 import { logger } from '@/lib/logger';
+import { getKanbanDisplayTitle } from '@/utils/taskTitle';
 
 // Helper to format time ago (e.g., "3d", "2h", "5m")
 function formatTimeAgo(dateString: string | undefined): string {
@@ -107,6 +108,7 @@ export function TaskCard({
 
   // Executor from agentWorking field
   const executor = task.agentWorking?.name;
+  const displayTitle = getKanbanDisplayTitle(task.title);
 
   const stopCardClick = (event: React.SyntheticEvent) => {
     event.stopPropagation();
@@ -133,7 +135,7 @@ export function TaskCard({
   return (
     <Card
       ref={cardRef}
-      onClick={() => onClick(task.id, task.title)}
+      onClick={() => onClick(task.id, displayTitle)}
       className={cn(
         'group p-3 outline-none flex-col space-y-2 cursor-pointer',
         // Border to separate tasks
@@ -151,7 +153,7 @@ export function TaskCard({
       <div className="flex flex-col gap-2">
         {/* Header with title and action icons */}
         <TaskCardHeader
-          title={task.title}
+          title={displayTitle}
           right={
             <div className="flex items-center gap-1">
               {/* Start action (when not in progress) */}
@@ -287,7 +289,8 @@ export function TaskCard({
                 task.type === 'chore' && 'bg-slate-100 dark:bg-slate-800 text-slate-500 dark:text-slate-400',
                 task.type === 'spike' && 'bg-amber-100 dark:bg-amber-900/30 text-amber-700 dark:text-amber-300',
                 task.type === 'small_task' && 'bg-zinc-100 dark:bg-zinc-800 text-zinc-700 dark:text-zinc-300',
-                task.type === 'deploy' && 'bg-emerald-100 dark:bg-emerald-900/30 text-emerald-600 dark:text-emerald-300'
+                task.type === 'deploy' && 'bg-emerald-100 dark:bg-emerald-900/30 text-emerald-600 dark:text-emerald-300',
+                task.type === 'init' && 'bg-gray-100 dark:bg-gray-900/30 text-gray-600 dark:text-gray-400'
               )}>
                 {formatTaskTypeLabel(task.type)}
               </span>

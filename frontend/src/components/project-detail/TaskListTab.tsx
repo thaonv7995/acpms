@@ -22,9 +22,11 @@ interface TaskListTabProps {
 const PAGE_SIZE = 10;
 
 const statusStyles: Record<KanbanTask['status'], { bg: string; text: string; label: string }> = {
+    backlog: { bg: 'bg-muted', text: 'text-muted-foreground', label: 'Backlog' },
     todo: { bg: 'bg-muted', text: 'text-muted-foreground', label: 'To Do' },
     in_progress: { bg: 'bg-blue-100 dark:bg-blue-500/20', text: 'text-blue-600 dark:text-blue-400', label: 'In Progress' },
     in_review: { bg: 'bg-amber-100 dark:bg-amber-500/20', text: 'text-amber-600 dark:text-amber-400', label: 'In Review' },
+    blocked: { bg: 'bg-red-100 dark:bg-red-500/20', text: 'text-red-600 dark:text-red-400', label: 'Blocked' },
     done: { bg: 'bg-green-100 dark:bg-green-500/20', text: 'text-green-600 dark:text-green-400', label: 'Done' },
     archived: { bg: 'bg-muted', text: 'text-muted-foreground', label: 'Archived' },
 };
@@ -306,11 +308,18 @@ export function TaskListTab({
         });
     }, [tasks, searchQuery, statusFilter, typeFilter, requirementFilter]);
 
-    // Sort: in_progress first, then in_review, then todo, then done
+    // Sort: in_progress first, then review, then backlog/todo, then closed states
     const sortedTasks = useMemo(() => {
         return [...filteredTasks].sort((a, b) => {
-            const statusOrder: Record<string, number> = { in_progress: 0, in_review: 1, todo: 2, done: 3, archived: 4 };
-            return (statusOrder[a.status] ?? 5) - (statusOrder[b.status] ?? 5);
+            const statusOrder: Record<string, number> = {
+                in_progress: 0,
+                in_review: 1,
+                backlog: 2,
+                todo: 3,
+                done: 4,
+                archived: 5,
+            };
+            return (statusOrder[a.status] ?? 6) - (statusOrder[b.status] ?? 6);
         });
     }, [filteredTasks]);
 
@@ -359,10 +368,13 @@ export function TaskListTab({
                             className="px-3 py-2 bg-card border border-border rounded-lg text-sm text-card-foreground focus:outline-none focus:ring-2 focus:ring-primary/20"
                         >
                             <option value="all">All Status</option>
+                            <option value="backlog">Backlog</option>
                             <option value="todo">To Do</option>
                             <option value="in_progress">In Progress</option>
                             <option value="in_review">In Review</option>
+                            <option value="blocked">Blocked</option>
                             <option value="done">Done</option>
+                            <option value="archived">Archived</option>
                         </select>
 
                         {/* Type Filter */}

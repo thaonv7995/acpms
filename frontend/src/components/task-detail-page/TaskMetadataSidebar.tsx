@@ -4,10 +4,10 @@ import { logger } from '@/lib/logger';
 
 interface TaskMetadataSidebarProps {
     taskId: string;
+    status: TaskStatus;
     priority: string;
     type: string;
     createdAt: string;
-    isInReview: boolean;
     onStatusChange?: () => void;
 }
 
@@ -22,7 +22,27 @@ const priorityColors: Record<string, string> = {
     Critical: 'bg-red-100 text-red-600 dark:bg-red-500/20 dark:text-red-400',
 };
 
-export function TaskMetadataSidebar({ taskId, priority, type, createdAt, isInReview, onStatusChange }: TaskMetadataSidebarProps) {
+const allowedTransitions: Record<TaskStatus, TaskStatus[]> = {
+    backlog: ['todo', 'in_progress'],
+    todo: ['in_progress'],
+    in_progress: ['backlog', 'todo', 'in_review', 'done'],
+    in_review: ['in_progress', 'done'],
+    blocked: ['backlog', 'todo', 'in_progress'],
+    done: ['in_progress', 'archived'],
+    archived: ['backlog', 'in_progress'],
+};
+
+const transitionLabels: Record<TaskStatus, string> = {
+    backlog: 'Move to Backlog',
+    todo: 'Move to To Do',
+    in_progress: 'Move to In Progress',
+    in_review: 'Move to In Review',
+    blocked: 'Move to Blocked',
+    done: 'Move to Done',
+    archived: 'Archive Task',
+};
+
+export function TaskMetadataSidebar({ taskId, status, priority, type, createdAt, onStatusChange }: TaskMetadataSidebarProps) {
     const [isUpdating, setIsUpdating] = useState(false);
 
     const handleStatusChange = async (newStatus: string) => {
@@ -92,10 +112,11 @@ export function TaskMetadataSidebar({ taskId, priority, type, createdAt, isInRev
                         onChange={(e) => handleStatusChange(e.target.value)}
                     >
                         <option value="" disabled>Change Status</option>
-                        <option value="Todo">Move to To Do</option>
-                        <option value="InProgress">Move to In Progress</option>
-                        {isInReview && <option value="Done">Approve & Move to Done</option>}
-                        {!isInReview && <option value="Done">Move to Done</option>}
+                        {(allowedTransitions[status] || []).map((nextStatus) => (
+                            <option key={nextStatus} value={nextStatus}>
+                                {transitionLabels[nextStatus]}
+                            </option>
+                        ))}
                     </select>
                     <button className="w-full py-2 px-3 text-sm text-muted-foreground hover:bg-muted rounded-lg transition-colors text-left flex items-center gap-2">
                         <span className="material-symbols-outlined text-[16px]">edit</span>

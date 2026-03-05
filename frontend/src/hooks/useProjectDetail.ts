@@ -13,6 +13,7 @@ import type {
 } from '../types/project';
 import type { ProjectWithRepositoryContext } from '../types/repository';
 import { logger } from '@/lib/logger';
+import { createKanbanColumns, resolveKanbanColumnId } from '../utils/kanbanColumns';
 
 export type ProjectTab =
     | 'summary'
@@ -56,30 +57,32 @@ function transformToKanbanTask(task: Task): KanbanTask {
         spike: 'spike',
         small_task: 'small_task',
         deploy: 'deploy',
-        init: 'chore',
+        init: 'init',
     };
 
     // Map task status to KanbanTask status
     // API returns PascalCase (Todo, InProgress, InReview, Done)
     const statusMap: Record<string, KanbanTask['status']> = {
         // PascalCase from API
+        Backlog: 'backlog',
         Todo: 'todo',
         InProgress: 'in_progress',
         InReview: 'in_review',  // Map to dedicated in_review status
-        Blocked: 'todo',
+        Blocked: 'blocked',
         Done: 'done',
-        Archived: 'done',
-        Cancelled: 'done',
-        Canceled: 'done',
+        Archived: 'archived',
+        Cancelled: 'archived',
+        Canceled: 'archived',
         // Lowercase fallbacks
+        backlog: 'backlog',
         todo: 'todo',
         in_progress: 'in_progress',
         in_review: 'in_review',
-        blocked: 'todo',
+        blocked: 'blocked',
         done: 'done',
-        archived: 'done',
-        cancelled: 'done',
-        canceled: 'done',
+        archived: 'archived',
+        cancelled: 'archived',
+        canceled: 'archived',
     };
 
     // Get priority from metadata
@@ -110,19 +113,15 @@ function transformToKanbanTask(task: Task): KanbanTask {
 
 // Group tasks into Kanban columns
 function groupTasksIntoColumns(tasks: Task[]): KanbanColumn[] {
-    const columns: KanbanColumn[] = [
-        { id: 'todo', title: 'To Do', status: 'todo', color: 'slate', tasks: [] },
-        { id: 'in_progress', title: 'In Progress', status: 'in_progress', color: 'blue', tasks: [] },
-        { id: 'in_review', title: 'In Review', status: 'in_review', color: 'yellow', tasks: [] },
-        { id: 'done', title: 'Done', status: 'done', color: 'green', tasks: [] },
-    ];
-
-    // Filter out init tasks
-    const nonInitTasks = tasks.filter(t => t.task_type !== 'init');
-
-    nonInitTasks.forEach(task => {
+    const columns = createKanbanColumns();
+    const columnsById = new Map(columns.map((column) => [column.id, column]));
+    tasks.forEach(task => {
         const kanbanTask = transformToKanbanTask(task);
-        const column = columns.find(c => c.status === kanbanTask.status);
+        const targetColumnId = resolveKanbanColumnId(kanbanTask);
+        if (!targetColumnId) {
+            return;
+        }
+        const column = columnsById.get(targetColumnId);
         if (column) {
             column.tasks.push(kanbanTask);
         }
@@ -206,25 +205,21 @@ export function useProjectDetail(projectId: string | undefined): UseProjectDetai
     // Memoize kanban columns from filtered tasks
     const kanbanColumns = useMemo(() => groupTasksIntoColumns(filteredTasks), [filteredTasks]);
 
-    // Memoize flat task list for list view (excludes init tasks)
-    const tasks = useMemo(() =>
-        filteredTasks.filter(t => t.task_type !== 'init').map(transformToKanbanTask),
-        [filteredTasks]
-    );
+    // Memoize flat task list for list view
+    const tasks = useMemo(() => filteredTasks.map(transformToKanbanTask), [filteredTasks]);
 
     // Memoize task statistics (filtered by sprint)
     const taskStats = useMemo(() => {
-        const nonInitTasks = filteredTasks.filter(t => t.task_type !== 'init');
         const byType: Record<string, number> = {};
         const byStatus: Record<string, number> = {};
 
-        nonInitTasks.forEach(task => {
+        filteredTasks.forEach(task => {
             byType[task.task_type] = (byType[task.task_type] || 0) + 1;
             const status = task.status.toLowerCase().replace(/([a-z])([A-Z])/g, '$1_$2').toLowerCase();
             byStatus[status] = (byStatus[status] || 0) + 1;
         });
 
-        return { total: nonInitTasks.length, byType, byStatus };
+        return { total: filteredTasks.length, byType, byStatus };
     }, [filteredTasks]);
 
     const fetchData = useCallback(async () => {

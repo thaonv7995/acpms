@@ -17,7 +17,7 @@ export type TaskType =
   | 'small_task'
   | 'deploy';
 
-export type TaskStatus = 'todo' | 'in_progress' | 'in_review' | 'blocked' | 'done' | 'archived';
+export type TaskStatus = 'backlog' | 'todo' | 'in_progress' | 'in_review' | 'blocked' | 'done' | 'archived';
 
 export type AttemptStatus = 'queued' | 'running' | 'success' | 'failed' | 'cancelled';
 

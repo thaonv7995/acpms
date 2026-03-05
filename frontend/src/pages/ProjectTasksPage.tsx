@@ -34,6 +34,7 @@ import { PreviewPanelWrapper } from './project-tasks/preview-panel-wrapper';
 import { usePreviewReadiness } from '../hooks/usePreviewReadiness';
 import { createTaskAttempt, cancelAttempt, getTaskAttempts } from '../api/taskAttempts';
 import { deleteTask } from '../api/tasks';
+import { resolveKanbanColumnStatus } from '../utils/kanbanColumns';
 
 type PreviewDeliveryKind = 'live_preview' | 'artifact_download' | 'unsupported';
 
@@ -216,7 +217,18 @@ export function ProjectTasksPage() {
   const kanbanProjectId = isAllProjects ? 'all' : effectiveProjectId;
 
   // Fetch kanban data
-  const { columns, loading, refetch, setFilters, rawTasks, closeTask, closeAllDone } = useKanban(kanbanProjectId);
+  const {
+    columns,
+    loading,
+    refetch,
+    setFilters,
+    columnConfig,
+    setColumnConfig,
+    rawTasks,
+    updateStatus,
+    closeTask,
+    closeAllDone,
+  } = useKanban(kanbanProjectId);
 
   // Handle project change - update filter and navigate if needed
   const handleProjectChange = useCallback(
@@ -388,6 +400,37 @@ export function ProjectTasksPage() {
       setFilters(filters);
     },
     [setFilters]
+  );
+
+  const handleTaskMoveFromKanban = useCallback(
+    async (targetTaskId: string, targetColumnId: string) => {
+      const targetColumn = columns.find((column) => column.id === targetColumnId);
+      if (!targetColumn) return;
+
+      const sourceColumn = columns.find((column) =>
+        column.tasks.some((candidate) => candidate.id === targetTaskId)
+      );
+
+      if (sourceColumn && sourceColumn.id === targetColumn.id) {
+        return;
+      }
+
+      if (sourceColumn && sourceColumn.status === targetColumn.status) {
+        return;
+      }
+
+      const task = columns
+        .flatMap((column) => column.tasks)
+        .find((candidate) => candidate.id === targetTaskId);
+      if (task) {
+        const currentDisplayStatus = resolveKanbanColumnStatus(task.status, columnConfig);
+        if (currentDisplayStatus === targetColumn.status) {
+          return;
+        }
+      }
+      await updateStatus(targetTaskId, targetColumn.status);
+    },
+    [columnConfig, columns, updateStatus]
   );
 
   const refreshKanbanAfterExecutionAction = useCallback(async () => {
@@ -617,6 +660,7 @@ export function ProjectTasksPage() {
       onTaskClick={handleTaskClick}
       onCreateTask={() => setShowCreateModal(true)}
       onFiltersChange={handleFiltersChange}
+      onTaskMove={handleTaskMoveFromKanban}
       onTaskStart={handleStartTaskFromKanban}
       onTaskCancelExecution={handleCancelExecutionFromKanban}
       onTaskDelete={handleDeleteTaskFromKanban}
@@ -626,6 +670,8 @@ export function ProjectTasksPage() {
       onTaskRetry={handleRetryFromKanban}
       onTaskClose={closeTask}
       onCloseAllDone={closeAllDone}
+      columnConfig={columnConfig}
+      onColumnConfigChange={setColumnConfig}
       projects={projects.map(p => ({ id: p.id, name: p.name }))}
       selectedProjectId={filterProjectId !== undefined ? filterProjectId : (isAllProjects ? 'all' : effectiveProjectIdFromUrl)}
       onProjectChange={handleProjectChange}

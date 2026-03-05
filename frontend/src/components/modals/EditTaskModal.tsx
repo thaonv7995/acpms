@@ -29,18 +29,6 @@ function formatBytes(bytes: number): string {
 type TaskTypeValue = Exclude<TaskType, 'init'>;
 type TaskPriorityValue = 'low' | 'medium' | 'high' | 'critical';
 
-// Map KanbanTask status to API format (PascalCase)
-const statusToApi = (status: KanbanTask['status']): string => {
-  const map: Record<KanbanTask['status'], string> = {
-    todo: 'Todo',
-    in_progress: 'InProgress',
-    in_review: 'InReview',
-    done: 'Done',
-    archived: 'Archived',
-  };
-  return map[status] ?? 'Todo';
-};
-
 interface EditTaskModalProps {
   isOpen: boolean;
   onClose: () => void;
@@ -174,7 +162,7 @@ export function EditTaskModal({
 
     try {
       const updatePayload: UpdateTaskRequestDoc = {
-        status: statusToApi(task.status),
+        status: task.status,
         title: title.trim(),
         description: description.trim() || null,
         assigned_to: assignee || null,

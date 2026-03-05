@@ -37,7 +37,7 @@ export function TaskCardDropdown({
 
   // Edit Task: only when todo or in_review (not merged). Disabled when in_progress or done.
   const canEditTask =
-    task.status === 'todo' || task.status === 'in_review';
+    task.status === 'backlog' || task.status === 'todo' || task.status === 'in_review';
 
   return (
     <DropdownMenu>

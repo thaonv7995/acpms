@@ -1,6 +1,7 @@
 import { useSortable } from '@dnd-kit/sortable';
 import { CSS } from '@dnd-kit/utilities';
 import { Task } from '../../shared/types';
+import { getKanbanDisplayTitle } from '../../utils/taskTitle';
 
 interface TaskCardProps {
   task: Task;
@@ -22,6 +23,7 @@ export function TaskCard({ task, onClick }: TaskCardProps) {
     transition,
     opacity: isDragging ? 0.5 : 1,
   };
+  const displayTitle = getKanbanDisplayTitle(task.title);
 
   const getTaskTypeColor = (type: string) => {
     switch (type) {
@@ -51,7 +53,7 @@ export function TaskCard({ task, onClick }: TaskCardProps) {
     >
       <div className="flex items-start justify-between mb-2">
         <h4 className="text-sm font-medium text-gray-900 line-clamp-2 flex-1">
-          {task.title}
+          {displayTitle}
         </h4>
         <span className={`ml-2 px-2 py-1 text-xs font-medium rounded ${getTaskTypeColor(task.task_type)}`}>
           {task.task_type.replace('_', ' ')}

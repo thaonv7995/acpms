@@ -6,6 +6,7 @@ import { useDebouncedValue } from '../../hooks/useDebouncedValue';
 import { useKanbanStats } from '../../hooks/useKanbanStats';
 import type { KanbanColumn as KanbanColumnType, KanbanTask } from '../../types/project';
 import type { CreatedDateFilter } from '../../mappers/taskMapper';
+import type { KanbanColumnConfig } from '../../utils/kanbanColumns';
 import {
   DropdownMenu,
   DropdownMenuContent,
@@ -44,9 +45,16 @@ interface KanbanBoardProps {
   onTaskRetry?: (taskId: string) => Promise<void> | void;
   onTaskClose?: (taskId: string) => Promise<void> | void;
   onCloseAllDone?: () => Promise<void> | void;
+  columnConfig?: KanbanColumnConfig;
+  onColumnConfigChange?: (next: Partial<KanbanColumnConfig>) => void;
   /** Raw TaskDto[] from useKanban — pass to useKanbanStats to avoid duplicate API calls */
   rawTasks?: import('../../api/generated/models').TaskDto[];
 }
+
+const DEFAULT_COLUMN_CONFIG: KanbanColumnConfig = {
+  showBacklog: false,
+  showClosed: false,
+};
 
 export function KanbanBoard({
   columns,
@@ -68,15 +76,18 @@ export function KanbanBoard({
   onTaskRetry,
   onTaskClose,
   onCloseAllDone,
+  columnConfig,
+  onColumnConfigChange,
   rawTasks,
 }: KanbanBoardProps) {
   const navigate = useNavigate();
-  const [agentOnlyFilter, setAgentOnlyFilter] = useState(true);
+  const [agentOnlyFilter, setAgentOnlyFilter] = useState(false);
   const [searchQuery, setSearchQuery] = useState('');
-  const [createdDateFilter, setCreatedDateFilter] = useState<CreatedDateFilter>('all');
+  const [createdDateFilter, setCreatedDateFilter] = useState<CreatedDateFilter>('last_30_days');
   const debouncedSearch = useDebouncedValue(searchQuery, 300);
 
   const isAllProjects = selectedProjectId === 'all' || !selectedProjectId;
+  const effectiveColumnConfig = columnConfig ?? DEFAULT_COLUMN_CONFIG;
   const selectedProject = projects.find(p => p.id === selectedProjectId);
   const projectName = isAllProjects ? 'All Projects' : (selectedProject?.name || 'Select Project');
 
@@ -268,7 +279,7 @@ export function KanbanBoard({
                     ? 'bg-primary text-primary-foreground border border-primary shadow-sm'
                     : 'bg-primary/20 dark:bg-primary/30 border border-primary/30 text-card-foreground hover:bg-primary/30 dark:hover:bg-primary/40'
                   }`}
-                title="Show execution tasks only (exclude Docs/Spike/Init tasks)"
+                title="Show execution tasks only (exclude Docs/Spike tasks)"
               >
                 <span className="material-symbols-outlined text-[16px]">code</span> Execution Only
               </button>
@@ -297,6 +308,43 @@ export function KanbanBoard({
                   </DropdownMenuItem>
                   <DropdownMenuItem onClick={() => setCreatedDateFilter('last_30_days')}>
                     Last 30 days
+                  </DropdownMenuItem>
+                </DropdownMenuContent>
+              </DropdownMenu>
+              <DropdownMenu>
+                <DropdownMenuTrigger asChild>
+                  <button
+                    className="inline-flex h-8 w-8 items-center justify-center rounded-full transition-colors bg-primary/20 dark:bg-primary/30 border border-primary/30 text-card-foreground hover:bg-primary/30 dark:hover:bg-primary/40 shrink-0"
+                    title="Configure columns"
+                    aria-label="Configure Kanban columns"
+                  >
+                    <span className="material-symbols-outlined text-[16px]">tune</span>
+                  </button>
+                </DropdownMenuTrigger>
+                <DropdownMenuContent align="start" className="w-48">
+                  <DropdownMenuItem
+                    onClick={() =>
+                      onColumnConfigChange?.({
+                        showBacklog: !effectiveColumnConfig.showBacklog,
+                      })
+                    }
+                  >
+                    <span className="material-symbols-outlined mr-2 text-[16px]">
+                      {effectiveColumnConfig.showBacklog ? 'check_box' : 'check_box_outline_blank'}
+                    </span>
+                    Show Backlog
+                  </DropdownMenuItem>
+                  <DropdownMenuItem
+                    onClick={() =>
+                      onColumnConfigChange?.({
+                        showClosed: !effectiveColumnConfig.showClosed,
+                      })
+                    }
+                  >
+                    <span className="material-symbols-outlined mr-2 text-[16px]">
+                      {effectiveColumnConfig.showClosed ? 'check_box' : 'check_box_outline_blank'}
+                    </span>
+                    Show Closed
                   </DropdownMenuItem>
                 </DropdownMenuContent>
               </DropdownMenu>

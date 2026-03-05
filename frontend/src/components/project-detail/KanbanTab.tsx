@@ -2,6 +2,7 @@
 import { useNavigate } from 'react-router-dom';
 import type { KanbanColumn, KanbanTask } from '../../types/project';
 import { LiveAgentActivity } from './LiveAgentActivity';
+import { getKanbanDisplayTitle } from '../../utils/taskTitle';
 
 interface KanbanTabProps {
     columns: KanbanColumn[];
@@ -56,7 +57,7 @@ export function KanbanTab({ columns, projectId, onAddTask, onTaskClick }: Kanban
                                         {column.tasks.length}
                                     </span>
                                 </h3>
-                                {column.status === 'todo' && (
+                                {(column.status === 'todo' || column.status === 'backlog') && (
                                     <button
                                         onClick={() => onAddTask?.(column.id)}
                                         className="text-slate-400 hover:text-primary"
@@ -71,6 +72,7 @@ export function KanbanTab({ columns, projectId, onAddTask, onTaskClick }: Kanban
                                 const typeStyle = typeStyles[task.type];
                                 const isDone = task.status === 'done';
                                 const isWorking = !!task.agentWorking;
+                                const displayTitle = getKanbanDisplayTitle(task.title);
 
                                 return (
                                     <div
@@ -105,7 +107,7 @@ export function KanbanTab({ columns, projectId, onAddTask, onTaskClick }: Kanban
                                         </div>
 
                                         <h4 className={`text-slate-900 dark:text-white font-semibold text-sm mb-2 ${isDone ? 'line-through' : ''}`}>
-                                            {task.title}
+                                            {displayTitle}
                                         </h4>
 
                                         {task.description && (
