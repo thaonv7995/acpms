@@ -1,7 +1,7 @@
 import { useDroppable } from '@dnd-kit/core';
 import { useDraggable } from '@dnd-kit/core';
 import { Button } from '../ui/button';
-import { Plus, X } from 'lucide-react';
+import { Archive, Plus } from 'lucide-react';
 import { cn } from '@/lib/utils';
 import type { KanbanColumn as KanbanColumnType } from '../../types/project';
 import { TaskCard } from './TaskCard';
@@ -92,10 +92,10 @@ export function KanbanColumn({
                         size="icon"
                         className="m-0 p-0 h-0 text-foreground/50 hover:text-foreground"
                         onClick={onCloseAllDone}
-                        aria-label="Close all done tasks"
-                        title="Close all done tasks"
+                        aria-label="Close all completed tasks"
+                        title="Close all completed tasks"
                     >
-                        <X className="h-4 w-4" />
+                        <Archive className="h-4 w-4" />
                     </Button>
                 )}
                 {onAddTask && (
@@ -134,10 +134,10 @@ export function KanbanColumn({
                             <button
                                 onClick={(e) => { e.stopPropagation(); onTaskClose(task.id); }}
                                 className="absolute top-2 right-2 opacity-0 group-hover/close:opacity-100 transition-opacity p-0.5 rounded hover:bg-destructive/10 text-foreground/40 hover:text-destructive"
-                                title="Archive task"
-                                aria-label="Archive task"
+                                title="Move task to closed"
+                                aria-label="Move task to closed"
                             >
-                                <X className="h-3.5 w-3.5" />
+                                <Archive className="h-3.5 w-3.5" />
                             </button>
                         )}
                     </div>

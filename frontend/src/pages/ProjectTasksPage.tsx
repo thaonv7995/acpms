@@ -160,6 +160,10 @@ export function ProjectTasksPage() {
   const [showCreateAttempt, setShowCreateAttempt] = useState(false);
   const [pendingDeleteTask, setPendingDeleteTask] = useState<{ id: string; title: string } | null>(null);
   const [isDeletingTask, setIsDeletingTask] = useState(false);
+  const [pendingCloseTask, setPendingCloseTask] = useState<{ id: string; title: string } | null>(null);
+  const [isClosingTask, setIsClosingTask] = useState(false);
+  const [showCloseAllDoneConfirm, setShowCloseAllDoneConfirm] = useState(false);
+  const [isClosingAllDone, setIsClosingAllDone] = useState(false);
   const lastStreamAttemptStatusRef = useRef<string | null>(null);
   const lastKanbanRefetchAtRef = useRef<number>(0);
   const KANBAN_REFETCH_THROTTLE_MS = 2000;
@@ -265,6 +269,10 @@ export function ProjectTasksPage() {
     }
     return null;
   }, [columns, taskId]);
+
+  const doneTaskCount = useMemo(() => {
+    return columns.find((column) => column.status === 'done')?.tasks.length ?? 0;
+  }, [columns]);
 
   // Fetch and manage attempt data
   // Use effectiveProjectIdFromUrl for attempt data (only fetch if not 'all')
@@ -592,6 +600,63 @@ export function ProjectTasksPage() {
     [findTaskById]
   );
 
+  const handleCloseTaskFromKanban = useCallback(
+    (targetTaskId: string) => {
+      const task = findTaskById(targetTaskId);
+      setPendingCloseTask({
+        id: targetTaskId,
+        title: task?.title || 'this task',
+      });
+    },
+    [findTaskById]
+  );
+
+  const handleConfirmCloseTask = useCallback(async () => {
+    const taskToClose = pendingCloseTask;
+    if (!taskToClose || isClosingTask) return;
+
+    setIsClosingTask(true);
+    try {
+      await closeTask(taskToClose.id);
+      if (!columnConfig.showClosed && taskToClose.id === taskId) {
+        handleClosePanel();
+      }
+      setPendingCloseTask(null);
+    } finally {
+      setIsClosingTask(false);
+    }
+  }, [pendingCloseTask, isClosingTask, closeTask, columnConfig.showClosed, taskId, handleClosePanel]);
+
+  const handleCloseTaskConfirmModal = useCallback(() => {
+    if (isClosingTask) return;
+    setPendingCloseTask(null);
+  }, [isClosingTask]);
+
+  const handleRequestCloseAllDone = useCallback(() => {
+    if (doneTaskCount <= 0 || isClosingAllDone) return;
+    setShowCloseAllDoneConfirm(true);
+  }, [doneTaskCount, isClosingAllDone]);
+
+  const handleConfirmCloseAllDone = useCallback(async () => {
+    if (isClosingAllDone) return;
+
+    setIsClosingAllDone(true);
+    try {
+      await closeAllDone();
+      if (!columnConfig.showClosed && selectedTask?.status === 'done') {
+        handleClosePanel();
+      }
+      setShowCloseAllDoneConfirm(false);
+    } finally {
+      setIsClosingAllDone(false);
+    }
+  }, [isClosingAllDone, closeAllDone, columnConfig.showClosed, selectedTask?.status, handleClosePanel]);
+
+  const handleCloseAllDoneConfirmModal = useCallback(() => {
+    if (isClosingAllDone) return;
+    setShowCloseAllDoneConfirm(false);
+  }, [isClosingAllDone]);
+
   const handleConfirmDeleteTask = useCallback(async () => {
     const taskToDelete = pendingDeleteTask;
     if (!taskToDelete || isDeletingTask) return;
@@ -672,8 +737,8 @@ export function ProjectTasksPage() {
       onTaskEdit={handleEditFromKanban}
       onTaskNewAttempt={handleNewAttemptFromKanban}
       onTaskRetry={handleRetryFromKanban}
-      onTaskClose={closeTask}
-      onCloseAllDone={closeAllDone}
+      onTaskClose={handleCloseTaskFromKanban}
+      onCloseAllDone={handleRequestCloseAllDone}
       columnConfig={columnConfig}
       onColumnConfigChange={setColumnConfig}
       projects={projects.map(p => ({ id: p.id, name: p.name }))}
@@ -861,6 +926,28 @@ export function ProjectTasksPage() {
         confirmText="Delete Task"
         confirmVariant="danger"
         isLoading={isDeletingTask}
+      />
+
+      <ConfirmModal
+        isOpen={!!pendingCloseTask}
+        onClose={handleCloseTaskConfirmModal}
+        onConfirm={handleConfirmCloseTask}
+        title="Close Task"
+        message={`Move "${pendingCloseTask?.title ?? ''}" to Closed?`}
+        confirmText="Close Task"
+        confirmVariant="primary"
+        isLoading={isClosingTask}
+      />
+
+      <ConfirmModal
+        isOpen={showCloseAllDoneConfirm}
+        onClose={handleCloseAllDoneConfirmModal}
+        onConfirm={handleConfirmCloseAllDone}
+        title="Close Completed Tasks"
+        message={`Move ${doneTaskCount} completed task(s) to Closed?`}
+        confirmText="Close All"
+        confirmVariant="primary"
+        isLoading={isClosingAllDone}
       />
 
       {/* Toast notifications */}
