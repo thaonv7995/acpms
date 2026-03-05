@@ -12,10 +12,6 @@ Focused on **project management** and **breaking down requirements** into manage
 - **GitLab Integration** – OAuth, MR creation, webhooks
 - **Single Binary Distribution** – Backend serves frontend + S3 proxy for self-hosting
 
-**System Architecture**
-
-![ACPMS System Architecture](docs/screenshots/architecture.png)
-
 **Project & Assistant**
 
 ![ACPMS Project and Assistant](docs/screenshots/project-assistant.png)
