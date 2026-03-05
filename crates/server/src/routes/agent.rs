@@ -2459,8 +2459,7 @@ async fn check_gemini_provider_status() -> ProviderStatusDoc {
         );
     }
 
-    // Fast path: if credentials already exist on disk or via env var, skip the
-    // expensive live probe (gemini -p ping actually calls the API and can take 20+s).
+    // Fast path: explicit API key env var is still considered authoritative.
     if gemini_api_key_configured() {
         return build_provider_status(
             "gemini-cli",
@@ -2470,15 +2469,10 @@ async fn check_gemini_provider_status() -> ProviderStatusDoc {
             "Gemini API key configured via GEMINI_API_KEY".to_string(),
         );
     }
-    if has_gemini_local_credentials() {
-        return build_provider_status(
-            "gemini-cli",
-            true,
-            ProviderAuthState::Authenticated,
-            ProviderAvailabilityReason::Ok,
-            "Gemini credentials detected on server (local credential files)".to_string(),
-        );
-    }
+
+    // Do not trust local credential files as authenticated by themselves.
+    // They can be stale/invalid and previously caused false "available" states.
+    let has_local_credentials_hint = has_gemini_local_credentials();
 
     let (probe_cmd, probe_args, timeout_secs) = if let Some(cmd) = gemini_cmd {
         (cmd, vec!["-p".to_string(), "ping".to_string()], 15_u64)
@@ -2510,12 +2504,17 @@ async fn check_gemini_provider_status() -> ProviderStatusDoc {
     };
 
     if probe.timed_out {
+        let detail = if has_local_credentials_hint {
+            "Timed out while checking Gemini auth state (local credentials found but could not be validated)"
+        } else {
+            "Timed out while checking Gemini auth state"
+        };
         return build_provider_status(
             "gemini-cli",
             true,
             ProviderAuthState::Unknown,
             ProviderAvailabilityReason::AuthCheckFailed,
-            "Timed out while checking Gemini auth state".to_string(),
+            detail.to_string(),
         );
     }
 
@@ -2556,10 +2555,17 @@ async fn check_gemini_provider_status() -> ProviderStatusDoc {
         true,
         ProviderAuthState::Unknown,
         ProviderAvailabilityReason::AuthCheckFailed,
-        format!(
-            "Unable to determine Gemini auth state (exit code: {:?})",
-            probe.exit_code
-        ),
+        if has_local_credentials_hint {
+            format!(
+                "Unable to determine Gemini auth state (exit code: {:?}; local credentials found but could not be validated)",
+                probe.exit_code
+            )
+        } else {
+            format!(
+                "Unable to determine Gemini auth state (exit code: {:?})",
+                probe.exit_code
+            )
+        },
     )
 }
 

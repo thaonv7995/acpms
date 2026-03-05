@@ -722,6 +722,90 @@ impl ExecutorOrchestrator {
         Self::resolve_command_with_override("agent", OVERRIDE_CURSOR_BIN_ENV)
     }
 
+    fn is_truthy_flag(value: Option<&String>) -> bool {
+        value
+            .map(|v| v.trim().to_ascii_lowercase())
+            .map(|v| !matches!(v.as_str(), "0" | "false" | "off" | "no" | ""))
+            .unwrap_or(false)
+    }
+
+    fn first_non_empty_line(text: &str) -> Option<String> {
+        text.lines()
+            .map(str::trim)
+            .find(|line| !line.is_empty())
+            .map(ToString::to_string)
+    }
+
+    async fn run_non_interactive_cli_probe(
+        command: &str,
+        args: &[String],
+        timeout_secs: u64,
+    ) -> Result<(bool, String, String, bool)> {
+        let mut cmd = Command::new(command);
+        cmd.args(args)
+            .stdin(Stdio::null())
+            .stdout(Stdio::piped())
+            .stderr(Stdio::piped());
+        if std::env::var_os("TERM").is_none() {
+            cmd.env("TERM", "xterm-256color");
+        }
+        // Hint CLIs to avoid interactive UI mode during health probe.
+        cmd.env("CI", "1");
+
+        let output = match tokio::time::timeout(Duration::from_secs(timeout_secs), cmd.output()).await
+        {
+            Ok(result) => result.context("Failed to execute CLI probe")?,
+            Err(_) => return Ok((false, String::new(), String::new(), true)),
+        };
+
+        Ok((
+            output.status.success(),
+            String::from_utf8_lossy(&output.stdout).to_string(),
+            String::from_utf8_lossy(&output.stderr).to_string(),
+            false,
+        ))
+    }
+
+    async fn verify_gemini_auth_readiness(
+        provider_env: Option<&HashMap<String, String>>,
+    ) -> Result<()> {
+        let env = provider_env.ok_or_else(|| anyhow::anyhow!("Missing Gemini provider runtime env"))?;
+        let command = env
+            .get(EXEC_GEMINI_CMD_ENV)
+            .map(String::as_str)
+            .ok_or_else(|| anyhow::anyhow!("Gemini command path is missing"))?;
+        let use_npx = Self::is_truthy_flag(env.get(EXEC_GEMINI_USE_NPX_ENV));
+        let args: Vec<String> = if use_npx {
+            vec![
+                "-y".to_string(),
+                "@google/gemini-cli".to_string(),
+                "--list-sessions".to_string(),
+            ]
+        } else {
+            vec!["--list-sessions".to_string()]
+        };
+
+        let (success, stdout, stderr, timed_out) =
+            Self::run_non_interactive_cli_probe(command, &args, 10).await?;
+        if timed_out {
+            bail!("Gemini CLI auth probe timed out. Please authenticate Gemini in Settings and retry.");
+        }
+
+        let combined = format!("{}\n{}", stdout, stderr);
+        if let Some(hint) = detect_provider_auth_blocker(AgentCliProvider::GeminiCli, &combined) {
+            bail!(hint);
+        }
+
+        if !success {
+            let reason = Self::first_non_empty_line(&stdout)
+                .or_else(|| Self::first_non_empty_line(&stderr))
+                .unwrap_or_else(|| "Gemini CLI auth probe failed".to_string());
+            bail!("Gemini CLI is not ready: {}", reason);
+        }
+
+        Ok(())
+    }
+
     fn resolve_provider_command_env(
         provider: AgentCliProvider,
     ) -> Result<Option<HashMap<String, String>>> {
@@ -773,7 +857,18 @@ impl ExecutorOrchestrator {
             self.verify_claude_session(attempt_id_for_log).await?;
         }
 
-        Self::resolve_provider_command_env(provider)
+        let provider_env = Self::resolve_provider_command_env(provider)?;
+
+        if matches!(provider, AgentCliProvider::GeminiCli) {
+            if let Err(err) = Self::verify_gemini_auth_readiness(provider_env.as_ref()).await {
+                if let Some(attempt_id) = attempt_id_for_log {
+                    let _ = self.log(attempt_id, "system", &err.to_string()).await;
+                }
+                return Err(err);
+            }
+        }
+
+        Ok(provider_env)
     }
 
     async fn resolve_selected_agent_cli_with_fallback(
@@ -4450,6 +4545,21 @@ impl ExecutorOrchestrator {
         Ok(())
     }
 
+    async fn force_stop_assistant_runtime_session(
+        active_sessions: Arc<Mutex<HashMap<Uuid, AssistantActiveSession>>>,
+        session_id: Uuid,
+    ) {
+        let Some(session) = active_sessions.lock().await.remove(&session_id) else {
+            return;
+        };
+
+        let mut child_opt = session.child.lock().await.take();
+        if let Some(ref mut child) = child_opt {
+            let _ = terminate_process(child, session.interrupt_sender, GRACEFUL_SHUTDOWN_TIMEOUT)
+                .await;
+        }
+    }
+
     /// Spawn Project Assistant CLI session. Streams output to assistant JSONL.
     /// PA chạy trong folder dự án (repo clone) để agent có context code khi trả lời.
     pub async fn spawn_project_assistant_session(
@@ -4899,6 +5009,7 @@ impl ExecutorOrchestrator {
                 });
             }
             AgentCliProvider::GeminiCli => {
+                let active_sessions_stdout = self.active_assistant_sessions.clone();
                 tokio::spawn(async move {
                     let mut reader = BufReader::new(stdout).lines();
                     let mut agent_buffer = AgentTextBuffer::new();
@@ -4971,21 +5082,22 @@ impl ExecutorOrchestrator {
                             if let Some(fallback_text) =
                                 normalize_assistant_plain_stdout_line(&line)
                             {
-                                let role = if detect_provider_auth_blocker(
+                                let auth_hint = detect_provider_auth_blocker(
                                     AgentCliProvider::GeminiCli,
                                     &fallback_text,
-                                )
-                                .is_some()
-                                {
+                                );
+                                let role = if auth_hint.is_some() {
                                     "system"
                                 } else {
                                     "assistant"
                                 };
+                                let display_content =
+                                    auth_hint.unwrap_or(&fallback_text).to_string();
                                 let created_at = chrono::Utc::now();
                                 if let Ok(id) = append_assistant_log(
                                     session_id_stdout,
                                     role,
-                                    &fallback_text,
+                                    &display_content,
                                     None,
                                 )
                                 .await
@@ -4995,11 +5107,20 @@ impl ExecutorOrchestrator {
                                             session_id: session_id_stdout,
                                             id,
                                             role: role.to_string(),
-                                            content: fallback_text,
+                                            content: display_content.clone(),
                                             metadata: None,
                                             created_at,
                                         },
                                     ));
+                                }
+
+                                if auth_hint.is_some() {
+                                    ExecutorOrchestrator::force_stop_assistant_runtime_session(
+                                        active_sessions_stdout.clone(),
+                                        session_id_stdout,
+                                    )
+                                    .await;
+                                    break;
                                 }
                             }
                         }
@@ -5029,6 +5150,7 @@ impl ExecutorOrchestrator {
                 });
             }
             AgentCliProvider::CursorCli => {
+                let active_sessions_stdout = self.active_assistant_sessions.clone();
                 tokio::spawn(async move {
                     let mut reader = BufReader::new(stdout).lines();
                     let mut agent_buffer = AgentTextBuffer::new();
@@ -5126,21 +5248,22 @@ impl ExecutorOrchestrator {
                             if let Some(fallback_text) =
                                 normalize_assistant_plain_stdout_line(&line)
                             {
-                                let role = if detect_provider_auth_blocker(
+                                let auth_hint = detect_provider_auth_blocker(
                                     AgentCliProvider::CursorCli,
                                     &fallback_text,
-                                )
-                                .is_some()
-                                {
+                                );
+                                let role = if auth_hint.is_some() {
                                     "system"
                                 } else {
                                     "assistant"
                                 };
+                                let display_content =
+                                    auth_hint.unwrap_or(&fallback_text).to_string();
 
                                 if role == "assistant"
                                     && is_immediate_duplicate_assistant_text(
                                         last_emitted_assistant_text.as_deref(),
-                                        &fallback_text,
+                                        &display_content,
                                     )
                                 {
                                     continue;
@@ -5150,24 +5273,34 @@ impl ExecutorOrchestrator {
                                 if let Ok(id) = append_assistant_log(
                                     session_id_stdout,
                                     role,
-                                    &fallback_text,
+                                    &display_content,
                                     None,
                                 )
                                 .await
                                 {
                                     if role == "assistant" {
-                                        last_emitted_assistant_text = Some(fallback_text.clone());
+                                        last_emitted_assistant_text =
+                                            Some(display_content.clone());
                                     }
                                     let _ = broadcast_tx_stdout.send(AgentEvent::AssistantLog(
                                         AssistantLogMessage {
                                             session_id: session_id_stdout,
                                             id,
                                             role: role.to_string(),
-                                            content: fallback_text,
+                                            content: display_content.clone(),
                                             metadata: None,
                                             created_at,
                                         },
                                     ));
+                                }
+
+                                if auth_hint.is_some() {
+                                    ExecutorOrchestrator::force_stop_assistant_runtime_session(
+                                        active_sessions_stdout.clone(),
+                                        session_id_stdout,
+                                    )
+                                    .await;
+                                    break;
                                 }
                             }
                         }
@@ -5206,10 +5339,37 @@ impl ExecutorOrchestrator {
 
         // Stream stderr to assistant log
         let session_id_stderr = session_id;
+        let provider_stderr = provider;
+        let active_sessions_stderr = self.active_assistant_sessions.clone();
         tokio::spawn(async move {
             let mut reader = BufReader::new(stderr).lines();
+            let mut auth_blocked = false;
             while let Ok(Some(line)) = reader.next_line().await {
                 let _ = append_assistant_log(session_id_stderr, "stderr", &line, None).await;
+
+                if auth_blocked {
+                    continue;
+                }
+
+                let auth_hint = match provider_stderr {
+                    AgentCliProvider::GeminiCli => {
+                        detect_provider_auth_blocker(AgentCliProvider::GeminiCli, &line)
+                    }
+                    AgentCliProvider::CursorCli => {
+                        detect_provider_auth_blocker(AgentCliProvider::CursorCli, &line)
+                    }
+                    _ => None,
+                };
+
+                if let Some(hint) = auth_hint {
+                    auth_blocked = true;
+                    let _ = append_assistant_log(session_id_stderr, "system", hint, None).await;
+                    ExecutorOrchestrator::force_stop_assistant_runtime_session(
+                        active_sessions_stderr.clone(),
+                        session_id_stderr,
+                    )
+                    .await;
+                }
             }
         });
 
