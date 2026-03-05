@@ -799,7 +799,7 @@ export function ProjectTasksPage() {
       downloadArtifactLabel={primaryArtifactDownload?.label}
       downloadDisabled={Boolean(usesArtifactDownloads && artifactDownloadDisabledReason)}
       downloadDisabledReason={artifactDownloadDisabledReason}
-      onDownloadArtifact={handleDownloadArtifactFromHeader}
+      onDownloadArtifact={usesArtifactDownloads ? handleDownloadArtifactFromHeader : undefined}
       onCreateAttempt={handleCreateAttemptFromHeader}
       onOpenGitActions={handleOpenGitActionsFromHeader}
       onDeleteTask={handleDeleteTaskFromHeader}

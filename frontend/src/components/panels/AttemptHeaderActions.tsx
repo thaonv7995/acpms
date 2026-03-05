@@ -52,7 +52,7 @@ export function AttemptHeaderActions({
       (task && onDeleteTask)
   );
   const hasDownloadAction = Boolean(
-    downloadArtifactUrl || onDownloadArtifact || downloadDisabledReason || downloadDisabled
+    downloadArtifactUrl || downloadDisabledReason || downloadDisabled
   );
   const toggleValue = hasDownloadAction
     ? mode === 'diffs'
