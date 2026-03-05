@@ -1276,21 +1276,21 @@ async fn auth_command_for_provider(provider: &str) -> Option<(String, Vec<String
         }
         "claude-code" => {
             let script_cmd = resolve_command_in_path("script");
-            if let Some(npx_cmd) = resolve_npx_command() {
-                let args = resolve_claude_auth_args(true, Some(npx_cmd.as_str())).await;
+            if let Some(cmd) = resolve_provider_cli_command("claude-code") {
+                let args = resolve_claude_auth_args(false, None).await;
                 let resolved_args = owned_args(args);
                 if let Some(script) = script_cmd {
-                    return Some((script, wrap_with_script_args(&npx_cmd, &resolved_args)));
+                    return Some((script, wrap_with_script_args(&cmd, &resolved_args)));
                 }
-                return Some((npx_cmd, resolved_args));
+                return Some((cmd, resolved_args));
             }
-            let cmd = resolve_provider_cli_command("claude-code")?;
-            let args = resolve_claude_auth_args(false, None).await;
+            let npx_cmd = resolve_npx_command()?;
+            let args = resolve_claude_auth_args(true, Some(npx_cmd.as_str())).await;
             let resolved_args = owned_args(args);
             if let Some(script) = script_cmd {
-                return Some((script, wrap_with_script_args(&cmd, &resolved_args)));
+                return Some((script, wrap_with_script_args(&npx_cmd, &resolved_args)));
             }
-            Some((cmd, resolved_args))
+            Some((npx_cmd, resolved_args))
         }
         // Gemini CLI requires an interactive TTY for login.
         // Run via `script` and auto-pick `gemini auth` when CLI supports it.
