@@ -16,6 +16,7 @@ import {
 } from '@/api/taskAttempts';
 import type { SprintDto } from '@/api/generated/models';
 import type { ProjectMember } from '@/api/projects';
+import { TimelineLogDisplay } from '@/components/timeline-log';
 import type { TaskType } from '@/shared/types';
 import { logger } from '@/lib/logger';
 
@@ -219,16 +220,6 @@ function isTerminalAttemptStatus(status: string | undefined): boolean {
     return upper === 'SUCCESS' || upper === 'FAILED' || upper === 'CANCELLED';
 }
 
-function isBlankDraft(task: ManualTaskDraftState): boolean {
-    return task.title.trim() === '' && task.description.trim() === '' && task.references.length === 0;
-}
-
-function formatLogTime(isoTime: string): string {
-    const date = new Date(isoTime);
-    if (Number.isNaN(date.getTime())) return '';
-    return date.toLocaleTimeString();
-}
-
 export function RequirementBreakdownModal({
     isOpen,
     onClose,
@@ -238,7 +229,7 @@ export function RequirementBreakdownModal({
     members = [],
     onCreated,
 }: RequirementBreakdownModalProps) {
-    const [manualTasks, setManualTasks] = useState<ManualTaskDraftState[]>([createManualDraft()]);
+    const [manualTasks, setManualTasks] = useState<ManualTaskDraftState[]>([]);
     const [editingTaskId, setEditingTaskId] = useState<string | null>(null);
     const [recentlyAddedIds, setRecentlyAddedIds] = useState<Set<string>>(new Set());
 
@@ -257,9 +248,7 @@ export function RequirementBreakdownModal({
     const [isStartingAi, setIsStartingAi] = useState(false);
     const [isCancellingAi, setIsCancellingAi] = useState(false);
     const [aiAttempt, setAiAttempt] = useState<TaskAttempt | null>(null);
-    const [aiLogs, setAiLogs] = useState<AgentLog[]>([]);
     const [aiStatusMessage, setAiStatusMessage] = useState<string | null>(null);
-    const logsContainerRef = useRef<HTMLDivElement | null>(null);
 
     const seenLogIdsRef = useRef<Set<string>>(new Set());
     const seenTaskSignaturesRef = useRef<Set<string>>(new Set());
@@ -299,8 +288,7 @@ export function RequirementBreakdownModal({
 
     useEffect(() => {
         if (!isOpen) return;
-        const initial = createManualDraft();
-        setManualTasks([initial]);
+        setManualTasks([]);
         setEditingTaskId(null);
         setRecentlyAddedIds(new Set());
 
@@ -313,7 +301,6 @@ export function RequirementBreakdownModal({
         setIsStartingAi(false);
         setIsCancellingAi(false);
         setAiAttempt(null);
-        setAiLogs([]);
         setAiStatusMessage(null);
         seenLogIdsRef.current = new Set();
         seenTaskSignaturesRef.current = new Set();
@@ -354,7 +341,6 @@ export function RequirementBreakdownModal({
                 if (disposed) return;
 
                 setAiAttempt(latestAttempt);
-                setAiLogs(logs);
 
                 const parsedDrafts: ManualTaskDraftState[] = [];
                 for (const log of logs) {
@@ -378,10 +364,7 @@ export function RequirementBreakdownModal({
 
                     if (accepted.length > 0) {
                         const ids = accepted.map((task) => task.id);
-                        setManualTasks((prev) => {
-                            const usePrev = prev.length === 1 && isBlankDraft(prev[0]) ? [] : prev;
-                            return [...usePrev, ...accepted];
-                        });
+                        setManualTasks((prev) => [...prev, ...accepted]);
                         setRecentlyAddedIds((prev) => {
                             const next = new Set(prev);
                             ids.forEach((id) => next.add(id));
@@ -427,13 +410,6 @@ export function RequirementBreakdownModal({
         };
     }, [aiAttempt?.id, aiAttempt?.status]);
 
-    useEffect(() => {
-        if (!aiPanelOpen) return;
-        const container = logsContainerRef.current;
-        if (!container) return;
-        container.scrollTop = container.scrollHeight;
-    }, [aiPanelOpen, aiLogs.length]);
-
     if (!isOpen || !requirement) return null;
 
     const resolveSprintId = (): string | null => {
@@ -450,9 +426,8 @@ export function RequirementBreakdownModal({
 
     const removeManualTask = (taskId: string) => {
         setManualTasks((prev) => {
-            if (prev.length <= 1) return prev;
-            const next = prev.filter((task) => task.id !== taskId);
-            return next.length > 0 ? next : [createManualDraft()];
+            if (prev.length <= 1) return [];
+            return prev.filter((task) => task.id !== taskId);
         });
         if (editingTaskId === taskId) {
             setEditingTaskId(null);
@@ -577,6 +552,11 @@ export function RequirementBreakdownModal({
     };
 
     const handleStartAiSupport = async () => {
+        if (aiAttempt && !isTerminalAttemptStatus(aiAttempt.status)) {
+            setAiStatusMessage('AI analysis is already running.');
+            return;
+        }
+
         setAiPanelOpen(true);
         setError(null);
         setAiStatusMessage(
@@ -601,13 +581,15 @@ export function RequirementBreakdownModal({
 
             const attempt = await createTaskAttempt(analysisTask.id);
             setAiAttempt(attempt);
-            setAiLogs([]);
             seenLogIdsRef.current = new Set();
+            seenTaskSignaturesRef.current = new Set();
             setAiStatusMessage(
                 'AI analysis started. Watch logs on the right panel while tasks append on the left.'
             );
         } catch (err) {
-            setError(err instanceof Error ? err.message : 'Failed to start AI support');
+            const message = err instanceof Error ? err.message : 'Failed to start AI support';
+            setError(message);
+            setAiStatusMessage(message);
         } finally {
             setIsStartingAi(false);
         }
@@ -628,6 +610,7 @@ export function RequirementBreakdownModal({
     };
 
     const aiTaskCount = manualTasks.filter((task) => task.source === 'ai').length;
+    const isAiAttemptActive = Boolean(aiAttempt && !isTerminalAttemptStatus(aiAttempt.status));
 
     return (
         <div className="fixed inset-0 z-50 flex items-center justify-center p-4 font-display">
@@ -698,6 +681,14 @@ export function RequirementBreakdownModal({
                                 </div>
 
                                 <div className="space-y-2">
+                                    {manualTasks.length === 0 && (
+                                        <div className="rounded-lg border border-dashed border-border bg-card/40 px-3 py-4 text-xs text-muted-foreground">
+                                            No tasks yet. Click <span className="font-semibold text-card-foreground">+ Add task</span>{' '}
+                                            for manual mode, or use <span className="font-semibold text-card-foreground">AI</span> then
+                                            <span className="font-semibold text-card-foreground"> Start</span> to append task drafts.
+                                        </div>
+                                    )}
+
                                     {manualTasks.map((task, index) => {
                                         const isRecentlyAdded = recentlyAddedIds.has(task.id);
                                         return (
@@ -972,13 +963,18 @@ export function RequirementBreakdownModal({
                                 <div className="px-4 py-3 border-b border-border flex items-center gap-2">
                                     <button
                                         onClick={handleStartAiSupport}
-                                        disabled={isStartingAi}
+                                        disabled={isStartingAi || isAiAttemptActive}
                                         className="px-2.5 py-1.5 text-xs rounded-lg border border-border hover:bg-muted disabled:opacity-60 flex items-center gap-1.5"
                                     >
                                         {isStartingAi ? (
                                             <>
                                                 <span className="material-symbols-outlined text-[14px] animate-spin">progress_activity</span>
                                                 Starting
+                                            </>
+                                        ) : isAiAttemptActive ? (
+                                            <>
+                                                <span className="material-symbols-outlined text-[14px] animate-spin">progress_activity</span>
+                                                Running
                                             </>
                                         ) : (
                                             <>
@@ -1002,26 +998,20 @@ export function RequirementBreakdownModal({
                                     {aiStatusMessage && <p className="mt-1">{aiStatusMessage}</p>}
                                 </div>
 
-                                <div
-                                    ref={logsContainerRef}
-                                    className="flex-1 overflow-y-auto p-3 bg-black/20 font-mono text-[11px] leading-relaxed space-y-2"
-                                >
-                                    {aiLogs.length === 0 ? (
+                                <div className="flex-1 overflow-y-auto p-3 bg-black/20 font-mono text-[11px] leading-relaxed space-y-2">
+                                    {!aiAttempt ? (
                                         <p className="text-muted-foreground">
                                             No logs yet. Click Start to spawn AI analysis attempt.
                                         </p>
                                     ) : (
-                                        aiLogs.map((log) => (
-                                            <div key={log.id} className="rounded border border-border/60 bg-card/40 p-2">
-                                                <div className="flex items-center justify-between gap-2 mb-1">
-                                                    <span className="text-primary/80">{log.log_type}</span>
-                                                    <span className="text-muted-foreground">{formatLogTime(log.created_at)}</span>
-                                                </div>
-                                                <pre className="whitespace-pre-wrap text-muted-foreground">
-                                                    {log.content}
-                                                </pre>
-                                            </div>
-                                        ))
+                                        <div className="h-full min-h-[420px]">
+                                            <TimelineLogDisplay
+                                                attemptId={aiAttempt.id}
+                                                attemptStatus={aiAttempt.status}
+                                                showStatusInHeader
+                                                showTokenUsageInHeader={false}
+                                            />
+                                        </div>
                                     )}
                                 </div>
                             </aside>
