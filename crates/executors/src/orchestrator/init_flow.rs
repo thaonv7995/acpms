@@ -1958,15 +1958,11 @@ You are tasked with creating a new {} project and initializing it with a basic p
             .get_system_pat_for_repo(repo_url)
             .await
             .unwrap_or_default();
-        let auth_url = if !pat.is_empty() && repo_url.starts_with("https://") {
-            repo_url.replace("https://", &format!("https://oauth2:{}@", pat))
-        } else {
-            repo_url.to_string()
-        };
+        let auth_url = build_authenticated_repo_url(repo_url, &pat);
 
         let output = tokio::time::timeout(
             Duration::from_secs(30),
-            Command::new("git")
+            git_command_non_interactive()
                 .args(["ls-remote", "--exit-code", &auth_url])
                 .output(),
         )
@@ -2271,11 +2267,54 @@ pub(crate) fn parse_host_from_urlish(input: &str) -> Option<String> {
     }
 }
 
+fn build_authenticated_repo_url(repo_url: &str, pat: &str) -> String {
+    if pat.trim().is_empty() {
+        return repo_url.to_string();
+    }
+
+    let normalized = if repo_url.starts_with("https://") || repo_url.starts_with("http://") {
+        repo_url.trim().to_string()
+    } else if let Some((host, path)) = parse_repo_host_and_path(repo_url) {
+        format!("https://{}/{}.git", host, path)
+    } else {
+        return repo_url.to_string();
+    };
+
+    let username = parse_repo_host_and_path(&normalized)
+        .map(|(host, _)| {
+            if host.contains("github") {
+                "x-access-token"
+            } else {
+                "oauth2"
+            }
+        })
+        .unwrap_or("oauth2");
+
+    if let Some(rest) = normalized.strip_prefix("https://") {
+        format!("https://{}:{}@{}", username, pat, rest)
+    } else if let Some(rest) = normalized.strip_prefix("http://") {
+        format!("http://{}:{}@{}", username, pat, rest)
+    } else {
+        normalized
+    }
+}
+
+fn git_command_non_interactive() -> Command {
+    let mut cmd = Command::new("git");
+    // Prevent hangs waiting for interactive credentials when PAT/settings are missing.
+    cmd.env("GIT_TERMINAL_PROMPT", "0");
+    cmd.env("GCM_INTERACTIVE", "Never");
+    cmd.env("GIT_ASKPASS", "echo");
+    cmd.env("SSH_ASKPASS", "echo");
+    cmd.env("GIT_SSH_COMMAND", "ssh -oBatchMode=yes");
+    cmd
+}
+
 #[cfg(test)]
 mod tests {
     use super::{
-        detect_repository_provider_for_repo, parse_github_owner_repo, parse_host_from_urlish,
-        parse_repo_host_and_path,
+        build_authenticated_repo_url, detect_repository_provider_for_repo, parse_github_owner_repo,
+        parse_host_from_urlish, parse_repo_host_and_path,
     };
     use acpms_db::models::RepositoryProvider;
 
@@ -2331,6 +2370,25 @@ mod tests {
         assert_eq!(
             parse_github_owner_repo("openai/codex.git"),
             Some(("openai".to_string(), "codex".to_string()))
+        );
+    }
+
+    #[test]
+    fn build_authenticated_repo_url_supports_ssh_gitlab() {
+        let url =
+            build_authenticated_repo_url("git@gitlab.example.com:group/repo.git", "glpat-123");
+        assert_eq!(
+            url,
+            "https://oauth2:glpat-123@gitlab.example.com/group/repo.git"
+        );
+    }
+
+    #[test]
+    fn build_authenticated_repo_url_uses_github_username() {
+        let url = build_authenticated_repo_url("https://github.com/openai/codex.git", "ghp_123");
+        assert_eq!(
+            url,
+            "https://x-access-token:ghp_123@github.com/openai/codex.git"
         );
     }
 }

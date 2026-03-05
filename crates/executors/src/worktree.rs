@@ -128,7 +128,7 @@ impl WorktreeManager {
             .await?;
 
             // Fetch all remotes
-            let fetch_output = Command::new("git")
+            let fetch_output = git_command_non_interactive()
                 .current_dir(repo_path)
                 .arg("fetch")
                 .arg("--all")
@@ -176,7 +176,7 @@ impl WorktreeManager {
             }
 
             // Pull latest changes
-            let pull_output = Command::new("git")
+            let pull_output = git_command_non_interactive()
                 .current_dir(repo_path)
                 .arg("pull")
                 .arg("origin")
@@ -212,7 +212,7 @@ impl WorktreeManager {
             tokio::fs::create_dir_all(parent).await?;
         }
 
-        let output = Command::new("git")
+        let output = git_command_non_interactive()
             .arg("clone")
             .arg(&auth_url)
             .arg(repo_path)
@@ -490,7 +490,7 @@ impl WorktreeManager {
             }
         }
 
-        let fetch_output = Command::new("git")
+        let fetch_output = git_command_non_interactive()
             .current_dir(repo_path)
             .args(["fetch", remote_name])
             .stdout(Stdio::piped())
@@ -907,12 +907,49 @@ pub(crate) fn repo_url_matches(lhs: &str, rhs: &str) -> bool {
     }
 }
 
+fn git_command_non_interactive() -> Command {
+    let mut cmd = Command::new("git");
+    // Never block on terminal auth prompts in server/executor mode.
+    cmd.env("GIT_TERMINAL_PROMPT", "0");
+    cmd.env("GCM_INTERACTIVE", "Never");
+    cmd.env("GIT_ASKPASS", "echo");
+    cmd.env("SSH_ASKPASS", "echo");
+    cmd.env("GIT_SSH_COMMAND", "ssh -oBatchMode=yes");
+    cmd
+}
+
 fn inject_pat_into_url(url: &str, pat: &str) -> String {
-    if pat.is_empty() || !url.starts_with("https://") {
+    if pat.is_empty() {
         return url.to_string();
     }
 
-    url.replace("https://", &format!("https://oauth2:{}@", pat))
+    // Accept both HTTPS and SSH-style URLs; when SSH is provided we convert to HTTPS
+    // so token auth can still work in headless production environments.
+    let normalized = if url.starts_with("https://") || url.starts_with("http://") {
+        url.trim().to_string()
+    } else if let Some((host, path)) = parse_repo_identity(url) {
+        format!("https://{}/{}.git", host, path)
+    } else {
+        return url.to_string();
+    };
+
+    let username = parse_repo_identity(&normalized)
+        .map(|(host, _)| {
+            if host.contains("github") {
+                "x-access-token"
+            } else {
+                "oauth2"
+            }
+        })
+        .unwrap_or("oauth2");
+
+    if let Some(rest) = normalized.strip_prefix("https://") {
+        format!("https://{}:{}@{}", username, pat, rest)
+    } else if let Some(rest) = normalized.strip_prefix("http://") {
+        format!("http://{}:{}@{}", username, pat, rest)
+    } else {
+        normalized
+    }
 }
 
 fn parse_repo_identity(raw: &str) -> Option<(String, String)> {
@@ -949,4 +986,59 @@ fn parse_repo_identity(raw: &str) -> Option<(String, String)> {
     }
 
     None
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{inject_pat_into_url, repo_url_matches};
+
+    #[test]
+    fn inject_pat_into_https_gitlab_url() {
+        let url = inject_pat_into_url("https://gitlab.example.com/group/repo.git", "glpat-123");
+        assert_eq!(
+            url,
+            "https://oauth2:glpat-123@gitlab.example.com/group/repo.git"
+        );
+    }
+
+    #[test]
+    fn inject_pat_into_ssh_gitlab_url() {
+        let url = inject_pat_into_url("git@gitlab.example.com:group/repo.git", "glpat-123");
+        assert_eq!(
+            url,
+            "https://oauth2:glpat-123@gitlab.example.com/group/repo.git"
+        );
+    }
+
+    #[test]
+    fn inject_pat_into_https_github_url() {
+        let url = inject_pat_into_url("https://github.com/openai/codex.git", "ghp_123");
+        assert_eq!(
+            url,
+            "https://x-access-token:ghp_123@github.com/openai/codex.git"
+        );
+    }
+
+    #[test]
+    fn inject_pat_into_ssh_github_url() {
+        let url = inject_pat_into_url("git@github.com:openai/codex.git", "ghp_123");
+        assert_eq!(
+            url,
+            "https://x-access-token:ghp_123@github.com/openai/codex.git"
+        );
+    }
+
+    #[test]
+    fn inject_pat_keeps_original_when_empty() {
+        let raw = "git@gitlab.example.com:group/repo.git";
+        assert_eq!(inject_pat_into_url(raw, ""), raw);
+    }
+
+    #[test]
+    fn repo_url_matches_between_https_and_ssh() {
+        assert!(repo_url_matches(
+            "https://gitlab.example.com/group/repo.git",
+            "git@gitlab.example.com:group/repo.git"
+        ));
+    }
 }

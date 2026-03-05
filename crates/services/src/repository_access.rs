@@ -29,15 +29,11 @@ impl RepositoryAccessService {
             .map_err(|e| format!("Failed to resolve credentials: {}", e))?
             .unwrap_or_default();
 
-        let auth_url = if !pat.is_empty() && repo_url.starts_with("https://") {
-            repo_url.replace("https://", &format!("https://oauth2:{}@", pat))
-        } else {
-            repo_url.to_string()
-        };
+        let auth_url = build_authenticated_repo_url(repo_url, &pat);
 
         let output = tokio::time::timeout(
             Duration::from_secs(30),
-            Command::new("git")
+            git_command_non_interactive()
                 .args(["ls-remote", "--exit-code", &auth_url])
                 .output(),
         )
@@ -524,6 +520,85 @@ fn parse_host(input: &str) -> Option<String> {
         .and_then(|parsed| parsed.host_str().map(|host| host.to_ascii_lowercase()))
 }
 
+fn git_command_non_interactive() -> Command {
+    let mut cmd = Command::new("git");
+    // Repository checks run on API/executor side and must never wait on interactive prompts.
+    cmd.env("GIT_TERMINAL_PROMPT", "0");
+    cmd.env("GCM_INTERACTIVE", "Never");
+    cmd.env("GIT_ASKPASS", "echo");
+    cmd.env("SSH_ASKPASS", "echo");
+    cmd.env("GIT_SSH_COMMAND", "ssh -oBatchMode=yes");
+    cmd
+}
+
+fn parse_repo_host_and_path(repo_url: &str) -> Option<(String, String)> {
+    let trimmed = repo_url.trim();
+    if trimmed.is_empty() {
+        return None;
+    }
+
+    if let Some(rest) = trimmed
+        .strip_prefix("https://")
+        .or_else(|| trimmed.strip_prefix("http://"))
+    {
+        let without_auth = rest.rsplit('@').next().unwrap_or(rest);
+        let (host, path) = without_auth.split_once('/')?;
+        let host = host.trim().to_ascii_lowercase();
+        let path = path.trim().trim_matches('/');
+        let path = path.strip_suffix(".git").unwrap_or(path).to_string();
+        if host.is_empty() || path.is_empty() {
+            return None;
+        }
+        return Some((host, path));
+    }
+
+    if let Some((left, right)) = trimmed.split_once(':') {
+        if let Some(host) = left.split('@').nth(1) {
+            let host = host.trim().to_ascii_lowercase();
+            let path = right.trim().trim_matches('/');
+            let path = path.strip_suffix(".git").unwrap_or(path).to_string();
+            if host.is_empty() || path.is_empty() {
+                return None;
+            }
+            return Some((host, path));
+        }
+    }
+
+    None
+}
+
+fn build_authenticated_repo_url(repo_url: &str, pat: &str) -> String {
+    if pat.trim().is_empty() {
+        return repo_url.to_string();
+    }
+
+    let normalized = if repo_url.starts_with("https://") || repo_url.starts_with("http://") {
+        repo_url.trim().to_string()
+    } else if let Some((host, path)) = parse_repo_host_and_path(repo_url) {
+        format!("https://{}/{}.git", host, path)
+    } else {
+        return repo_url.to_string();
+    };
+
+    let username = parse_repo_host_and_path(&normalized)
+        .map(|(host, _)| {
+            if host.contains("github") {
+                "x-access-token"
+            } else {
+                "oauth2"
+            }
+        })
+        .unwrap_or("oauth2");
+
+    if let Some(rest) = normalized.strip_prefix("https://") {
+        format!("https://{}:{}@{}", username, pat, rest)
+    } else if let Some(rest) = normalized.strip_prefix("http://") {
+        format!("http://{}:{}@{}", username, pat, rest)
+    } else {
+        normalized
+    }
+}
+
 fn parse_owner_repo(repo_url: &str) -> Option<(String, String)> {
     let parsed = Url::parse(repo_url).ok()?;
     let mut segments = parsed.path_segments()?;
@@ -550,7 +625,10 @@ fn parse_path_with_namespace(repo_url: &str) -> Option<String> {
 
 #[cfg(test)]
 mod tests {
-    use super::{parse_owner_repo, parse_path_with_namespace};
+    use super::{
+        build_authenticated_repo_url, parse_owner_repo, parse_path_with_namespace,
+        parse_repo_host_and_path,
+    };
 
     #[test]
     fn parse_owner_repo_handles_git_suffix() {
@@ -563,5 +641,36 @@ mod tests {
         let parsed =
             parse_path_with_namespace("https://gitlab.example.com/group/subgroup/repo.git");
         assert_eq!(parsed, Some("group/subgroup/repo".to_string()));
+    }
+
+    #[test]
+    fn parse_repo_host_and_path_supports_ssh() {
+        let parsed = parse_repo_host_and_path("git@gitlab.example.com:group/sub/repo.git");
+        assert_eq!(
+            parsed,
+            Some((
+                "gitlab.example.com".to_string(),
+                "group/sub/repo".to_string()
+            ))
+        );
+    }
+
+    #[test]
+    fn build_authenticated_repo_url_supports_ssh_repo() {
+        let url =
+            build_authenticated_repo_url("git@gitlab.example.com:group/repo.git", "glpat-123");
+        assert_eq!(
+            url,
+            "https://oauth2:glpat-123@gitlab.example.com/group/repo.git"
+        );
+    }
+
+    #[test]
+    fn build_authenticated_repo_url_uses_github_username_for_pat() {
+        let url = build_authenticated_repo_url("https://github.com/openai/codex.git", "ghp_123");
+        assert_eq!(
+            url,
+            "https://x-access-token:ghp_123@github.com/openai/codex.git"
+        );
     }
 }

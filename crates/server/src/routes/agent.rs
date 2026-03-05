@@ -902,9 +902,16 @@ async fn launch_auth_process(
             command.env("TERM", "xterm-256color");
         }
     }
-    if session.provider == "claude-code" && std::env::var_os("TERM").is_none() {
-        // Claude CLI may run under systemd where TERM is missing.
-        command.env("TERM", "xterm-256color");
+    if session.provider == "claude-code" {
+        // Prevent browser auto-open on headless servers; the `open` npm package
+        // respects BROWSER=echo and will just print the URL instead of launching
+        // a browser, avoiding exit-code-1 crashes on headless Debian/systemd.
+        command.env("BROWSER", "echo");
+        command.env("NO_BROWSER", "true");
+        if std::env::var_os("TERM").is_none() {
+            // Claude CLI may run under systemd where TERM is missing.
+            command.env("TERM", "xterm-256color");
+        }
     }
 
     let mut child = command.spawn().map_err(|e| {
@@ -1431,14 +1438,22 @@ async fn clear_gemini_oauth_creds() {
         );
         return;
     };
-    let path = std::path::Path::new(&home)
-        .join(".gemini")
-        .join("oauth_creds.json");
-    if path.exists() {
-        if let Err(e) = tokio::fs::remove_file(&path).await {
-            tracing::warn!(path = %path.display(), error = %e, "Failed to remove Gemini oauth_creds.json");
-        } else {
-            tracing::info!(path = %path.display(), "Cleared Gemini OAuth credentials for re-auth");
+    let gemini_dir = std::path::Path::new(&home).join(".gemini");
+    // Newer Gemini CLI versions may store credentials in different files;
+    // clear all known credential files to ensure re-auth works reliably.
+    let credential_files = [
+        "oauth_creds.json",
+        "google_accounts.json",
+        "google_account_id",
+    ];
+    for filename in &credential_files {
+        let path = gemini_dir.join(filename);
+        if path.exists() {
+            if let Err(e) = tokio::fs::remove_file(&path).await {
+                tracing::warn!(path = %path.display(), error = %e, "Failed to remove Gemini credential file");
+            } else {
+                tracing::info!(path = %path.display(), "Cleared Gemini credential file for re-auth");
+            }
         }
     }
 }
@@ -1579,6 +1594,13 @@ async fn process_auth_stream_output<R>(
                     parsed.allowed_loopback_port,
                 )
                 .await;
+        } else if !trimmed_line.is_empty() {
+            // Log unmatched lines to help debug auth failures on production.
+            tracing::debug!(
+                session_id = %session_id,
+                provider = %provider,
+                "auth_stream: {}", trimmed_line
+            );
         }
     }
 
