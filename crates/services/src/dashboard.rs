@@ -602,7 +602,15 @@ impl DashboardService {
                 } else {
                     match t.task_type {
                         TaskType::Bug | TaskType::Hotfix => "blocker".to_string(),
-                        _ => "qa".to_string(),
+                        TaskType::Feature => "feature".to_string(),
+                        TaskType::Refactor => "refactor".to_string(),
+                        TaskType::Docs => "docs".to_string(),
+                        TaskType::Test => "test".to_string(),
+                        TaskType::Init => "init".to_string(),
+                        TaskType::Chore => "chore".to_string(),
+                        TaskType::Spike => "spike".to_string(),
+                        TaskType::SmallTask => "small_task".to_string(),
+                        TaskType::Deploy => "deploy".to_string(),
                     }
                 },
                 title: t.title,

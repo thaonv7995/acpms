@@ -30,13 +30,61 @@ const typeStyles: Record<string, { bg: string; text: string; label: string }> = 
         text: 'text-teal-600 dark:text-teal-400',
         label: 'Review',
     },
+    feature: {
+        bg: 'bg-green-100 dark:bg-green-500/20',
+        text: 'text-green-600 dark:text-green-400',
+        label: 'Feature',
+    },
+    refactor: {
+        bg: 'bg-amber-100 dark:bg-amber-500/20',
+        text: 'text-amber-600 dark:text-amber-400',
+        label: 'Refactor',
+    },
+    docs: {
+        bg: 'bg-slate-100 dark:bg-slate-500/20',
+        text: 'text-slate-600 dark:text-slate-400',
+        label: 'Docs',
+    },
+    test: {
+        bg: 'bg-emerald-100 dark:bg-emerald-500/20',
+        text: 'text-emerald-600 dark:text-emerald-400',
+        label: 'Test',
+    },
+    init: {
+        bg: 'bg-indigo-100 dark:bg-indigo-500/20',
+        text: 'text-indigo-600 dark:text-indigo-400',
+        label: 'Init',
+    },
+    chore: {
+        bg: 'bg-stone-100 dark:bg-stone-500/20',
+        text: 'text-stone-600 dark:text-stone-400',
+        label: 'Chore',
+    },
+    spike: {
+        bg: 'bg-rose-100 dark:bg-rose-500/20',
+        text: 'text-rose-600 dark:text-rose-400',
+        label: 'Spike',
+    },
+    small_task: {
+        bg: 'bg-cyan-100 dark:bg-cyan-500/20',
+        text: 'text-cyan-600 dark:text-cyan-400',
+        label: 'Small Task',
+    },
+    deploy: {
+        bg: 'bg-pink-100 dark:bg-pink-500/20',
+        text: 'text-pink-600 dark:text-pink-400',
+        label: 'Deploy',
+    },
+    default: {
+        bg: 'bg-zinc-100 dark:bg-zinc-500/20',
+        text: 'text-zinc-600 dark:text-zinc-400',
+        label: 'Task',
+    }
 };
 
 export function HumanTaskCard({ task, onReview, onApprove, onAssign }: HumanTaskCardProps) {
     const navigate = useNavigate();
-    const normalizedType = ['blocker', 'approval', 'qa', 'review'].includes(task.type)
-        ? task.type
-        : 'qa';
+    const normalizedType = typeStyles[task.type] ? task.type : 'default';
     const style = typeStyles[normalizedType];
     const isUrgent = normalizedType === 'blocker';
 

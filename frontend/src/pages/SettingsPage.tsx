@@ -167,6 +167,12 @@ const PROVIDER_LABELS: Record<string, string> = {
     'gemini-cli': 'Gemini CLI (Google)',
     'cursor-cli': 'Cursor CLI',
 };
+const AGENT_PROVIDER_PRIORITY = [
+    'claude-code',
+    'openai-codex',
+    'gemini-cli',
+    'cursor-cli',
+] as const;
 const AGENT_AUTH_SESSION_STORAGE_KEY = 'agent_auth_session_id';
 const AGENT_PROVIDER_STATUS_CACHE_KEY = 'agent_provider_status_cache_v1';
 const AGENT_PROVIDER_STATUS_CACHE_TTL_MS = 24 * 60 * 60 * 1000;
@@ -224,6 +230,17 @@ function providerReasonLabel(status: AgentProviderStatus | undefined): string {
         default:
             return status.message;
     }
+}
+
+function pickFallbackProvider(statuses: AgentProviderStatus[]): string | null {
+    for (const provider of AGENT_PROVIDER_PRIORITY) {
+        const matched = statuses.find((status) => status.provider === provider);
+        if (matched?.available) {
+            return provider;
+        }
+    }
+
+    return statuses.find((status) => status.available)?.provider ?? null;
 }
 
 function isAuthTerminal(status: AgentAuthSession['status'] | undefined): boolean {
@@ -295,6 +312,8 @@ export function SettingsPage() {
     const [deviceCodeCopied, setDeviceCodeCopied] = useState(false);
     const handledTerminalAuthSeqRef = useRef<string | null>(null);
     const openedAuthUrlSessionIdRef = useRef<string | null>(null);
+    const autoSwitchingProviderRef = useRef(false);
+    const autoSwitchAttemptKeyRef = useRef<string | null>(null);
     const authSessionStream = useAgentAuthSessionStream(activeAuthSession?.session_id);
 
     // Fetch agent status on mount
@@ -353,6 +372,58 @@ export function SettingsPage() {
             setCfBaseDomain(settings.cloudflare?.baseDomain || '');
         }
     }, [settings]);
+
+    useEffect(() => {
+        if (!settings || !agentProvidersStatus?.providers?.length) return;
+        if (isEditingAgent) return;
+
+        const statuses = agentProvidersStatus.providers;
+        const currentStatus = statuses.find((status) => status.provider === agentProvider);
+        if (currentStatus?.available) {
+            autoSwitchAttemptKeyRef.current = null;
+            return;
+        }
+
+        const fallbackProvider = pickFallbackProvider(statuses);
+        if (!fallbackProvider || fallbackProvider === agentProvider) return;
+
+        setAgentProvider(fallbackProvider);
+
+        const persistedProvider = settings.agent?.provider || 'claude-code';
+        if (persistedProvider === fallbackProvider) return;
+
+        const attemptKey = `${persistedProvider}->${fallbackProvider}`;
+        if (
+            autoSwitchAttemptKeyRef.current === attemptKey ||
+            autoSwitchingProviderRef.current
+        ) {
+            return;
+        }
+
+        autoSwitchAttemptKeyRef.current = attemptKey;
+        autoSwitchingProviderRef.current = true;
+
+        void (async () => {
+            try {
+                await save({
+                    ...settings,
+                    agent: {
+                        ...settings.agent,
+                        provider: fallbackProvider,
+                    }
+                });
+                showToast(
+                    `Default provider unavailable. Auto-switched to ${PROVIDER_LABELS[fallbackProvider] || fallbackProvider}.`,
+                    'success'
+                );
+            } catch (err) {
+                logger.error('Failed to auto-switch default provider:', err);
+                showToast('Failed to auto-switch default provider. Please save manually.', 'error');
+            } finally {
+                autoSwitchingProviderRef.current = false;
+            }
+        })();
+    }, [settings, agentProvidersStatus, agentProvider, isEditingAgent, save, showToast]);
 
     useEffect(() => {
         const streamedSession = authSessionStream.session;
@@ -1059,7 +1130,7 @@ export function SettingsPage() {
 
                                 <div className="space-y-2">
                                     <label className="text-xs font-medium text-muted-foreground uppercase tracking-wider">Provider Availability</label>
-                                    {(['claude-code', 'openai-codex', 'gemini-cli', 'cursor-cli'] as const).map((providerKey) => {
+                                    {AGENT_PROVIDER_PRIORITY.map((providerKey) => {
                                         const providerStatus = providerStatuses.find(
                                             (status) => status.provider === providerKey
                                         );
