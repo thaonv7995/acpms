@@ -44,7 +44,6 @@ interface KanbanBoardProps {
   onTaskNewAttempt?: (taskId: string) => void;
   onTaskRetry?: (taskId: string) => Promise<void> | void;
   onTaskClose?: (taskId: string) => Promise<void> | void;
-  onCloseAllDone?: () => Promise<void> | void;
   columnConfig?: KanbanColumnConfig;
   onColumnConfigChange?: (next: Partial<KanbanColumnConfig>) => void;
   /** Raw TaskDto[] from useKanban — pass to useKanbanStats to avoid duplicate API calls */
@@ -75,7 +74,6 @@ export function KanbanBoard({
   onTaskNewAttempt,
   onTaskRetry,
   onTaskClose,
-  onCloseAllDone,
   columnConfig,
   onColumnConfigChange,
   rawTasks,
@@ -405,7 +403,6 @@ export function KanbanBoard({
               onTaskRetry={onTaskRetry}
               isAllProjects={showProjectChips}
               onTaskClose={column.status === 'done' ? onTaskClose : undefined}
-              onCloseAllDone={column.status === 'done' ? onCloseAllDone : undefined}
             />
           ))}
         </KanbanProvider>

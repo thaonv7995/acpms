@@ -1,4 +1,4 @@
-import { MoreVertical, Edit, Eye, Trash2, Play, RotateCcw } from 'lucide-react';
+import { MoreVertical, Edit, Eye, Trash2, Play, RotateCcw, Archive } from 'lucide-react';
 import type { KanbanTask } from '@/types/project';
 import {
   DropdownMenu,
@@ -16,6 +16,7 @@ interface TaskCardDropdownProps {
   onDelete?: (taskId: string) => void;
   onNewAttempt?: (taskId: string) => void;
   onRetry?: (taskId: string) => void;
+  onClose?: (taskId: string) => Promise<void> | void;
 }
 
 export function TaskCardDropdown({
@@ -25,6 +26,7 @@ export function TaskCardDropdown({
   onDelete,
   onNewAttempt,
   onRetry,
+  onClose,
 }: TaskCardDropdownProps) {
   const handleClick = (e: React.MouseEvent) => {
     e.stopPropagation();
@@ -38,6 +40,7 @@ export function TaskCardDropdown({
   // Edit Task: only when todo or in_review (not merged). Disabled when in_progress or done.
   const canEditTask =
     task.status === 'backlog' || task.status === 'todo' || task.status === 'in_review';
+  const canCloseTask = task.status === 'done' && !!onClose;
 
   return (
     <DropdownMenu>
@@ -88,6 +91,18 @@ export function TaskCardDropdown({
           }}>
             <RotateCcw className="h-4 w-4 mr-2" />
             Retry
+          </DropdownMenuItem>
+        )}
+
+        {canCloseTask && (
+          <DropdownMenuItem
+            onClick={(e) => {
+              e.stopPropagation();
+              onClose?.(task.id);
+            }}
+          >
+            <Archive className="h-4 w-4 mr-2" />
+            Close Task
           </DropdownMenuItem>
         )}
 

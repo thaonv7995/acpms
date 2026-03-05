@@ -53,6 +53,7 @@ interface TaskCardProps {
   onDelete?: (taskId: string) => void;
   onNewAttempt?: (taskId: string) => void;
   onRetry?: (taskId: string) => void;
+  onClose?: (taskId: string) => Promise<void> | void;
   onStart?: (taskId: string) => Promise<void> | void;
   onCancelExecution?: (taskId: string) => Promise<void> | void;
   /** Whether to show project name chip (when filtering all projects) */
@@ -77,6 +78,7 @@ export function TaskCard({
   onDelete,
   onNewAttempt,
   onRetry,
+  onClose,
   onStart,
   onCancelExecution,
   isAllProjects = false,
@@ -250,6 +252,7 @@ export function TaskCard({
                 onDelete={onDelete}
                 onNewAttempt={onNewAttempt}
                 onRetry={onRetry}
+                onClose={onClose}
               />
             </div>
           }
