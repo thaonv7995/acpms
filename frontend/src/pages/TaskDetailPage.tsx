@@ -45,6 +45,13 @@ function TaskDetailSkeleton() {
     );
 }
 
+function getLatestSuccessAttempt(attempts: TaskAttempt[]): TaskAttempt | null {
+    const sortedAttempts = [...attempts].sort(
+        (a, b) => new Date(b.created_at).getTime() - new Date(a.created_at).getTime()
+    );
+    return sortedAttempts.find((attempt) => attempt.status.toLowerCase() === 'success') || null;
+}
+
 export function TaskDetailPage() {
     const { projectId, taskId } = useParams<{ projectId: string; taskId: string }>();
     const navigate = useNavigate();
@@ -74,12 +81,7 @@ export function TaskDetailPage() {
                 const attemptsData = await getTaskAttempts(taskId);
                 setAttempts(attemptsData);
 
-                // Find latest success attempt (for review)
-                const sortedAttempts = [...attemptsData].sort(
-                    (a, b) => new Date(b.created_at).getTime() - new Date(a.created_at).getTime()
-                );
-                const successAttempt = sortedAttempts.find(a => a.status.toLowerCase() === 'success');
-                setLatestSuccessAttempt(successAttempt || null);
+                setLatestSuccessAttempt(getLatestSuccessAttempt(attemptsData));
             } catch (err) {
                 logger.error('Failed to fetch task:', err);
                 setError('Failed to load task details');
@@ -94,12 +96,20 @@ export function TaskDetailPage() {
     const handleStartAgent = useCallback(async () => {
         if (!task) return;
         try {
-            await createTaskAttempt(task.id);
-            setShowAgentConfig(false);
-            const attemptsData = await getTaskAttempts(task.id);
+            const targetTaskId = task.id;
+            await createTaskAttempt(targetTaskId);
+            const [taskData, attemptsData] = await Promise.all([
+                getTask(targetTaskId),
+                getTaskAttempts(targetTaskId),
+            ]);
+            setTask(taskData);
             setAttempts(attemptsData);
+            setLatestSuccessAttempt(getLatestSuccessAttempt(attemptsData));
         } catch (err) {
             logger.error('Failed to start agent:', err);
+            throw err instanceof Error
+                ? err
+                : new Error('Failed to start task execution. Please try again.');
         }
     }, [task]);
 
@@ -159,6 +169,7 @@ export function TaskDetailPage() {
 
     const normalizedStatus = normalizeStatus(task.status);
     const isInReview = normalizedStatus === 'in_review';
+    const showStartAgent = normalizedStatus !== 'backlog' && normalizedStatus !== 'archived';
     const displayStatus = statusLabels[task.status] || task.status.toUpperCase();
     const statusColor = statusColors[task.status] || 'bg-slate-400';
 
@@ -179,6 +190,7 @@ export function TaskDetailPage() {
                         onReviewChanges={handleReviewChanges}
                         onStartAgent={() => setShowAgentConfig(true)}
                         onViewAttempts={() => setShowLogsDrawer(true)}
+                        showStartAgent={showStartAgent}
                     />
 
                     <div className="grid grid-cols-1 lg:grid-cols-3 gap-6">

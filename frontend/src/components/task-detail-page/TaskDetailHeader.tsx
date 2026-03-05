@@ -11,6 +11,7 @@ interface TaskDetailHeaderProps {
     onReviewChanges: () => void;
     onStartAgent: () => void;
     onViewAttempts: () => void;
+    showStartAgent?: boolean;
 }
 
 export function TaskDetailHeader({
@@ -25,6 +26,7 @@ export function TaskDetailHeader({
     onReviewChanges,
     onStartAgent,
     onViewAttempts,
+    showStartAgent = true,
 }: TaskDetailHeaderProps) {
     return (
         <div className="flex flex-col md:flex-row md:items-start justify-between gap-4">
@@ -53,7 +55,7 @@ export function TaskDetailHeader({
                     </h1>
                 </div>
             </div>
-            <div className="flex items-center gap-2">
+            <div className="flex items-center gap-2 flex-wrap">
                 {/* View Attempts Button */}
                 {hasAttempts && (
                     <button
@@ -74,7 +76,7 @@ export function TaskDetailHeader({
                         <span className="material-symbols-outlined text-[18px]">rate_review</span>
                         Review Changes
                     </button>
-                ) : (
+                ) : showStartAgent ? (
                     <button
                         onClick={onStartAgent}
                         className="px-4 py-2 bg-primary hover:bg-primary/90 text-primary-foreground text-sm font-bold rounded-lg shadow-lg shadow-primary/20 flex items-center gap-2 transition-all"
@@ -82,10 +84,7 @@ export function TaskDetailHeader({
                         <span className="material-symbols-outlined text-[18px]">smart_toy</span>
                         Start Agent
                     </button>
-                )}
-                <button className="p-2 text-muted-foreground hover:text-card-foreground transition-colors rounded-lg hover:bg-muted">
-                    <span className="material-symbols-outlined text-[18px]">more_horiz</span>
-                </button>
+                ) : null}
             </div>
         </div>
     );

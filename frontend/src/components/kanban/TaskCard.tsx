@@ -106,7 +106,8 @@ export function TaskCard({
   const lastAttemptFailed = task.status !== 'in_progress' && task.status !== 'done' && !!task.latestAttemptId;
   const hasParentTask = false; // TODO: Add parent_workspace_id to KanbanTask type when backend supports it
   const isInProgressTask = task.status === 'in_progress';
-  const canStartTask = !isInProgressTask && task.status !== 'backlog';
+  const canStartTask =
+    !isInProgressTask && task.status !== 'backlog' && task.status !== 'archived';
   const isActionPending = pendingAction !== null;
 
   // Executor from agentWorking field

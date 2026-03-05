@@ -562,7 +562,8 @@ impl DashboardService {
                 t.assigned_to
             FROM tasks t
             JOIN projects p ON p.id = t.project_id
-            WHERE t.status::text NOT IN ('done', 'archived')
+            WHERE t.status::text IN ('todo', 'in_review')
+              AND t.created_at >= NOW() - INTERVAL '30 days'
               AND (t.assigned_to = $3 OR t.assigned_to IS NULL)
               AND (
                     $1
@@ -573,7 +574,9 @@ impl DashboardService {
                           AND pm.user_id = $2
                     )
                 )
-            ORDER BY t.created_at DESC
+            ORDER BY 
+                CASE WHEN t.status::text = 'in_review' THEN 0 ELSE 1 END ASC,
+                t.created_at DESC
             LIMIT 5
             "#,
         )

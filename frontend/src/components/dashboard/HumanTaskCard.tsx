@@ -50,14 +50,6 @@ export function HumanTaskCard({ task, onReview, onApprove, onAssign }: HumanTask
         return `/tasks?taskId=${task.id}`;
     };
 
-    const truncateText = (text: string, maxWords: number = 10): string => {
-        const words = text.split(' ');
-        if (words.length <= maxWords) {
-            return text;
-        }
-        return words.slice(0, maxWords).join(' ') + '...';
-    };
-
     const handleCardClick = () => {
         navigate(buildTaskRoute(false));
     };
@@ -107,37 +99,33 @@ export function HumanTaskCard({ task, onReview, onApprove, onAssign }: HumanTask
 
     return (
         <div
-            className="p-4 rounded-lg border border-border hover:border-primary/50 bg-card transition-all cursor-pointer group"
+            className="p-3 rounded-lg border border-border hover:border-primary/50 bg-card transition-all cursor-pointer group flex flex-col gap-2"
             onClick={handleCardClick}
         >
-            <div className="flex justify-between items-start mb-2">
-                <span className={`text-xs font-bold ${style.text} ${style.bg} px-2 py-0.5 rounded`}>
-                    {style.label}
-                </span>
-                <span className="text-xs text-muted-foreground">
-                    {new Date(task.createdAt).toLocaleString()}
-                </span>
-            </div>
-            <h4 className="font-bold text-sm text-card-foreground mb-1 group-hover:text-primary transition-colors">
-                {task.title}
-            </h4>
-            <p className="text-xs text-muted-foreground mb-1 truncate">{task.projectName}</p>
-            <p className="text-xs text-muted-foreground mb-3">{truncateText(task.description)}</p>
-            <div className="flex items-center justify-between">
-                <div className="flex -space-x-1">
-                    <div className="size-6 rounded-full bg-muted border border-card flex items-center justify-center">
-                        <span className="material-symbols-outlined text-[12px] text-muted-foreground">person</span>
-                    </div>
+            <div className="flex justify-between items-center">
+                <div className="flex items-center gap-2">
+                    <span className={`text-[10px] uppercase font-bold tracking-wider ${style.text} ${style.bg} px-1.5 py-0.5 rounded-sm`}>
+                        {style.label}
+                    </span>
+                    <span className="text-[10px] text-muted-foreground whitespace-nowrap">
+                        {new Date(task.createdAt).toLocaleDateString()}
+                    </span>
                 </div>
                 <button
                     onClick={handleActionClick}
-                    className={`text-xs font-medium transition-colors ${isUrgent
-                            ? 'text-primary hover:text-primary/80'
-                            : 'text-muted-foreground hover:text-primary'
+                    className={`text-[11px] font-bold tracking-tight transition-colors flex items-center gap-1 ${isUrgent
+                        ? 'text-primary hover:text-primary/80'
+                        : 'text-muted-foreground hover:text-primary'
                         }`}
                 >
                     {getActionLabel()}
                 </button>
+            </div>
+
+            <div className="flex-1">
+                <h4 className="font-semibold text-sm text-card-foreground leading-tight group-hover:text-primary transition-colors line-clamp-2">
+                    {task.title}
+                </h4>
             </div>
         </div>
     );

@@ -868,6 +868,10 @@ export function ProjectTasksPage() {
           onClose={() => setShowAgentConfig(false)}
           taskId={selectedTask.id}
           taskTitle={selectedTask.title}
+          onStart={async () => {
+            await createTaskAttempt(selectedTask.id);
+            await refreshKanbanAfterExecutionAction();
+          }}
         />
       )}
 
