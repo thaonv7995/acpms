@@ -2023,7 +2023,47 @@ async fn main() -> anyhow::Result<()> {
         patch_store,
         stream_service,
         auth_session_store: Arc::new(crate::services::agent_auth::AuthSessionStore::new()),
+        knowledge_index: None,
     };
+
+    // Build Knowledge Index (RAG) in background
+    let knowledge_index = {
+        let mut skill_roots = Vec::new();
+        if let Ok(dir) = std::env::var("ACPMS_SKILLS_DIR") {
+            let skills_path = std::path::PathBuf::from(&dir);
+            skill_roots.push(skills_path.clone());
+            for prefix in &["community-anthropic", "community-openai"] {
+                let community_dir = skills_path.join(prefix);
+                if community_dir.is_dir() {
+                    skill_roots.push(community_dir);
+                }
+            }
+        }
+        if !skill_roots.is_empty() {
+            match tokio::task::spawn_blocking(move || {
+                acpms_executors::KnowledgeIndex::build(skill_roots)
+            })
+            .await
+            {
+                Ok(Ok(index)) => {
+                    tracing::info!(skills = index.skill_count(), "Knowledge index built");
+                    Some(Arc::new(index))
+                }
+                Ok(Err(e)) => {
+                    tracing::warn!("Failed to build knowledge index (non-fatal): {}", e);
+                    None
+                }
+                Err(e) => {
+                    tracing::warn!("Knowledge index task panicked (non-fatal): {}", e);
+                    None
+                }
+            }
+        } else {
+            tracing::info!("ACPMS_SKILLS_DIR not set, skipping knowledge index");
+            None
+        }
+    };
+    state.knowledge_index = knowledge_index;
 
     let deployment_handler_state = state.clone();
     let deployment_handler = Arc::new(move |job: DeploymentJob| {

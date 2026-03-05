@@ -2,8 +2,12 @@ use acpms_db::models::{ProjectSettings, ProjectType, Task, TaskType};
 use std::collections::HashSet;
 use std::path::{Path, PathBuf};
 
+use crate::knowledge_index::KnowledgeIndex;
+
 const MAX_SKILL_CHARS: usize = 6_000;
 const MAX_TOTAL_SKILL_CHARS: usize = 24_000;
+const MAX_RAG_SUGGESTIONS: usize = 3;
+const MIN_RAG_SCORE: f32 = 0.3;
 
 #[derive(Debug, Clone)]
 struct LoadedSkill {
@@ -18,57 +22,128 @@ pub fn build_skill_instruction_block(
     project_type: ProjectType,
     repo_path: Option<&Path>,
 ) -> String {
-    let skill_ids = resolve_skill_chain(task, settings, project_type);
-    if skill_ids.is_empty() {
-        return String::new();
-    }
+    build_skill_instruction_block_with_rag(task, settings, project_type, repo_path, None)
+}
 
-    let mut out = String::from(
-        r#"
+pub fn build_skill_instruction_block_with_rag(
+    task: &Task,
+    settings: &ProjectSettings,
+    project_type: ProjectType,
+    repo_path: Option<&Path>,
+    knowledge_index: Option<&KnowledgeIndex>,
+) -> String {
+    let skill_ids = resolve_skill_chain(task, settings, project_type);
+    let has_deterministic = !skill_ids.is_empty();
+
+    let mut out = String::new();
+    let mut total_chars = 0usize;
+    let mut loaded_ids: HashSet<String> = HashSet::new();
+
+    if has_deterministic {
+        out.push_str(
+            r#"
 
 ## Active Skills (Required)
 Follow these skill playbooks strictly for this attempt. If a skill cannot be executed, state why in the final report.
 "#,
-    );
+        );
 
-    let mut total_chars = 0usize;
-    for skill_id in skill_ids {
-        if total_chars >= MAX_TOTAL_SKILL_CHARS {
-            break;
+        for skill_id in &skill_ids {
+            if total_chars >= MAX_TOTAL_SKILL_CHARS {
+                break;
+            }
+
+            let loaded = load_skill(skill_id, repo_path).unwrap_or_else(|| LoadedSkill {
+                id: skill_id.clone(),
+                content: builtin_skill_content(skill_id)
+                    .unwrap_or(
+                        "No external skill file found. Use standard best-practice execution for this capability.",
+                    )
+                    .to_string(),
+                source: None,
+            });
+
+            let mut content = loaded.content.trim().to_string();
+            if content.len() > MAX_SKILL_CHARS {
+                content.truncate(MAX_SKILL_CHARS);
+                content.push_str("\n... (skill content truncated)");
+            }
+
+            total_chars = total_chars.saturating_add(content.len());
+            out.push_str("\n### Skill: ");
+            out.push_str(&loaded.id);
+            if let Some(path) = loaded.source {
+                out.push_str("\nSource: `");
+                out.push_str(&path.to_string_lossy());
+                out.push('`');
+            } else {
+                out.push_str("\nSource: `builtin`");
+            }
+            out.push_str("\n```text\n");
+            out.push_str(&content);
+            out.push_str("\n```\n");
+            loaded_ids.insert(loaded.id);
         }
+    }
 
-        let loaded = load_skill(&skill_id, repo_path).unwrap_or_else(|| LoadedSkill {
-            id: skill_id.clone(),
-            content: builtin_skill_content(&skill_id)
-                .unwrap_or(
-                    "No external skill file found. Use standard best-practice execution for this capability.",
-                )
-                .to_string(),
-            source: None,
-        });
+    // RAG: append semantically relevant community skills
+    if let Some(index) = knowledge_index {
+        if total_chars < MAX_TOTAL_SKILL_CHARS {
+            let query = build_rag_query(task);
+            let matches = index.search(&query, MAX_RAG_SUGGESTIONS + loaded_ids.len());
 
-        let mut content = loaded.content.trim().to_string();
-        if content.len() > MAX_SKILL_CHARS {
-            content.truncate(MAX_SKILL_CHARS);
-            content.push_str("\n... (skill content truncated)");
+            let mut rag_added = 0;
+            for m in matches {
+                if rag_added >= MAX_RAG_SUGGESTIONS || total_chars >= MAX_TOTAL_SKILL_CHARS {
+                    break;
+                }
+                if loaded_ids.contains(&m.skill_id) || m.score < MIN_RAG_SCORE {
+                    continue;
+                }
+
+                // First RAG skill: add section header
+                if rag_added == 0 {
+                    out.push_str(
+                        "\n\n## Suggested Knowledge (Community Skills)\nThe following community skills were found relevant to this task. Use them as reference for best practices.\n",
+                    );
+                }
+
+                let content_opt = index.read_skill(&m.skill_id);
+                let mut content = content_opt.unwrap_or_else(|| m.description.clone());
+                if content.len() > MAX_SKILL_CHARS {
+                    content.truncate(MAX_SKILL_CHARS);
+                    content.push_str("\n... (skill content truncated)");
+                }
+
+                total_chars = total_chars.saturating_add(content.len());
+                out.push_str(&format!(
+                    "\n### Community Skill: {} (relevance: {:.0}%)\nSource: `{}`\n```text\n{}\n```\n",
+                    m.name,
+                    m.score * 100.0,
+                    m.source_path.to_string_lossy(),
+                    content.trim(),
+                ));
+
+                loaded_ids.insert(m.skill_id);
+                rag_added += 1;
+            }
         }
-
-        total_chars = total_chars.saturating_add(content.len());
-        out.push_str("\n### Skill: ");
-        out.push_str(&loaded.id);
-        if let Some(path) = loaded.source {
-            out.push_str("\nSource: `");
-            out.push_str(&path.to_string_lossy());
-            out.push('`');
-        } else {
-            out.push_str("\nSource: `builtin`");
-        }
-        out.push_str("\n```text\n");
-        out.push_str(&content);
-        out.push_str("\n```\n");
     }
 
     out
+}
+
+fn build_rag_query(task: &Task) -> String {
+    let mut query = task.title.clone();
+    if let Some(desc) = &task.description {
+        query.push(' ');
+        query.push_str(desc);
+    }
+    // Truncate overly long queries
+    if query.len() > 500 {
+        query.truncate(500);
+    }
+    query
 }
 
 pub fn resolve_skill_chain(
@@ -379,7 +454,16 @@ fn candidate_skill_roots(repo_path: Option<&Path>) -> Vec<PathBuf> {
     }
     // 2. Platform skills dir (installer sets ACPMS_SKILLS_DIR, e.g. /opt/acpms/.acpms/skills)
     if let Ok(dir) = std::env::var("ACPMS_SKILLS_DIR") {
-        push(PathBuf::from(dir));
+        let skills_path = PathBuf::from(&dir);
+        push(skills_path.clone());
+
+        // 2b. Community knowledge bases (community-anthropic/, community-openai/ under skills dir)
+        for prefix in &["community-anthropic", "community-openai"] {
+            let community_dir = skills_path.join(prefix);
+            if community_dir.is_dir() {
+                push(community_dir);
+            }
+        }
     }
     // 3. CWD (dev/local)
     if let Ok(cwd) = std::env::current_dir() {

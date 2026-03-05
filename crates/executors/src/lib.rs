@@ -8,6 +8,7 @@ pub mod follow_up_utils;
 pub mod gemini;
 pub mod input_queue;
 pub mod job_queue;
+pub mod knowledge_index;
 pub mod normalization;
 pub mod normalization_contract;
 pub mod orchestrator;
@@ -64,6 +65,7 @@ pub use gemini::*;
 pub use git_credential_helper::GitCredentialHelper;
 pub use input_queue::{InputMessage, InputQueue, InputQueueError};
 pub use job_queue::*;
+pub use knowledge_index::{KnowledgeIndex, SkillMatch};
 pub use normalization::{
     ActionOperation, ActionType, AggregatedAction, ExecutionStatus, FileChange, FileChangeType,
     LogNormalizer, NormalizedEntry, NormalizedEntryType, SubagentSpawn, TodoItem, TodoStatus,
@@ -78,7 +80,9 @@ pub use retry_handler::{RetryHandler, RetryInfo, RetryScheduleResult};
 pub use router_config::{
     default_filters, serialize_filters, AgentSettings, FilterAction, MessageFilter,
 };
-pub use task_skills::{build_skill_instruction_block, resolve_skill_chain};
+pub use task_skills::{
+    build_skill_instruction_block, build_skill_instruction_block_with_rag, resolve_skill_chain,
+};
 pub use worker_pool::*;
 pub use worker_pool_config::*;
 pub use worker_pool_executor::*;

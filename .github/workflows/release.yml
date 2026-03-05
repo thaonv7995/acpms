@@ -33,6 +33,31 @@ jobs:
       - name: Create frontend archive
         run: tar -czvf acpms-frontend-dist.tar.gz -C frontend/dist .
 
+      - name: Pull community skills
+        run: |
+          echo "Cloning Anthropic community skills..."
+          git clone --depth 1 https://github.com/anthropics/skills.git /tmp/anthropic-skills || true
+          if [ -d /tmp/anthropic-skills/skills ]; then
+            mkdir -p .acpms/skills/community-anthropic
+            cp -r /tmp/anthropic-skills/skills/* .acpms/skills/community-anthropic/
+            echo "✅ Anthropic skills copied: $(ls .acpms/skills/community-anthropic/ | wc -l) items"
+          fi
+
+          echo "Cloning OpenAI community skills..."
+          git clone --depth 1 https://github.com/openai/skills.git /tmp/openai-skills || true
+          if [ -d /tmp/openai-skills ]; then
+            mkdir -p .acpms/skills/community-openai
+            # Copy skill directories (skip non-skill files like README, LICENSE)
+            for dir in /tmp/openai-skills/*/; do
+              if [ -f "$dir/SKILL.md" ]; then
+                cp -r "$dir" .acpms/skills/community-openai/
+              fi
+            done
+            echo "✅ OpenAI skills copied: $(ls .acpms/skills/community-openai/ 2>/dev/null | wc -l) items"
+          fi
+
+          rm -rf /tmp/anthropic-skills /tmp/openai-skills
+
       - name: Create skills archive
         run: tar -czvf acpms-skills.tar.gz -C .acpms/skills .
 
