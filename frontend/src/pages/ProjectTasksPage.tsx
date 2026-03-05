@@ -216,7 +216,7 @@ export function ProjectTasksPage() {
   const kanbanProjectId = isAllProjects ? 'all' : effectiveProjectId;
 
   // Fetch kanban data
-  const { columns, loading, refetch, setFilters, rawTasks } = useKanban(kanbanProjectId);
+  const { columns, loading, refetch, setFilters, rawTasks, closeTask, closeAllDone } = useKanban(kanbanProjectId);
 
   // Handle project change - update filter and navigate if needed
   const handleProjectChange = useCallback(
@@ -624,6 +624,8 @@ export function ProjectTasksPage() {
       onTaskEdit={handleEditFromKanban}
       onTaskNewAttempt={handleNewAttemptFromKanban}
       onTaskRetry={handleRetryFromKanban}
+      onTaskClose={closeTask}
+      onCloseAllDone={closeAllDone}
       projects={projects.map(p => ({ id: p.id, name: p.name }))}
       selectedProjectId={filterProjectId !== undefined ? filterProjectId : (isAllProjects ? 'all' : effectiveProjectIdFromUrl)}
       onProjectChange={handleProjectChange}

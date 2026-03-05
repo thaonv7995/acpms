@@ -2260,7 +2260,9 @@ async fn check_claude_provider_status() -> ProviderStatusDoc {
 
     // Run available probes in parallel – prefer the direct `claude` binary (faster, ~8s timeout)
     // over npx (~12s timeout) but launch both concurrently so total wait = max(timeouts).
-    let mut probe_futures: Vec<tokio::task::JoinHandle<(Result<CommandProbeOutcome, String>, &'static str)>> = Vec::new();
+    let mut probe_futures: Vec<
+        tokio::task::JoinHandle<(Result<CommandProbeOutcome, String>, &'static str)>,
+    > = Vec::new();
     if let Some(cmd) = claude_cmd {
         let args = vec!["auth".to_string(), "status".to_string()];
         probe_futures.push(tokio::spawn(async move {
@@ -2369,7 +2371,11 @@ async fn check_claude_provider_status() -> ProviderStatusDoc {
             if !logged_in {
                 unauthenticated_message = Some(format!(
                     "{} ({})",
-                    summarize_probe_output(&probe.stdout, &probe.stderr, "Claude is not authenticated"),
+                    summarize_probe_output(
+                        &probe.stdout,
+                        &probe.stderr,
+                        "Claude is not authenticated"
+                    ),
                     source
                 ));
             }

@@ -60,6 +60,66 @@ impl WorktreeManager {
             .await
     }
 
+    /// Clone-only: ensures the repo directory exists on disk.
+    /// If `.git` already exists, returns immediately (no fetch/pull).
+    /// Used by the Project Assistant where local code is sufficient.
+    pub async fn ensure_repo_exists(
+        &self,
+        repo_path: &Path,
+        remote_url: &str,
+        upstream_url: Option<&str>,
+        pat: &str,
+    ) -> Result<()> {
+        if repo_path.join(".git").exists() {
+            return Ok(());
+        }
+
+        // Not cloned yet — do the initial clone.
+        let auth_url = inject_pat_into_url(remote_url, pat);
+        let upstream_auth_url = upstream_url.map(|url| inject_pat_into_url(url, pat));
+
+        tracing::info!(
+            "Repository not found at {:?}, cloning from {}",
+            repo_path,
+            remote_url
+        );
+
+        if let Some(parent) = repo_path.parent() {
+            tokio::fs::create_dir_all(parent).await?;
+        }
+
+        let output = git_command_non_interactive()
+            .arg("clone")
+            .arg(&auth_url)
+            .arg(repo_path)
+            .stdout(Stdio::piped())
+            .stderr(Stdio::piped())
+            .output()
+            .await?;
+
+        if !output.status.success() {
+            let stderr = String::from_utf8_lossy(&output.stderr);
+            let sanitized = if !pat.is_empty() {
+                stderr.replace(pat, "***PAT***")
+            } else {
+                stderr.to_string()
+            };
+            anyhow::bail!("git clone failed: {}", sanitized);
+        }
+
+        // Add upstream remote if specified.
+        self.ensure_remote_url(
+            repo_path,
+            "upstream",
+            upstream_url,
+            upstream_auth_url.as_deref(),
+        )
+        .await?;
+
+        tracing::info!("Repository cloned successfully");
+        Ok(())
+    }
+
     pub async fn ensure_cloned_with_upstream(
         &self,
         repo_path: &Path,
@@ -71,7 +131,31 @@ impl WorktreeManager {
         let upstream_auth_url = upstream_url.map(|url| inject_pat_into_url(url, pat));
 
         if repo_path.join(".git").exists() {
-            // Repository exists - fetch and pull latest changes
+            // Repository exists — check if a recent sync already happened.
+            // If FETCH_HEAD was updated within the last 60 seconds we can skip the
+            // expensive `git fetch --all` + `git pull` round-trip entirely, which
+            // saves 5-15s of network I/O on every assistant session start.
+            const REPO_SYNC_FRESHNESS_SECS: u64 = 60;
+            let fetch_head = repo_path.join(".git").join("FETCH_HEAD");
+            let recently_synced = fetch_head
+                .metadata()
+                .ok()
+                .and_then(|m| m.modified().ok())
+                .map(|modified| {
+                    modified.elapsed().unwrap_or_default()
+                        < std::time::Duration::from_secs(REPO_SYNC_FRESHNESS_SECS)
+                })
+                .unwrap_or(false);
+
+            if recently_synced {
+                tracing::info!(
+                    "Repository at {:?} was synced within the last {}s, skipping fetch/pull",
+                    repo_path,
+                    REPO_SYNC_FRESHNESS_SECS
+                );
+                return Ok(());
+            }
+
             tracing::info!(
                 "Repository exists at {:?}, pulling latest changes",
                 repo_path

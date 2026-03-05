@@ -57,6 +57,10 @@ interface UseKanbanResult {
   moveTaskToColumn: (taskId: string, columnId: string, position: number) => Promise<void>;
   setFilters: (filters: KanbanFilters) => void;
   filters: KanbanFilters;
+  /** Archive a single task */
+  closeTask: (taskId: string) => Promise<void>;
+  /** Archive all done tasks */
+  closeAllDone: () => Promise<void>;
   /** Raw TaskDto[] from API — pass to useKanbanStats to avoid duplicate fetch */
   rawTasks: import('../api/generated/models').TaskDto[];
 }
@@ -159,6 +163,29 @@ export function useKanban(projectId?: string): UseKanbanResult {
     [updateStatus]
   );
 
+  // Archive a single task
+  const closeTask = useCallback(
+    async (taskId: string) => {
+      await updateStatus(taskId, 'archived');
+    },
+    [updateStatus]
+  );
+
+  // Archive all done tasks
+  const closeAllDone = useCallback(async () => {
+    const doneColumn = columns.find((col) => col.status === 'done');
+    if (!doneColumn || doneColumn.tasks.length === 0) return;
+
+    const promises = doneColumn.tasks.map((task) =>
+      updateStatusMutation.mutateAsync({
+        id: task.id,
+        data: { status: mapFrontendStatusToBackend('archived') },
+      })
+    );
+    await Promise.all(promises);
+    await refetch();
+  }, [columns, updateStatusMutation, refetch]);
+
   return {
     columns,
     loading: isLoading,
@@ -168,6 +195,8 @@ export function useKanban(projectId?: string): UseKanbanResult {
     moveTaskToColumn,
     setFilters,
     filters,
+    closeTask,
+    closeAllDone,
     rawTasks: (tasksResponse?.data as import('../api/generated/models').TaskDto[] | undefined) || [],
   };
 }

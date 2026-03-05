@@ -11,6 +11,7 @@ use uuid::Uuid;
 
 const MAX_VALIDATION_OUTPUT_CHARS: usize = 12_000;
 const MAX_VALIDATION_FIX_ROUNDS: usize = 2;
+const MAX_DEPLOY_VALIDATION_COMMAND_TIMEOUT: Duration = Duration::from_secs(8 * 60);
 
 fn architecture_is_empty(config: &serde_json::Value) -> bool {
     config
@@ -413,6 +414,7 @@ else echo 'Missing Dockerfile or compose file (docker-compose.yml / compose.yml)
         attempt_id: Uuid,
         worktree_path: &Path,
         command: &str,
+        command_timeout: Duration,
     ) -> Result<ValidationOutcome> {
         self.log(
             attempt_id,
@@ -421,18 +423,30 @@ else echo 'Missing Dockerfile or compose file (docker-compose.yml / compose.yml)
         )
         .await?;
 
-        let output = Command::new("sh")
-            .arg("-lc")
-            .arg(command)
-            .current_dir(worktree_path)
-            .output()
-            .await
-            .with_context(|| {
+        let output = match tokio::time::timeout(
+            command_timeout,
+            Command::new("sh")
+                .arg("-lc")
+                .arg(command)
+                .current_dir(worktree_path)
+                .output(),
+        )
+        .await
+        {
+            Ok(result) => result.with_context(|| {
                 format!(
                     "Failed to execute deployment validation command: {}",
                     command
                 )
-            })?;
+            })?,
+            Err(_) => {
+                bail!(
+                    "Deployment validation command timed out after {:?}: {}",
+                    command_timeout,
+                    command
+                );
+            }
+        };
 
         let stdout = sanitize_log(&String::from_utf8_lossy(&output.stdout));
         let stderr = sanitize_log(&String::from_utf8_lossy(&output.stderr));
@@ -1419,6 +1433,7 @@ Project type: {}
         let fix_rounds = retry_budget.clamp(1, MAX_VALIDATION_FIX_ROUNDS);
         let worktree_path_buf = worktree_path.to_path_buf();
         let mut last_failure_signature: Option<(String, String)> = None;
+        let command_timeout = task_timeout.min(MAX_DEPLOY_VALIDATION_COMMAND_TIMEOUT);
 
         for pass in 0..=fix_rounds {
             self.log(
@@ -1435,7 +1450,12 @@ Project type: {}
             let mut failed: Option<ValidationOutcome> = None;
             for command in &commands {
                 let outcome = self
-                    .run_deployment_validation_command(attempt_id, worktree_path, command)
+                    .run_deployment_validation_command(
+                        attempt_id,
+                        worktree_path,
+                        command,
+                        command_timeout,
+                    )
                     .await?;
                 if !outcome.success {
                     failed = Some(outcome);

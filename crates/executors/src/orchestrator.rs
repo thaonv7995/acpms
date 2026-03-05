@@ -48,6 +48,11 @@ const SPAWN_TIMEOUT: Duration = Duration::from_secs(30);
 /// Default timeout for graceful shutdown (5 seconds).
 const GRACEFUL_SHUTDOWN_TIMEOUT: Duration = Duration::from_secs(5);
 
+/// Max time to wait for agent process exit after stream already ended.
+/// Prevents attempts from hanging forever in "running" when provider process
+/// keeps an idle session open.
+const AGENT_EXIT_TIMEOUT_AFTER_STREAM: Duration = Duration::from_secs(20);
+
 /// Maximum execution time for init tasks (30 minutes).
 #[allow(dead_code)]
 const INIT_TASK_TIMEOUT: Duration = Duration::from_secs(30 * 60);
@@ -2029,15 +2034,43 @@ impl ExecutorOrchestrator {
             return stream_result;
         }
 
-        // Wait for process to complete or force terminate
-        let status = child_ref.wait().await?;
-        if !status.success() {
-            self.log(
-                attempt_id,
-                "system",
-                &format!("Agent exited with status: {}", status),
-            )
-            .await?;
+        // Stream completed successfully, close runtime input channel so providers can
+        // end single-turn sessions cleanly instead of waiting for more input forever.
+        if let Some(session) = self.active_sessions.lock().await.get_mut(&attempt_id) {
+            session.input_sender = None;
+        }
+
+        // Wait for process to complete, but never block attempt finalization forever.
+        match tokio::time::timeout(AGENT_EXIT_TIMEOUT_AFTER_STREAM, child_ref.wait()).await {
+            Ok(Ok(status)) => {
+                if !status.success() {
+                    self.log(
+                        attempt_id,
+                        "system",
+                        &format!("Agent exited with status: {}", status),
+                    )
+                    .await?;
+                }
+            }
+            Ok(Err(err)) => {
+                let msg = format!("Failed to wait for agent process exit: {}", err);
+                self.log(attempt_id, "stderr", &msg).await?;
+                drop(cleanup_guard);
+                return Err(anyhow::anyhow!(msg));
+            }
+            Err(_) => {
+                self.log(
+                    attempt_id,
+                    "stderr",
+                    &format!(
+                        "Agent process did not exit after stream completion (>{:?}). Forcing shutdown to avoid hang.",
+                        AGENT_EXIT_TIMEOUT_AFTER_STREAM
+                    ),
+                )
+                .await?;
+
+                let _ = terminate_process(child_ref, None, GRACEFUL_SHUTDOWN_TIMEOUT).await;
+            }
         }
 
         // Explicitly drop cleanup guard (cleanup will run)
@@ -4365,12 +4398,21 @@ impl ExecutorOrchestrator {
     ) -> Result<()> {
         let project = self.fetch_project(project_id).await?;
 
-        if let Some(ref repo_url) = project.repository_url {
+        // Fast path: if the repo already exists locally, use it as-is without
+        // any network I/O (fetch/pull). The assistant works on whatever code is
+        // on disk — syncing is not required and would add 5-15s of latency.
+        // Only clone when the directory doesn't exist yet.
+        if worktree_path.join(".git").exists() {
+            tracing::info!(
+                "Assistant repo already exists at {:?}, using local code",
+                worktree_path
+            );
+        } else if let Some(ref repo_url) = project.repository_url {
             if !repo_url.trim().is_empty() {
                 let pat = self.get_system_pat_for_repo(repo_url).await;
                 let pat = pat.as_deref().unwrap_or("");
                 self.worktree_manager
-                    .ensure_cloned_with_upstream(
+                    .ensure_repo_exists(
                         &worktree_path,
                         repo_url,
                         project

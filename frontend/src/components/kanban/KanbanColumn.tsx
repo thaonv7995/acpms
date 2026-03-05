@@ -1,7 +1,7 @@
 import { useDroppable } from '@dnd-kit/core';
 import { useDraggable } from '@dnd-kit/core';
 import { Button } from '../ui/button';
-import { Plus } from 'lucide-react';
+import { Plus, X } from 'lucide-react';
 import { cn } from '@/lib/utils';
 import type { KanbanColumn as KanbanColumnType } from '../../types/project';
 import { TaskCard } from './TaskCard';
@@ -22,6 +22,10 @@ interface KanbanColumnProps {
     onTaskRetry?: (taskId: string) => Promise<void> | void;
     /** Whether to show project name chip (when filtering all projects) */
     isAllProjects?: boolean;
+    /** Archive a single done task */
+    onTaskClose?: (taskId: string) => Promise<void> | void;
+    /** Archive all done tasks */
+    onCloseAllDone?: () => Promise<void> | void;
 }
 
 export function KanbanColumn({
@@ -37,6 +41,8 @@ export function KanbanColumn({
     onTaskNewAttempt,
     onTaskRetry,
     isAllProjects = false,
+    onTaskClose,
+    onCloseAllDone,
 }: KanbanColumnProps) {
     // Make column a drop target
     const { setNodeRef, isOver } = useDroppable({
@@ -78,6 +84,18 @@ export function KanbanColumn({
                     <div className={cn('h-2 w-2 rounded-full')} style={{ backgroundColor: `hsl(var(${colorVar}))` }} />
                     <p className="m-0 text-sm">{statusLabel}</p>
                 </span>
+                {onCloseAllDone && column.tasks.length > 0 && (
+                    <Button
+                        variant="ghost"
+                        size="icon"
+                        className="m-0 p-0 h-0 text-foreground/50 hover:text-foreground"
+                        onClick={onCloseAllDone}
+                        aria-label="Close all done tasks"
+                        title="Close all done tasks"
+                    >
+                        <X className="h-4 w-4" />
+                    </Button>
+                )}
                 {onAddTask && (
                     <Button
                         variant="ghost"
@@ -95,20 +113,31 @@ export function KanbanColumn({
             {/* Tasks List - KanbanCards wrapper */}
             <div className="flex flex-1 flex-col">
                 {column.tasks.map(task => (
-                    <DraggableTaskCard
-                        key={task.id}
-                        task={task}
-                        onClick={onTaskClick}
-                        isSelected={selectedTaskId === task.id}
-                        onTaskStart={onTaskStart}
-                        onTaskCancelExecution={onTaskCancelExecution}
-                        onTaskDelete={onTaskDelete}
-                        onTaskViewDetails={onTaskViewDetails}
-                        onTaskEdit={onTaskEdit}
-                        onTaskNewAttempt={onTaskNewAttempt}
-                        onTaskRetry={onTaskRetry}
-                        isAllProjects={isAllProjects}
-                    />
+                    <div key={task.id} className="relative group/close">
+                        <DraggableTaskCard
+                            task={task}
+                            onClick={onTaskClick}
+                            isSelected={selectedTaskId === task.id}
+                            onTaskStart={onTaskStart}
+                            onTaskCancelExecution={onTaskCancelExecution}
+                            onTaskDelete={onTaskDelete}
+                            onTaskViewDetails={onTaskViewDetails}
+                            onTaskEdit={onTaskEdit}
+                            onTaskNewAttempt={onTaskNewAttempt}
+                            onTaskRetry={onTaskRetry}
+                            isAllProjects={isAllProjects}
+                        />
+                        {onTaskClose && (
+                            <button
+                                onClick={(e) => { e.stopPropagation(); onTaskClose(task.id); }}
+                                className="absolute top-2 right-2 opacity-0 group-hover/close:opacity-100 transition-opacity p-0.5 rounded hover:bg-destructive/10 text-foreground/40 hover:text-destructive"
+                                title="Archive task"
+                                aria-label="Archive task"
+                            >
+                                <X className="h-3.5 w-3.5" />
+                            </button>
+                        )}
+                    </div>
                 ))}
             </div>
         </div>

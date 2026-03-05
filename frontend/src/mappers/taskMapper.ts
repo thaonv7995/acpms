@@ -23,7 +23,7 @@ const statusMap: Record<string, KanbanTask['status']> = {
   InReview: 'in_review',
   Blocked: 'todo',
   Done: 'done',
-  Archived: 'done',
+  Archived: 'archived',
   // Lowercase fallbacks
   todo: 'todo',
   pending: 'todo',
@@ -34,6 +34,7 @@ const statusMap: Record<string, KanbanTask['status']> = {
   done: 'done',
   completed: 'done',
   closed: 'done',
+  archived: 'archived',
 };
 
 // Task type mapping: Backend task_type → Frontend type
@@ -50,6 +51,7 @@ const typeMap: Record<string, KanbanTask['type']> = {
   Spike: 'spike',
   SmallTask: 'small_task',
   Deploy: 'deploy',
+  Init: 'init',
   // Lowercase fallbacks
   feature: 'feature',
   bug: 'bug',
@@ -61,6 +63,7 @@ const typeMap: Record<string, KanbanTask['type']> = {
   spike: 'spike',
   small_task: 'small_task',
   deploy: 'deploy',
+  init: 'init',
   task: 'feature', // default
 };
 
@@ -204,8 +207,9 @@ export function applyTaskFilters(
   let filtered = [...tasks];
 
   if (filters.agentOnly) {
-    // "Execution only" excludes documentation-only tasks.
-    filtered = filtered.filter((task) => task.type !== 'docs');
+    // "Execution only" excludes support task types (docs, spike, init).
+    const SUPPORT_TASK_TYPES: string[] = ['docs', 'spike', 'init'];
+    filtered = filtered.filter((task) => !SUPPORT_TASK_TYPES.includes(task.type));
   }
 
   if (filters.search) {
@@ -276,6 +280,7 @@ export function mapFrontendStatusToBackend(status: KanbanTask['status']): string
     in_progress: 'in_progress',
     in_review: 'in_review',
     done: 'done',
+    archived: 'archived',
   };
   return reverseMap[status];
 }

@@ -2,8 +2,7 @@ use acpms_db::{
     models::ProjectAssistantSession,
     repositories::{
         create, delete_beyond_recent, end_session as repo_end_session,
-        find_active_by_project_and_user, get_by_id, list_by_project_and_user,
-        update_s3_log_key,
+        find_active_by_project_and_user, get_by_id, list_by_project_and_user, update_s3_log_key,
     },
     PgPool,
 };

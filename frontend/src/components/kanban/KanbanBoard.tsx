@@ -42,6 +42,8 @@ interface KanbanBoardProps {
   onTaskEdit?: (taskId: string) => void;
   onTaskNewAttempt?: (taskId: string) => void;
   onTaskRetry?: (taskId: string) => Promise<void> | void;
+  onTaskClose?: (taskId: string) => Promise<void> | void;
+  onCloseAllDone?: () => Promise<void> | void;
   /** Raw TaskDto[] from useKanban — pass to useKanbanStats to avoid duplicate API calls */
   rawTasks?: import('../../api/generated/models').TaskDto[];
 }
@@ -64,10 +66,12 @@ export function KanbanBoard({
   onTaskEdit,
   onTaskNewAttempt,
   onTaskRetry,
+  onTaskClose,
+  onCloseAllDone,
   rawTasks,
 }: KanbanBoardProps) {
   const navigate = useNavigate();
-  const [agentOnlyFilter, setAgentOnlyFilter] = useState(false);
+  const [agentOnlyFilter, setAgentOnlyFilter] = useState(true);
   const [searchQuery, setSearchQuery] = useState('');
   const [createdDateFilter, setCreatedDateFilter] = useState<CreatedDateFilter>('all');
   const debouncedSearch = useDebouncedValue(searchQuery, 300);
@@ -103,6 +107,16 @@ export function KanbanBoard({
       }
     }
   }, [onProjectChange, navigate]);
+
+  // Auto-switch to "All Tasks" when the selected task is filtered out by Execution Only
+  useEffect(() => {
+    if (selectedTaskId && agentOnlyFilter) {
+      const found = columns.some(col => col.tasks.some(t => t.id === selectedTaskId));
+      if (!found) {
+        setAgentOnlyFilter(false);
+      }
+    }
+  }, [selectedTaskId, columns, agentOnlyFilter]);
 
   useEffect(() => {
     onFiltersChange?.({
@@ -254,7 +268,7 @@ export function KanbanBoard({
                     ? 'bg-primary text-primary-foreground border border-primary shadow-sm'
                     : 'bg-primary/20 dark:bg-primary/30 border border-primary/30 text-card-foreground hover:bg-primary/30 dark:hover:bg-primary/40'
                   }`}
-                title="Show execution tasks only (exclude Docs tasks)"
+                title="Show execution tasks only (exclude Docs/Spike/Init tasks)"
               >
                 <span className="material-symbols-outlined text-[16px]">code</span> Execution Only
               </button>
@@ -342,6 +356,8 @@ export function KanbanBoard({
               onTaskNewAttempt={onTaskNewAttempt}
               onTaskRetry={onTaskRetry}
               isAllProjects={showProjectChips}
+              onTaskClose={column.status === 'done' ? onTaskClose : undefined}
+              onCloseAllDone={column.status === 'done' ? onCloseAllDone : undefined}
             />
           ))}
         </KanbanProvider>

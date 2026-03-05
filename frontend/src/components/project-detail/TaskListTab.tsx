@@ -26,6 +26,7 @@ const statusStyles: Record<KanbanTask['status'], { bg: string; text: string; lab
     in_progress: { bg: 'bg-blue-100 dark:bg-blue-500/20', text: 'text-blue-600 dark:text-blue-400', label: 'In Progress' },
     in_review: { bg: 'bg-amber-100 dark:bg-amber-500/20', text: 'text-amber-600 dark:text-amber-400', label: 'In Review' },
     done: { bg: 'bg-green-100 dark:bg-green-500/20', text: 'text-green-600 dark:text-green-400', label: 'Done' },
+    archived: { bg: 'bg-muted', text: 'text-muted-foreground', label: 'Archived' },
 };
 
 const typeStyles: Record<KanbanTask['type'], { bg: string; text: string; label: string }> = {
@@ -39,6 +40,7 @@ const typeStyles: Record<KanbanTask['type'], { bg: string; text: string; label: 
     spike: { bg: 'bg-amber-100 dark:bg-amber-500/20', text: 'text-amber-700 dark:text-amber-300', label: 'Spike' },
     small_task: { bg: 'bg-slate-100 dark:bg-slate-700', text: 'text-slate-700 dark:text-slate-200', label: 'Small Task' },
     deploy: { bg: 'bg-emerald-100 dark:bg-emerald-500/20', text: 'text-emerald-600 dark:text-emerald-400', label: 'Deploy' },
+    init: { bg: 'bg-gray-100 dark:bg-gray-500/20', text: 'text-gray-600 dark:text-gray-400', label: 'Init' },
 };
 
 const priorityStyles: Record<KanbanTask['priority'], { bg: string; text: string; icon: string }> = {
@@ -307,8 +309,8 @@ export function TaskListTab({
     // Sort: in_progress first, then in_review, then todo, then done
     const sortedTasks = useMemo(() => {
         return [...filteredTasks].sort((a, b) => {
-            const statusOrder = { in_progress: 0, in_review: 1, todo: 2, done: 3 };
-            return statusOrder[a.status] - statusOrder[b.status];
+            const statusOrder: Record<string, number> = { in_progress: 0, in_review: 1, todo: 2, done: 3, archived: 4 };
+            return (statusOrder[a.status] ?? 5) - (statusOrder[b.status] ?? 5);
         });
     }, [filteredTasks]);
 

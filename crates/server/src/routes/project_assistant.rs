@@ -103,27 +103,41 @@ async fn build_project_instruction(
     user_message: &str,
     attachments: Option<&[AttachmentContent]>,
 ) -> Result<String, ApiError> {
-    let project_service = ProjectService::new(state.db.clone());
-    let requirement_service = RequirementService::new(state.db.clone());
-    let task_service = TaskService::new(state.db.clone());
+    // Run all independent data fetches concurrently.
+    let project_fut = {
+        let svc = ProjectService::new(state.db.clone());
+        async move { svc.get_project(project_id).await }
+    };
+    let requirements_fut = {
+        let svc = RequirementService::new(state.db.clone());
+        async move { svc.get_project_requirements(project_id).await }
+    };
+    let tasks_fut = {
+        let svc = TaskService::new(state.db.clone());
+        async move { svc.get_project_tasks(project_id).await }
+    };
+    let history_fut = read_assistant_log_file(session_id);
+    let settings_fut = state.settings_service.get();
 
-    let project = project_service
-        .get_project(project_id)
-        .await
+    let (project_res, requirements_res, tasks_res, history_res, settings_res) = tokio::join!(
+        project_fut,
+        requirements_fut,
+        tasks_fut,
+        history_fut,
+        settings_fut
+    );
+
+    let project = project_res
         .map_err(|e| ApiError::Internal(e.to_string()))?
         .ok_or_else(|| ApiError::NotFound("Project not found".to_string()))?;
 
-    let requirements = requirement_service
-        .get_project_requirements(project_id)
-        .await
+    let requirements = requirements_res
         .map_err(|e| ApiError::Internal(e.to_string()))?
         .into_iter()
         .take(20)
         .collect::<Vec<_>>();
 
-    let tasks = task_service
-        .get_project_tasks(project_id)
-        .await
+    let tasks = tasks_res
         .map_err(|e| ApiError::Internal(e.to_string()))?
         .into_iter()
         .take(30)
@@ -134,9 +148,7 @@ async fn build_project_instruction(
         })
         .collect::<Vec<_>>();
 
-    let bytes = read_assistant_log_file(session_id)
-        .await
-        .map_err(|e| ApiError::Internal(e.to_string()))?;
+    let bytes = history_res.map_err(|e| ApiError::Internal(e.to_string()))?;
     let history = parse_jsonl_to_messages(&bytes)
         .into_iter()
         .filter(|m| m.role != "stderr")
@@ -146,12 +158,7 @@ async fn build_project_instruction(
         })
         .collect::<Vec<_>>();
 
-    let preferred_language = state
-        .settings_service
-        .get()
-        .await
-        .ok()
-        .and_then(|s| s.preferred_agent_language);
+    let preferred_language = settings_res.ok().and_then(|s| s.preferred_agent_language);
 
     Ok(build_instruction(
         &project,
@@ -329,7 +336,10 @@ pub async fn create_session(
                 .terminate_assistant_session(active_session.id)
                 .await;
             service
-                .end_session(active_session.id, active_session.s3_log_key.as_deref().unwrap_or(""))
+                .end_session(
+                    active_session.id,
+                    active_session.s3_log_key.as_deref().unwrap_or(""),
+                )
                 .await
                 .map_err(|e| ApiError::Internal(e.to_string()))?;
 

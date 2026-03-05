@@ -21,6 +21,7 @@ const typeStyles: Record<KanbanTask['type'], { bg: string; text: string; label: 
     spike: { bg: 'bg-amber-100 dark:bg-amber-900/30', text: 'text-amber-600 dark:text-amber-400', label: 'Spike' },
     small_task: { bg: 'bg-slate-100 dark:bg-slate-800', text: 'text-slate-700 dark:text-slate-200', label: 'Small Task' },
     deploy: { bg: 'bg-emerald-100 dark:bg-emerald-900/30', text: 'text-emerald-600 dark:text-emerald-400', label: 'Deploy' },
+    init: { bg: 'bg-gray-100 dark:bg-gray-900/30', text: 'text-gray-600 dark:text-gray-400', label: 'Init' },
 };
 
 export function KanbanTab({ columns, projectId, onAddTask, onTaskClick }: KanbanTabProps) {

@@ -36,6 +36,7 @@ const statusToApi = (status: KanbanTask['status']): string => {
     in_progress: 'InProgress',
     in_review: 'InReview',
     done: 'Done',
+    archived: 'Archived',
   };
   return map[status] ?? 'Todo';
 };
@@ -57,7 +58,7 @@ export function EditTaskModal({
 }: EditTaskModalProps) {
   const [title, setTitle] = useState(task.title || '');
   const [description, setDescription] = useState(task.description || '');
-  const [type, setType] = useState<TaskTypeValue>(task.type || 'feature');
+  const [type, setType] = useState<TaskTypeValue>((task.type === 'init' ? 'chore' : task.type) || 'feature');
   const [priority, setPriority] = useState<TaskPriorityValue>(task.priority || 'medium');
   const [assignee, setAssignee] = useState('');
   const [sprint, setSprint] = useState('');
