@@ -106,22 +106,6 @@ fn push_architecture_edge(
     }
 }
 
-fn truncate_for_requirement_summary(value: &str, max_chars: usize) -> String {
-    let trimmed = value.trim();
-    if trimmed.len() <= max_chars {
-        return trimmed.to_string();
-    }
-
-    let mut cut = max_chars;
-    while cut > 0 && !trimmed.is_char_boundary(cut) {
-        cut -= 1;
-    }
-
-    let mut out = trimmed[..cut].to_string();
-    out.push_str("...");
-    out
-}
-
 fn parse_compact_stack_tokens(raw: &str) -> Vec<String> {
     raw.split(['|', ','])
         .map(str::trim)
@@ -744,71 +728,6 @@ Project type: {}
         })
     }
 
-    fn detect_stack_hints(repo_files: &[String], project_type: ProjectType) -> Vec<String> {
-        let mut hints: Vec<String> = Vec::new();
-        let push_hint = |hints: &mut Vec<String>, value: &str| {
-            if !hints
-                .iter()
-                .any(|existing| existing.eq_ignore_ascii_case(value))
-            {
-                hints.push(value.to_string());
-            }
-        };
-
-        if Self::repo_has_pattern(repo_files, &["src-tauri", "tauri.conf"]) {
-            push_hint(&mut hints, "Tauri");
-        }
-        if Self::repo_has_pattern(repo_files, &["electron", "electron-builder", "main.js"]) {
-            push_hint(&mut hints, "Electron");
-        }
-        if Self::repo_has_pattern(repo_files, &["next.config", "app/page.tsx", "pages/"]) {
-            push_hint(&mut hints, "Next.js");
-        }
-        if Self::repo_has_pattern(repo_files, &["vite.config", "index.html"]) {
-            push_hint(&mut hints, "Vite");
-        }
-        if Self::repo_has_pattern(repo_files, &["src/main.tsx", "src/app.tsx", ".tsx"]) {
-            push_hint(&mut hints, "React");
-        }
-        if Self::repo_has_pattern(repo_files, &["src/main.vue", ".vue", "nuxt.config"]) {
-            push_hint(&mut hints, "Vue");
-        }
-        if Self::repo_has_pattern(
-            repo_files,
-            &["fastapi", "pyproject.toml", "requirements.txt"],
-        ) {
-            push_hint(&mut hints, "FastAPI");
-        }
-        if Self::repo_has_pattern(repo_files, &["nestjs", "nest-cli", "main.ts"]) {
-            push_hint(&mut hints, "NestJS");
-        }
-        if Self::repo_has_pattern(repo_files, &["prisma/schema.prisma", "migrations/", ".sql"]) {
-            push_hint(&mut hints, "PostgreSQL");
-        }
-        if Self::repo_has_pattern(repo_files, &["sqlite", ".db"]) {
-            push_hint(&mut hints, "SQLite");
-        }
-        if Self::repo_has_pattern(repo_files, &["redis"]) {
-            push_hint(&mut hints, "Redis");
-        }
-        if Self::repo_has_pattern(repo_files, &["dockerfile", "docker-compose"]) {
-            push_hint(&mut hints, "Docker");
-        }
-
-        if hints.is_empty() {
-            match project_type {
-                ProjectType::Web => push_hint(&mut hints, "React + Vite"),
-                ProjectType::Mobile => push_hint(&mut hints, "React Native"),
-                ProjectType::Desktop => push_hint(&mut hints, "Tauri"),
-                ProjectType::Extension => push_hint(&mut hints, "Browser Extension"),
-                ProjectType::Api => push_hint(&mut hints, "REST API"),
-                ProjectType::Microservice => push_hint(&mut hints, "Docker"),
-            }
-        }
-
-        hints
-    }
-
     fn build_architecture_config_from_repo(
         &self,
         project_type: ProjectType,
@@ -1106,7 +1025,7 @@ Project type: {}
 
     pub(super) async fn bootstrap_project_context_after_init(
         &self,
-        task: &Task,
+        _task: &Task,
         project: &Project,
         attempt_id: Uuid,
         repo_path: &Path,

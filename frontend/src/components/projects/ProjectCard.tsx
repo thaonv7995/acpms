@@ -6,7 +6,6 @@ import type { ProjectListItem } from '../../types/project';
 interface ProjectCardProps {
   project: ProjectListItem;
   onEdit?: (projectId: string) => void;
-  onDelete?: (projectId: string) => void;
   onSettings?: (projectId: string) => void;
 }
 
@@ -73,7 +72,7 @@ function getTechStackIcon(tech: string): string {
   return TECH_STACK_ICONS[key] ?? 'code';
 }
 
-export function ProjectCard({ project, onEdit, onDelete, onSettings }: ProjectCardProps) {
+export function ProjectCard({ project, onEdit, onSettings }: ProjectCardProps) {
   const navigate = useNavigate();
   const [showMenu, setShowMenu] = useState(false);
   const statusColors = statusColorClasses[project.statusColor];
@@ -87,7 +86,7 @@ export function ProjectCard({ project, onEdit, onDelete, onSettings }: ProjectCa
     setShowMenu(!showMenu);
   };
 
-  const handleMenuAction = (action: 'edit' | 'settings' | 'delete', e: React.MouseEvent) => {
+  const handleMenuAction = (action: 'edit' | 'settings', e: React.MouseEvent) => {
     e.stopPropagation();
     setShowMenu(false);
 
@@ -98,9 +97,6 @@ export function ProjectCard({ project, onEdit, onDelete, onSettings }: ProjectCa
       case 'settings':
         onSettings?.(project.id);
         navigate(`/projects/${project.id}?tab=settings`);
-        break;
-      case 'delete':
-        onDelete?.(project.id);
         break;
     }
   };
@@ -152,14 +148,6 @@ export function ProjectCard({ project, onEdit, onDelete, onSettings }: ProjectCa
                 >
                   <span className="material-symbols-outlined text-[18px]">settings</span>
                   Settings
-                </button>
-                <hr className="my-1 border-border" />
-                <button
-                  onClick={(e) => handleMenuAction('delete', e)}
-                  className="w-full px-4 py-2 text-left text-sm text-red-600 dark:text-red-400 hover:bg-red-50 dark:hover:bg-red-500/20 flex items-center gap-2"
-                >
-                  <span className="material-symbols-outlined text-[18px]">delete</span>
-                  Delete
                 </button>
               </div>
             </>

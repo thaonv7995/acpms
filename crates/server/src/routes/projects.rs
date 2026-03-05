@@ -1,5 +1,7 @@
 use acpms_db::{models::*, PgPool};
 use acpms_executors::ExecutorOrchestrator;
+use acpms_github::GitHubClient;
+use acpms_gitlab::GitLabClient;
 use acpms_services::{ProjectService, RepositoryAccessService, SystemSettingsService, TaskService};
 use axum::extract::{Path, Query, State};
 use axum::http::StatusCode;
@@ -7,6 +9,7 @@ use axum::Json;
 use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
 use std::collections::{BTreeSet, HashSet};
+use std::path::{Component, Path as FsPath};
 use std::sync::{Arc, OnceLock};
 use std::time::Duration;
 use tokio::sync::Semaphore;
@@ -46,6 +49,15 @@ pub struct ProjectsQuery {
     pub before_id: Option<Uuid>,
     /// Filter by project name (case-insensitive substring match)
     pub search: Option<String>,
+}
+
+#[derive(Debug, Default, Deserialize, IntoParams)]
+#[into_params(parameter_in = Query)]
+pub struct DeleteProjectQuery {
+    #[serde(default)]
+    pub delete_local_folder: bool,
+    #[serde(default)]
+    pub delete_git_repo: bool,
 }
 
 #[derive(Debug, Serialize, ToSchema)]
@@ -1230,7 +1242,8 @@ pub async fn create_project_fork(
     path = "/api/v1/projects/{id}",
     tag = "Projects",
     params(
-        ("id" = Uuid, Path, description = "Project ID")
+        ("id" = Uuid, Path, description = "Project ID"),
+        DeleteProjectQuery
     ),
     responses(
         (status = 200, description = "Delete project", body = EmptyResponse),
@@ -1240,14 +1253,36 @@ pub async fn create_project_fork(
 )]
 pub async fn delete_project(
     auth_user: AuthUser,
-    State(pool): State<PgPool>,
+    State(state): State<AppState>,
     Path(project_id): Path<Uuid>,
+    Query(query): Query<DeleteProjectQuery>,
 ) -> ApiResult<Json<ApiResponse<()>>> {
     // Check permission (ManageProject = Owner, Admin)
-    RbacChecker::check_permission(auth_user.id, project_id, Permission::ManageProject, &pool)
-        .await?;
+    RbacChecker::check_permission(
+        auth_user.id,
+        project_id,
+        Permission::ManageProject,
+        &state.db,
+    )
+    .await?;
 
-    let service = ProjectService::new(pool.clone());
+    let service = ProjectService::new(state.db.clone());
+    let project = service
+        .get_project(project_id)
+        .await
+        .map_err(|e| ApiError::Internal(e.to_string()))?
+        .ok_or_else(|| ApiError::NotFound("Project not found".to_string()))?;
+
+    if query.delete_git_repo {
+        let settings_service = SystemSettingsService::new(state.db.clone())
+            .map_err(|e| ApiError::Internal(e.to_string()))?;
+        delete_remote_repository_if_requested(&settings_service, &project).await?;
+    }
+
+    if query.delete_local_folder {
+        delete_local_workspace_folder_if_requested(&state, &project).await?;
+    }
+
     service
         .delete_project(project_id)
         .await
@@ -1256,6 +1291,193 @@ pub async fn delete_project(
     let response = ApiResponse::success((), "Project deleted successfully");
 
     Ok(Json(response))
+}
+
+async fn delete_local_workspace_folder_if_requested(
+    state: &AppState,
+    project: &Project,
+) -> Result<(), ApiError> {
+    let repo_relative_path =
+        project_repo_relative_path(project.id, &project.metadata, &project.name);
+    if !is_safe_relative_repo_path(repo_relative_path.as_path()) {
+        return Err(ApiError::BadRequest(
+            "Project repository path is invalid. Refusing to delete local folder.".to_string(),
+        ));
+    }
+
+    let worktrees_base = state.worktrees_path.read().await.clone();
+    let repo_path = worktrees_base.join(repo_relative_path);
+
+    match tokio::fs::metadata(&repo_path).await {
+        Ok(metadata) => {
+            if !metadata.is_dir() {
+                return Err(ApiError::BadRequest(format!(
+                    "Resolved local workspace path is not a directory: {}",
+                    repo_path.display()
+                )));
+            }
+        }
+        Err(err) if err.kind() == std::io::ErrorKind::NotFound => return Ok(()),
+        Err(err) => {
+            return Err(ApiError::Internal(format!(
+                "Failed to inspect local workspace folder '{}': {}",
+                repo_path.display(),
+                err
+            )))
+        }
+    }
+
+    tokio::fs::remove_dir_all(&repo_path).await.map_err(|err| {
+        ApiError::Internal(format!(
+            "Failed to delete local workspace folder '{}': {}",
+            repo_path.display(),
+            err
+        ))
+    })?;
+
+    Ok(())
+}
+
+async fn delete_remote_repository_if_requested(
+    settings_service: &SystemSettingsService,
+    project: &Project,
+) -> Result<(), ApiError> {
+    let repository_url = project
+        .repository_url
+        .as_deref()
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+        .ok_or_else(|| {
+            ApiError::BadRequest(
+                "Project has no linked repository URL to delete remotely.".to_string(),
+            )
+        })?;
+
+    let pat = settings_service
+        .get_pat_for_repo(repository_url)
+        .await
+        .map_err(|e| ApiError::Internal(e.to_string()))?
+        .filter(|value| !value.trim().is_empty())
+        .ok_or_else(|| {
+            ApiError::BadRequest(
+                "No token configured for this repository host. Configure token in Settings first."
+                    .to_string(),
+            )
+        })?;
+
+    match infer_repository_provider(project, repository_url) {
+        RepositoryProvider::Gitlab => {
+            let settings = settings_service
+                .get()
+                .await
+                .map_err(|e| ApiError::Internal(e.to_string()))?;
+            let client = GitLabClient::new(&settings.gitlab_url, &pat)
+                .map_err(|e| ApiError::Internal(e.to_string()))?;
+            let path_with_namespace =
+                parse_gitlab_path_with_namespace(repository_url).ok_or_else(|| {
+                    ApiError::BadRequest(
+                        "Invalid GitLab repository URL. Cannot resolve repository path."
+                            .to_string(),
+                    )
+                })?;
+            let remote_project = client
+                .get_project_by_path(&path_with_namespace)
+                .await
+                .map_err(|e| {
+                    ApiError::BadRequest(format!("Failed to resolve GitLab repository: {}", e))
+                })?;
+            client
+                .delete_project(remote_project.id)
+                .await
+                .map_err(|e| {
+                    ApiError::BadRequest(format!("Failed to delete GitLab repository: {}", e))
+                })?;
+        }
+        RepositoryProvider::Github => {
+            let (owner, repo) = parse_github_owner_repo(repository_url).ok_or_else(|| {
+                ApiError::BadRequest(
+                    "Invalid GitHub repository URL. Expected format owner/repo.".to_string(),
+                )
+            })?;
+            let host = parse_repository_host(repository_url).ok_or_else(|| {
+                ApiError::BadRequest(
+                    "Repository URL host is missing. Cannot delete GitHub repository.".to_string(),
+                )
+            })?;
+            let base_url = format!("https://{}", host);
+            let client = GitHubClient::new(&base_url, &pat)
+                .map_err(|e| ApiError::Internal(e.to_string()))?;
+            client.delete_repository(&owner, &repo).await.map_err(|e| {
+                ApiError::BadRequest(format!("Failed to delete GitHub repository: {}", e))
+            })?;
+        }
+        RepositoryProvider::Unknown => {
+            return Err(ApiError::BadRequest(
+                "Cannot determine repository provider for remote deletion.".to_string(),
+            ))
+        }
+    }
+
+    Ok(())
+}
+
+fn is_safe_relative_repo_path(path: &FsPath) -> bool {
+    if path.is_absolute() {
+        return false;
+    }
+
+    path.components()
+        .all(|component| matches!(component, Component::CurDir | Component::Normal(_)))
+}
+
+fn infer_repository_provider(project: &Project, repository_url: &str) -> RepositoryProvider {
+    if project.repository_context.provider != RepositoryProvider::Unknown {
+        return project.repository_context.provider;
+    }
+
+    let host = parse_repository_host(repository_url)
+        .unwrap_or_default()
+        .to_ascii_lowercase();
+
+    if host.contains("github") {
+        RepositoryProvider::Github
+    } else if host.contains("gitlab") {
+        RepositoryProvider::Gitlab
+    } else {
+        RepositoryProvider::Unknown
+    }
+}
+
+fn parse_repository_host(repository_url: &str) -> Option<String> {
+    if let Ok(parsed) = url::Url::parse(repository_url) {
+        return parsed.host_str().map(|value| value.to_string());
+    }
+
+    let (left, _) = repository_url.split_once(':')?;
+    let (_, host) = left.rsplit_once('@')?;
+    Some(host.trim().to_string())
+}
+
+fn parse_gitlab_path_with_namespace(repository_url: &str) -> Option<String> {
+    let normalized = normalize_repo_url_for_comparison(repository_url);
+    let (_, path) = normalized.split_once('/')?;
+    let trimmed = path.trim().trim_matches('/');
+    if trimmed.is_empty() {
+        None
+    } else {
+        Some(trimmed.to_string())
+    }
+}
+
+fn parse_github_owner_repo(repository_url: &str) -> Option<(String, String)> {
+    let path = parse_gitlab_path_with_namespace(repository_url)?;
+    let mut segments = path.split('/').filter(|segment| !segment.is_empty());
+    let owner = segments.next()?.to_string();
+    let repo = segments.next()?.to_string();
+    if segments.next().is_some() {
+        return None;
+    }
+    Some((owner, repo))
 }
 
 /// Response for sync repository

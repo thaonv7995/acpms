@@ -1,11 +1,11 @@
 // ProjectsPage - Complete with working search, filters, and actions
-import { useState, useCallback, useRef, useEffect } from 'react';
+import { useState, useCallback, useRef, useEffect, useMemo } from 'react';
 import { createPortal } from 'react-dom';
 import { AppShell } from '../components/layout/AppShell';
 import { ProjectCard } from '../components/projects';
-import { CreateProjectModal, EditProjectModal, ConfirmModal } from '../components/modals';
+import { CreateProjectModal, EditProjectModal } from '../components/modals';
 import { useProjects } from '../hooks/useProjects';
-import { deleteProject, updateProject } from '../api/projects';
+import { updateProject } from '../api/projects';
 import type { ProjectListItem } from '../types/project';
 
 // Filter Dropdown Component
@@ -227,6 +227,7 @@ const techStackOptions = [
 
 export function ProjectsPage() {
   const {
+    projects,
     filteredProjects,
     loading,
     error,
@@ -245,10 +246,33 @@ export function ProjectsPage() {
   // Modal states
   const [showCreateModal, setShowCreateModal] = useState(false);
   const [showEditModal, setShowEditModal] = useState(false);
-  const [showDeleteConfirm, setShowDeleteConfirm] = useState(false);
   const [selectedProject, setSelectedProject] = useState<ProjectListItem | null>(null);
   const [actionMessage, setActionMessage] = useState('');
-  const [isDeletingProject, setIsDeletingProject] = useState(false);
+
+  const availableTechStackOptions = useMemo(() => {
+    const merged = [...techStackOptions];
+    const knownValues = new Set(merged.map((option) => option.value.toLowerCase()));
+
+    for (const project of projects) {
+      for (const stack of project.techStack) {
+        const normalized = stack.toLowerCase();
+        if (!knownValues.has(normalized)) {
+          merged.push({ value: stack, label: stack });
+          knownValues.add(normalized);
+        }
+      }
+    }
+
+    return merged;
+  }, [projects]);
+
+  const statusLabelByValue = useMemo(() => {
+    return new Map(statusOptions.map((option) => [option.value, option.label]));
+  }, []);
+
+  const techLabelByValue = useMemo(() => {
+    return new Map(availableTechStackOptions.map((option) => [option.value, option.label]));
+  }, [availableTechStackOptions]);
 
   const handleEdit = useCallback((projectId: string) => {
     const project = filteredProjects.find(p => p.id === projectId);
@@ -271,33 +295,6 @@ export function ProjectsPage() {
       setSelectedProject(null);
     } catch (err) {
       throw err instanceof Error ? err : new Error('Failed to update project');
-    }
-  };
-
-  const handleDelete = useCallback((projectId: string) => {
-    const project = filteredProjects.find(p => p.id === projectId);
-    if (project) {
-      setSelectedProject(project);
-      setShowDeleteConfirm(true);
-    }
-  }, [filteredProjects]);
-
-  const handleConfirmDelete = async () => {
-    if (!selectedProject) return;
-
-    setIsDeletingProject(true);
-    try {
-      await deleteProject(selectedProject.id);
-      refetch();
-      setActionMessage(`Project "${selectedProject.name}" deleted!`);
-      setTimeout(() => setActionMessage(''), 3000);
-      setShowDeleteConfirm(false);
-      setSelectedProject(null);
-    } catch (err) {
-      setActionMessage(err instanceof Error ? err.message : 'Failed to delete project');
-      setTimeout(() => setActionMessage(''), 3000);
-    } finally {
-      setIsDeletingProject(false);
     }
   };
 
@@ -414,51 +411,109 @@ export function ProjectsPage() {
           </div>
 
           {/* Filters */}
-          <div className="flex flex-col lg:flex-row gap-3 mb-8 items-stretch lg:items-center">
-            <div className="flex-1">
-              <div className="relative group h-10">
-                <div className="absolute inset-y-0 left-0 pl-3 flex items-center pointer-events-none text-muted-foreground">
-                  <span className="material-symbols-outlined text-[20px]">search</span>
+          <div className="mb-8 flex flex-col gap-3">
+            <div className="flex flex-col lg:flex-row gap-3 items-stretch lg:items-center">
+              <div className="flex-1">
+                <div className="relative group h-10">
+                  <div className="absolute inset-y-0 left-0 pl-3 flex items-center pointer-events-none text-muted-foreground">
+                    <span className="material-symbols-outlined text-[20px]">search</span>
+                  </div>
+                  <input
+                    type="text"
+                    value={searchQuery}
+                    onChange={(e) => setSearchQuery(e.target.value)}
+                    className="block w-full h-full pl-10 pr-10 rounded-lg border border-border bg-card text-card-foreground placeholder-muted-foreground focus:outline-none focus:ring-2 focus:ring-primary/20 focus:border-primary transition-all text-sm"
+                    placeholder="Search projects by name, ID, or description..."
+                  />
+                  {searchQuery && (
+                    <button
+                      onClick={() => setSearchQuery('')}
+                      className="absolute inset-y-0 right-0 pr-3 flex items-center text-muted-foreground hover:text-card-foreground transition-colors"
+                    >
+                      <span className="material-symbols-outlined text-[18px]">close</span>
+                    </button>
+                  )}
                 </div>
-                <input
-                  type="text"
-                  value={searchQuery}
-                  onChange={(e) => setSearchQuery(e.target.value)}
-                  className="block w-full h-full pl-10 pr-10 rounded-lg border border-border bg-card text-card-foreground placeholder-muted-foreground focus:outline-none focus:ring-2 focus:ring-primary/20 focus:border-primary transition-all text-sm"
-                  placeholder="Search projects by name, ID, or description..."
+              </div>
+              <div className="flex items-center gap-2 overflow-x-auto pb-2 lg:pb-0 no-scrollbar">
+                <FilterDropdown
+                  label="Status"
+                  options={statusOptions}
+                  selected={filters.status}
+                  onSelect={(values) => setFilters((prev) => ({ ...prev, status: values }))}
                 />
-                {searchQuery && (
+                <FilterDropdown
+                  label="Tech Stack"
+                  options={availableTechStackOptions}
+                  selected={filters.techStack}
+                  onSelect={(values) => setFilters((prev) => ({ ...prev, techStack: values }))}
+                />
+                {(filters.status.length > 0 || filters.techStack.length > 0) && (
                   <button
-                    onClick={() => setSearchQuery('')}
-                    className="absolute inset-y-0 right-0 pr-3 flex items-center text-muted-foreground hover:text-card-foreground transition-colors"
+                    onClick={() => setFilters({ status: [], techStack: [], hasAgent: null })}
+                    className="h-10 px-3 text-sm text-muted-foreground hover:text-card-foreground transition-colors whitespace-nowrap flex items-center"
                   >
-                    <span className="material-symbols-outlined text-[18px]">close</span>
+                    Clear all
                   </button>
                 )}
               </div>
             </div>
-            <div className="flex items-center gap-2 overflow-x-auto pb-2 lg:pb-0 no-scrollbar">
-              <FilterDropdown
-                label="Status"
-                options={statusOptions}
-                selected={filters.status}
-                onSelect={(values) => setFilters({ ...filters, status: values })}
-              />
-              <FilterDropdown
-                label="Tech Stack"
-                options={techStackOptions}
-                selected={filters.techStack}
-                onSelect={(values) => setFilters({ ...filters, techStack: values })}
-              />
-              {(filters.status.length > 0 || filters.techStack.length > 0) && (
-                <button
-                  onClick={() => setFilters({ status: [], techStack: [], hasAgent: null })}
-                  className="h-10 px-3 text-sm text-muted-foreground hover:text-card-foreground transition-colors whitespace-nowrap flex items-center"
-                >
-                  Clear all
-                </button>
-              )}
-            </div>
+
+            {(filters.status.length > 0 || filters.techStack.length > 0) && (
+              <div className="flex flex-wrap items-center gap-2">
+                <span className="text-[11px] uppercase tracking-wide text-muted-foreground font-semibold">
+                  Active filters
+                </span>
+
+                {filters.status.map((status) => (
+                  <span
+                    key={`status-${status}`}
+                    className="inline-flex items-center gap-1.5 px-2.5 py-1 rounded-full bg-blue-500/10 text-blue-700 dark:text-blue-300 border border-blue-500/30 text-xs"
+                  >
+                    <span className="font-semibold">Status:</span>
+                    <span>{statusLabelByValue.get(status) || status}</span>
+                    <button
+                      type="button"
+                      onClick={() =>
+                        setFilters((prev) => ({
+                          ...prev,
+                          status: prev.status.filter((item) => item !== status),
+                        }))
+                      }
+                      className="inline-flex items-center justify-center rounded hover:bg-blue-500/20 transition-colors"
+                      aria-label={`Remove status filter ${status}`}
+                      title="Remove filter"
+                    >
+                      <span className="material-symbols-outlined text-[14px]">close</span>
+                    </button>
+                  </span>
+                ))}
+
+                {filters.techStack.map((tech) => (
+                  <span
+                    key={`tech-${tech}`}
+                    className="inline-flex items-center gap-1.5 px-2.5 py-1 rounded-full bg-emerald-500/10 text-emerald-700 dark:text-emerald-300 border border-emerald-500/30 text-xs"
+                  >
+                    <span className="font-semibold">Tech:</span>
+                    <span>{techLabelByValue.get(tech) || tech}</span>
+                    <button
+                      type="button"
+                      onClick={() =>
+                        setFilters((prev) => ({
+                          ...prev,
+                          techStack: prev.techStack.filter((item) => item !== tech),
+                        }))
+                      }
+                      className="inline-flex items-center justify-center rounded hover:bg-emerald-500/20 transition-colors"
+                      aria-label={`Remove tech stack filter ${tech}`}
+                      title="Remove filter"
+                    >
+                      <span className="material-symbols-outlined text-[14px]">close</span>
+                    </button>
+                  </span>
+                ))}
+              </div>
+            )}
           </div>
 
           {/* Error */}
@@ -480,7 +535,6 @@ export function ProjectsPage() {
                     key={project.id}
                     project={project}
                     onEdit={handleEdit}
-                    onDelete={handleDelete}
                   />
                 ))}
               </div>
@@ -533,17 +587,6 @@ export function ProjectsPage() {
         onClose={() => { setShowEditModal(false); setSelectedProject(null); }}
         project={selectedProject}
         onSave={handleSaveEdit}
-      />
-
-      <ConfirmModal
-        isOpen={showDeleteConfirm}
-        onClose={() => { setShowDeleteConfirm(false); setSelectedProject(null); }}
-        onConfirm={handleConfirmDelete}
-        isLoading={isDeletingProject}
-        title="Delete Project"
-        message={`Are you sure you want to delete "${selectedProject?.name}"? This action cannot be undone.`}
-        confirmText="Delete Project"
-        confirmVariant="danger"
       />
     </AppShell>
   );

@@ -1,4 +1,4 @@
-import { useState, useMemo, useEffect } from 'react';
+import { useState, useMemo, useEffect, type Dispatch, type SetStateAction } from 'react';
 import { useQuery } from '@tanstack/react-query';
 import { getProjects, type ProjectsQueryParams } from '../api/projects';
 import type { ProjectListItem } from '../types/project';
@@ -13,7 +13,7 @@ interface UseProjectsResult {
     searchQuery: string;
     setSearchQuery: (query: string) => void;
     filters: ProjectFilters;
-    setFilters: (filters: ProjectFilters) => void;
+    setFilters: Dispatch<SetStateAction<ProjectFilters>>;
     filteredProjects: ProjectListItem[];
     refetch: () => void;
     page: number;
@@ -111,6 +111,28 @@ function mapProjectDtoToListItem(dto: ProjectWithRepositoryContext): ProjectList
     };
 }
 
+function normalizeFilterToken(value: string): string {
+    return value.toLowerCase().replace(/[^a-z0-9]/g, '');
+}
+
+function techStackMatchesFilter(projectTech: string, selectedTechFilters: string[]): boolean {
+    const projectToken = normalizeFilterToken(projectTech);
+    if (!projectToken) return false;
+
+    return selectedTechFilters.some((selected) => {
+        const selectedToken = normalizeFilterToken(selected);
+        if (!selectedToken) return false;
+        if (projectToken === selectedToken) return true;
+
+        // Avoid noisy matches for very short tokens (e.g. "go" matching "mongodb").
+        if (projectToken.length < 3 || selectedToken.length < 3) {
+            return false;
+        }
+
+        return projectToken.includes(selectedToken) || selectedToken.includes(projectToken);
+    });
+}
+
 export function useProjects(options?: { limit?: number }): UseProjectsResult {
     const defaultLimit = options?.limit || 9;
 
@@ -128,10 +150,19 @@ export function useProjects(options?: { limit?: number }): UseProjectsResult {
         return () => clearTimeout(timer);
     }, [searchQuery]);
 
+    // Reset page on filter change
+    useEffect(() => {
+        setPage(1);
+    }, [filters.status.join('|'), filters.techStack.join('|')]);
+
+    const hasActiveClientFilters = filters.status.length > 0 || filters.techStack.length > 0;
+    const effectiveQueryPage = hasActiveClientFilters ? 1 : page;
+    const effectiveQueryLimit = hasActiveClientFilters ? Math.max(defaultLimit, 500) : defaultLimit;
+
     // Build query params
     const queryParams: ProjectsQueryParams = {
-        page,
-        limit: defaultLimit,
+        page: effectiveQueryPage,
+        limit: effectiveQueryLimit,
     };
     if (debouncedSearch.trim()) {
         queryParams.search = debouncedSearch.trim();
@@ -144,7 +175,13 @@ export function useProjects(options?: { limit?: number }): UseProjectsResult {
         error: queryError,
         refetch,
     } = useQuery({
-        queryKey: ['/api/v1/projects', page, defaultLimit, debouncedSearch],
+        queryKey: [
+            '/api/v1/projects',
+            effectiveQueryPage,
+            effectiveQueryLimit,
+            debouncedSearch,
+            hasActiveClientFilters,
+        ],
         queryFn: () => getProjects(queryParams),
         staleTime: 5 * 60 * 1000,
     });
@@ -157,9 +194,9 @@ export function useProjects(options?: { limit?: number }): UseProjectsResult {
             : [];
     const metadata = (body?.metadata ?? {}) as Record<string, unknown>;
 
-    const totalPages: number = Number(metadata.total_pages) || 1;
-    const totalCount: number = Number(metadata.total_count) || 0;
-    const hasMore = !!metadata.has_more;
+    const serverTotalPages: number = Number(metadata.total_pages) || 1;
+    const serverTotalCount: number = Number(metadata.total_count) || apiProjects.length;
+    const serverHasMore = !!metadata.has_more;
 
     // Map backend projects to UI format
     const projects = useMemo(() => {
@@ -167,30 +204,47 @@ export function useProjects(options?: { limit?: number }): UseProjectsResult {
     }, [apiProjects]);
 
     // Client-side filtering for status/tech stack
-    const filteredProjects = useMemo(() => {
+    const filteredProjectPool = useMemo(() => {
         let result = [...projects];
 
         // Status filter
         if (filters.status.length > 0) {
-            result = result.filter(p => filters.status.includes(p.status));
+            const selectedStatuses = new Set(filters.status.map((status) => status.toLowerCase()));
+            result = result.filter((project) => selectedStatuses.has(project.status.toLowerCase()));
         }
 
         // Tech stack filter
         if (filters.techStack.length > 0) {
-            result = result.filter(p =>
-                p.techStack.some((tech: string) => filters.techStack.includes(tech))
+            result = result.filter((project) =>
+                project.techStack.some((tech) => techStackMatchesFilter(tech, filters.techStack))
             );
         }
 
         return result;
     }, [projects, filters]);
 
-    // Reset page if filtering empty results
-    useEffect(() => {
-        if (filteredProjects.length === 0 && page > 1 && !isLoading) {
-            setPage(1);
+    const totalCount: number = hasActiveClientFilters ? filteredProjectPool.length : serverTotalCount;
+    const totalPages: number = hasActiveClientFilters
+        ? Math.max(1, Math.ceil(totalCount / defaultLimit))
+        : serverTotalPages;
+    const hasMore: boolean = hasActiveClientFilters ? page < totalPages : serverHasMore;
+
+    const filteredProjects = useMemo(() => {
+        if (!hasActiveClientFilters) {
+            return filteredProjectPool;
         }
-    }, [filteredProjects.length, page, isLoading]);
+
+        const start = (page - 1) * defaultLimit;
+        const end = start + defaultLimit;
+        return filteredProjectPool.slice(start, end);
+    }, [filteredProjectPool, hasActiveClientFilters, page, defaultLimit]);
+
+    // Keep page in valid range after filter changes
+    useEffect(() => {
+        if (page > totalPages) {
+            setPage(totalPages);
+        }
+    }, [page, totalPages]);
 
     return {
         projects,

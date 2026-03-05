@@ -94,6 +94,21 @@ impl GitLabClient {
             .context("Failed to parse create GitLab fork response")
     }
 
+    pub async fn delete_project(&self, project_id: u64) -> Result<()> {
+        let url = self.base_url.join(&format!("projects/{}", project_id))?;
+        let resp = self.client.delete(url).send().await?;
+
+        if !resp.status().is_success() {
+            anyhow::bail!(
+                "Failed to delete GitLab project: {} - {}",
+                resp.status(),
+                resp.text().await?
+            );
+        }
+
+        Ok(())
+    }
+
     pub async fn create_branch(
         &self,
         project_id: u64,

@@ -20,6 +20,7 @@ interface SettingsTabProps {
 export function SettingsTab({ projectId, projectName, repositoryUrl, requireReview, onRefresh }: SettingsTabProps) {
     const { members, setMembers, loading: membersLoading } = useProjectMembers(projectId);
     const currentUser = getCurrentUser();
+    const hasRepositoryLink = !!repositoryUrl?.trim();
     const canLinkGitLab = isSystemAdmin(currentUser);
     const canManageMembers = currentUser && members.some(
         (m) => m.id === currentUser.id && m.roles.includes('owner')
@@ -34,6 +35,8 @@ export function SettingsTab({ projectId, projectName, repositoryUrl, requireRevi
     const [showGitLabModal, setShowGitLabModal] = useState(false);
     const [showDeleteConfirm, setShowDeleteConfirm] = useState(false);
     const [deleteConfirmText, setDeleteConfirmText] = useState('');
+    const [deleteLocalFolder, setDeleteLocalFolder] = useState(false);
+    const [deleteGitRepo, setDeleteGitRepo] = useState(false);
     const [deleting, setDeleting] = useState(false);
     const [deleteError, setDeleteError] = useState('');
     const [syncing, setSyncing] = useState(false);
@@ -59,7 +62,10 @@ export function SettingsTab({ projectId, projectName, repositoryUrl, requireRevi
         setDeleting(true);
         setDeleteError('');
         try {
-            await deleteProject(projectId);
+            await deleteProject(projectId, {
+                deleteLocalFolder,
+                deleteGitRepo,
+            });
             navigate('/projects');
         } catch (err) {
             setDeleteError(err instanceof Error ? err.message : 'Failed to delete project');
@@ -228,7 +234,13 @@ export function SettingsTab({ projectId, projectName, repositoryUrl, requireRevi
 
                 {!showDeleteConfirm ? (
                     <button
-                        onClick={() => setShowDeleteConfirm(true)}
+                        onClick={() => {
+                            setShowDeleteConfirm(true);
+                            setDeleteConfirmText('');
+                            setDeleteLocalFolder(false);
+                            setDeleteGitRepo(false);
+                            setDeleteError('');
+                        }}
                         className="px-4 py-2 bg-red-100 dark:bg-red-500/20 text-red-600 dark:text-red-400 text-sm font-medium rounded-lg border border-red-200 dark:border-red-500/30 hover:bg-red-200 dark:hover:bg-red-500/30 transition-colors"
                     >
                         Delete Project
@@ -238,6 +250,39 @@ export function SettingsTab({ projectId, projectName, repositoryUrl, requireRevi
                         <p className="text-sm text-red-700 dark:text-red-300">
                             This will permanently delete <strong>{projectName}</strong> and all its tasks, attempts, and logs.
                         </p>
+                        <div className="space-y-2 rounded-lg border border-red-200/70 dark:border-red-500/30 bg-card/70 p-3">
+                            <label className="flex items-start gap-2 text-sm text-card-foreground cursor-pointer">
+                                <input
+                                    type="checkbox"
+                                    checked={deleteLocalFolder}
+                                    onChange={(e) => setDeleteLocalFolder(e.target.checked)}
+                                    className="mt-0.5 size-4 rounded border-border bg-card text-red-600 focus:ring-red-500"
+                                />
+                                <span>
+                                    Also delete local workspace folder
+                                    <span className="block text-xs text-muted-foreground">
+                                        Remove cloned code/worktree on this machine.
+                                    </span>
+                                </span>
+                            </label>
+                            <label className="flex items-start gap-2 text-sm text-card-foreground cursor-pointer">
+                                <input
+                                    type="checkbox"
+                                    checked={deleteGitRepo}
+                                    onChange={(e) => setDeleteGitRepo(e.target.checked)}
+                                    disabled={!hasRepositoryLink}
+                                    className="mt-0.5 size-4 rounded border-border bg-card text-red-600 focus:ring-red-500"
+                                />
+                                <span>
+                                    Also delete remote Git repository
+                                    <span className="block text-xs text-muted-foreground">
+                                        {hasRepositoryLink
+                                            ? 'Permanently removes the repository from Git provider.'
+                                            : 'No linked repository found for this project.'}
+                                    </span>
+                                </span>
+                            </label>
+                        </div>
                         <div>
                             <label className="block text-xs text-red-600 dark:text-red-400 mb-1">
                                 Type <strong>{projectName}</strong> to confirm:
@@ -265,6 +310,8 @@ export function SettingsTab({ projectId, projectName, repositoryUrl, requireRevi
                                 onClick={() => {
                                     setShowDeleteConfirm(false);
                                     setDeleteConfirmText('');
+                                    setDeleteLocalFolder(false);
+                                    setDeleteGitRepo(false);
                                     setDeleteError('');
                                 }}
                                 className="px-4 py-2 bg-muted hover:bg-muted/80 text-card-foreground text-sm font-medium rounded-lg transition-colors"

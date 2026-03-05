@@ -173,6 +173,26 @@ export async function updateProject(
   return apiPut<ProjectWithRepositoryContext>(`${API_PREFIX}/projects/${id}`, data);
 }
 
-export async function deleteProject(id: string): Promise<void> {
-  return apiDelete(`${API_PREFIX}/projects/${id}`);
+export interface DeleteProjectOptions {
+  deleteLocalFolder?: boolean;
+  deleteGitRepo?: boolean;
+}
+
+export async function deleteProject(id: string, options?: DeleteProjectOptions): Promise<void> {
+  const query = new URLSearchParams();
+
+  if (options?.deleteLocalFolder) {
+    query.set('delete_local_folder', 'true');
+  }
+
+  if (options?.deleteGitRepo) {
+    query.set('delete_git_repo', 'true');
+  }
+
+  const suffix = query.toString();
+  const endpoint = suffix
+    ? `${API_PREFIX}/projects/${id}?${suffix}`
+    : `${API_PREFIX}/projects/${id}`;
+
+  return apiDelete(endpoint);
 }

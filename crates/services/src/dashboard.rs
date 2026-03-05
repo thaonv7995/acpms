@@ -564,6 +564,11 @@ impl DashboardService {
             JOIN projects p ON p.id = t.project_id
             WHERE t.status::text IN ('todo', 'in_review')
               AND t.created_at >= NOW() - INTERVAL '30 days'
+              AND NOT (
+                  t.title ILIKE '[breakdown]%'
+                  OR COALESCE(t.metadata->>'breakdown_mode', '') = 'ai_support'
+                  OR COALESCE(t.metadata->>'breakdown_kind', '') = 'analysis_session'
+              )
               AND (t.assigned_to = $3 OR t.assigned_to IS NULL)
               AND (
                     $1

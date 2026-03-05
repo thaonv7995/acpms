@@ -244,6 +244,22 @@ impl GitHubClient {
             .await
             .context("Failed to parse close PR response")
     }
+
+    /// Delete a repository.
+    pub async fn delete_repository(&self, owner: &str, repo: &str) -> Result<()> {
+        let url = self.base_url.join(&format!("repos/{}/{}", owner, repo))?;
+        let resp = self.client.delete(url).send().await?;
+
+        if !resp.status().is_success() {
+            anyhow::bail!(
+                "Failed to delete repository: {} - {}",
+                resp.status(),
+                resp.text().await?
+            );
+        }
+
+        Ok(())
+    }
 }
 
 #[derive(Debug, serde::Deserialize, Clone)]
