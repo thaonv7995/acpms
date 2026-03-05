@@ -27,6 +27,12 @@ use crate::AppState;
 use utoipa::{IntoParams, ToSchema};
 
 fn task_require_review(task: &Task, settings: &ProjectSettings) -> bool {
+    // Analysis-only tasks (e.g. requirement breakdown sessions) should not enter manual review.
+    // They are non-execution support tasks and should complete automatically.
+    if task_allows_analysis_only_attempt(task) {
+        return false;
+    }
+
     task.metadata
         .get("execution")
         .and_then(|v| v.get("require_review"))

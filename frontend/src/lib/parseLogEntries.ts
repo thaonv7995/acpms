@@ -3,7 +3,11 @@
  * Consolidates normalizeLogToEntry + combineTextFragments into one parse flow.
  */
 import type { TimelineEntry } from '@/types/timeline-log';
-import { normalizeLogToEntry, type AgentLogLike } from './normalizeLogToEntry';
+import {
+  formatBreakdownTaskContent,
+  normalizeLogToEntry,
+  type AgentLogLike,
+} from './normalizeLogToEntry';
 import { combineTextFragments } from './timeline-fragments';
 
 /**
@@ -12,5 +16,18 @@ import { combineTextFragments } from './timeline-fragments';
  */
 export function parseLogEntries(rawLogs: AgentLogLike[]): TimelineEntry[] {
   const entries = rawLogs.flatMap((log, index) => normalizeLogToEntry(log, index));
-  return combineTextFragments(entries);
+  const combined = combineTextFragments(entries);
+  return combined.map((entry) => {
+    if (entry.type !== 'assistant_message') {
+      return entry;
+    }
+    const formattedBreakdown = formatBreakdownTaskContent(entry.content);
+    if (!formattedBreakdown) {
+      return entry;
+    }
+    return {
+      ...entry,
+      content: formattedBreakdown,
+    };
+  });
 }

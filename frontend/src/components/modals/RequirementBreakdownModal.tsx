@@ -5,7 +5,13 @@ import type {
     RequirementBreakdownSprintAssignmentMode,
 } from '@/api/requirements';
 import { confirmRequirementBreakdownManual } from '@/api/requirements';
-import { createTask, getTaskAttachmentUploadUrl, getTaskAttempts as getTaskAttemptsLite, getTasks } from '@/api/tasks';
+import {
+    createTask,
+    getTaskAttachmentUploadUrl,
+    getTaskAttempts as getTaskAttemptsLite,
+    getTasks,
+    updateTaskMetadata,
+} from '@/api/tasks';
 import {
     cancelAttempt,
     getAttempt,
@@ -686,9 +692,31 @@ export function RequirementBreakdownModal({
                         breakdown_kind: 'analysis_session',
                         requirement_id: requirement.id,
                         no_code_changes: true,
+                        execution: {
+                            no_code_changes: true,
+                            run_build_and_tests: false,
+                            require_review: false,
+                            auto_deploy: false,
+                        },
                     },
                 });
             }
+            // Ensure reused legacy analysis task also uses non-review, analysis-only execution semantics.
+            const mergedMetadata: Record<string, unknown> = {
+                ...(analysisTask.metadata || {}),
+                breakdown_mode: 'ai_support',
+                breakdown_kind: 'analysis_session',
+                requirement_id: requirement.id,
+                no_code_changes: true,
+                execution: {
+                    ...((analysisTask.metadata?.execution as Record<string, unknown> | undefined) || {}),
+                    no_code_changes: true,
+                    run_build_and_tests: false,
+                    require_review: false,
+                    auto_deploy: false,
+                },
+            };
+            await updateTaskMetadata(analysisTask.id, mergedMetadata);
 
             const attempts = await getTaskAttemptsLite(analysisTask.id);
             const latestAttempt = sortByNewest(attempts)[0];

@@ -906,7 +906,7 @@ async fn process_breakdown_job(state: AppState, job: BreakdownJob) {
                     "execution": {
                         "no_code_changes": true,
                         "run_build_and_tests": false,
-                        "require_review": true,
+                        "require_review": false,
                         "auto_deploy": false,
                     },
                     "skills": ["requirement-breakdown"]

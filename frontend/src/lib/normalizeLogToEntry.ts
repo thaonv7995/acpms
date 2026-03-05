@@ -93,6 +93,139 @@ function isBuildOutputNoise(content: string): boolean {
   );
 }
 
+interface BreakdownTaskPayloadSpan {
+  payload: Record<string, unknown>;
+  start: number;
+  end: number;
+}
+
+function extractBreakdownTaskPayloadSpans(content: string): BreakdownTaskPayloadSpan[] {
+  const marker = 'BREAKDOWN_TASK';
+  const spans: BreakdownTaskPayloadSpan[] = [];
+  let cursor = 0;
+
+  while (cursor < content.length) {
+    const markerIndex = content.indexOf(marker, cursor);
+    if (markerIndex < 0) break;
+
+    const jsonStart = content.indexOf('{', markerIndex + marker.length);
+    if (jsonStart < 0) {
+      cursor = markerIndex + marker.length;
+      continue;
+    }
+
+    let depth = 0;
+    let inString = false;
+    let escaped = false;
+    let jsonEnd = -1;
+
+    for (let i = jsonStart; i < content.length; i += 1) {
+      const ch = content[i];
+      if (inString) {
+        if (escaped) {
+          escaped = false;
+          continue;
+        }
+        if (ch === '\\') {
+          escaped = true;
+          continue;
+        }
+        if (ch === '"') {
+          inString = false;
+        }
+        continue;
+      }
+
+      if (ch === '"') {
+        inString = true;
+        continue;
+      }
+      if (ch === '{') {
+        depth += 1;
+        continue;
+      }
+      if (ch === '}') {
+        depth -= 1;
+        if (depth === 0) {
+          jsonEnd = i;
+          break;
+        }
+      }
+    }
+
+    if (jsonEnd < 0) {
+      cursor = jsonStart + 1;
+      continue;
+    }
+
+    try {
+      const parsed = JSON.parse(content.slice(jsonStart, jsonEnd + 1)) as Record<string, unknown>;
+      spans.push({ payload: parsed, start: markerIndex, end: jsonEnd + 1 });
+    } catch {
+      // Ignore malformed payload and continue scanning.
+    }
+
+    cursor = jsonEnd + 1;
+  }
+
+  return spans;
+}
+
+function normalizeBreakdownPriority(raw: unknown): string {
+  const value = String(raw ?? '').trim().toLowerCase();
+  if (!value) return 'medium';
+  if (value === 'low' || value === 'medium' || value === 'high' || value === 'critical') {
+    return value;
+  }
+  return 'medium';
+}
+
+function toTitleCase(raw: string): string {
+  if (!raw) return raw;
+  return raw
+    .split(/[\s_]+/)
+    .filter(Boolean)
+    .map((part) => part.charAt(0).toUpperCase() + part.slice(1).toLowerCase())
+    .join(' ');
+}
+
+function formatBreakdownTaskPayloadsAsMarkdown(payloads: Array<Record<string, unknown>>): string {
+  const lines: string[] = ['Proposed Breakdown Tasks:'];
+  payloads.forEach((payload, index) => {
+    const title = String(payload.title ?? '').trim() || `Task ${index + 1}`;
+    const description = String(payload.description ?? '').trim();
+    const taskType = toTitleCase(String(payload.task_type ?? '').trim() || 'Feature');
+    const priority = toTitleCase(normalizeBreakdownPriority(payload.priority));
+    lines.push(`${index + 1}. **${title}**`);
+    lines.push(`Type: ${taskType} · Priority: ${priority}`);
+    if (description) {
+      lines.push(`${description}`);
+    }
+  });
+  return lines.join('\n');
+}
+
+export function formatBreakdownTaskContent(content: string): string | null {
+  if (!content || !content.includes('BREAKDOWN_TASK')) {
+    return null;
+  }
+
+  let spans = extractBreakdownTaskPayloadSpans(content);
+  if (spans.length === 0 && content.includes('\\"')) {
+    const unescaped = content
+      .replace(/\\\\\"/g, '\\"')
+      .replace(/\\"/g, '"')
+      .replace(/\\n/g, '\n');
+    spans = extractBreakdownTaskPayloadSpans(unescaped);
+  }
+
+  if (spans.length === 0) {
+    return null;
+  }
+
+  return formatBreakdownTaskPayloadsAsMarkdown(spans.map((span) => span.payload));
+}
+
 /** 1. Normalized (R2: backend emit) - highest priority, format {entry_type:{type,...},content,timestamp} */
 function handleNormalized(log: AgentLogLike, index: number): TimelineEntry[] | null {
   const lt = (log.log_type || '').toLowerCase();
@@ -161,11 +294,17 @@ function handleNormalized(log: AgentLogLike, index: number): TimelineEntry[] | n
     }
 
     if (sdkType === 'assistant_message' || sdkType === 'system_message') {
+      const rawContent = parsed.content || '';
+      const formattedBreakdown = formatBreakdownTaskContent(rawContent);
+      const content = formattedBreakdown ?? rawContent;
+      if (!formattedBreakdown && (isNoisyTelemetry(content) || isInternalRuntimeLog(content) || isBuildOutputNoise(content))) {
+        return [];
+      }
       return [{
         id: log.id || `msg-${index}`,
         type: 'assistant_message',
         timestamp: ts(log, parsed.timestamp),
-        content: parsed.content || '',
+        content,
         source: sdkType === 'system_message' ? 'system' : 'sdk',
       }];
     }
@@ -212,11 +351,16 @@ function handleNormalized(log: AgentLogLike, index: number): TimelineEntry[] | n
       const fallback = typeof parsed.content === 'string' && parsed.content.trim()
         ? parsed.content
         : `Agent event: ${sdkType}`;
+      const formattedBreakdown = formatBreakdownTaskContent(fallback);
+      const content = formattedBreakdown ?? fallback;
+      if (!formattedBreakdown && (isNoisyTelemetry(content) || isInternalRuntimeLog(content) || isBuildOutputNoise(content))) {
+        return [];
+      }
       return [{
         id: log.id || `sdk-${index}`,
         type: 'assistant_message',
         timestamp: ts(log, parsed.timestamp),
-        content: fallback,
+        content,
         source: 'sdk',
       }];
     }
@@ -356,11 +500,12 @@ function handleSimple(log: AgentLogLike, index: number): TimelineEntry[] | null 
   // Show system logs (e.g. "Starting from-scratch init", "Spawning OpenAI Codex agent")
   if (lt === 'system') {
     if (!content) return null;
+    const formattedBreakdown = formatBreakdownTaskContent(content);
     return [{
       id: log.id || `system-${index}`,
       type: 'assistant_message',
       timestamp: ts(log),
-      content,
+      content: formattedBreakdown ?? content,
       source: 'system',
     }];
   }
@@ -401,6 +546,17 @@ function handleStdout(log: AgentLogLike, index: number): TimelineEntry[] | null 
   if (lt !== 'stdout' && lt !== 'process_stdout') return null;
 
   const content = log.content || '';
+  const formattedBreakdown = formatBreakdownTaskContent(content);
+  if (formattedBreakdown) {
+    return [{
+      id: log.id || `assistant-${index}`,
+      type: 'assistant_message',
+      timestamp: ts(log),
+      content: formattedBreakdown,
+      source: 'stdout',
+    }];
+  }
+
   if (isNoisyTelemetry(content)) return [];
   if (isInternalRuntimeLog(content)) return [];
   if (isBuildOutputNoise(content)) return [];
@@ -525,11 +681,15 @@ export function normalizeLogToEntry(log: AgentLogLike, index: number): TimelineE
 function handleFallback(log: AgentLogLike, index: number): TimelineEntry[] | null {
   const content = String(log.content ?? log.message ?? '').trim();
   if (!content) return null;
+  const formattedBreakdown = formatBreakdownTaskContent(content);
+  if (!formattedBreakdown && (isNoisyTelemetry(content) || isInternalRuntimeLog(content) || isBuildOutputNoise(content))) {
+    return null;
+  }
   return [{
     id: log.id || `fallback-${index}`,
     type: 'assistant_message',
     timestamp: ts(log),
-    content,
+    content: formattedBreakdown ?? content,
     source: 'system',
   }];
 }
