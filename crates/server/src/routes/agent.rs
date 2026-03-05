@@ -2258,48 +2258,46 @@ async fn check_claude_provider_status() -> ProviderStatusDoc {
         );
     }
 
-    // Keep provider status aligned with executor behavior (Claude tasks run via npx by default).
-    let mut probe_targets: Vec<(String, Vec<String>, u64, &'static str)> = Vec::new();
-    if let Some(npx) = npx_cmd {
-        probe_targets.push((
-            npx,
-            vec![
-                "-y".to_string(),
-                "@anthropic-ai/claude-code".to_string(),
-                "auth".to_string(),
-                "status".to_string(),
-            ],
-            20_u64,
-            "npx",
-        ));
-    }
+    // Run available probes in parallel – prefer the direct `claude` binary (faster, ~8s timeout)
+    // over npx (~12s timeout) but launch both concurrently so total wait = max(timeouts).
+    let mut probe_futures: Vec<tokio::task::JoinHandle<(Result<CommandProbeOutcome, String>, &'static str)>> = Vec::new();
     if let Some(cmd) = claude_cmd {
-        probe_targets.push((
-            cmd,
-            vec!["auth".to_string(), "status".to_string()],
-            8_u64,
-            "claude",
-        ));
+        let args = vec!["auth".to_string(), "status".to_string()];
+        probe_futures.push(tokio::spawn(async move {
+            (run_command_probe_owned(&cmd, &args, 8).await, "claude")
+        }));
     }
+    if let Some(npx) = npx_cmd {
+        let args = vec![
+            "-y".to_string(),
+            "@anthropic-ai/claude-code".to_string(),
+            "auth".to_string(),
+            "status".to_string(),
+        ];
+        probe_futures.push(tokio::spawn(async move {
+            (run_command_probe_owned(&npx, &args, 12).await, "npx")
+        }));
+    }
+
+    let probe_results = join_all(probe_futures).await;
 
     let mut expired_message: Option<String> = None;
     let mut unauthenticated_message: Option<String> = None;
     let mut probe_errors: Vec<String> = Vec::new();
 
-    for (probe_cmd, probe_args, timeout_secs, source) in probe_targets {
-        let probe = match run_command_probe_owned(&probe_cmd, &probe_args, timeout_secs).await {
-            Ok(result) => result,
-            Err(err) => {
-                probe_errors.push(format!("{}: {}", source, err));
-                continue;
-            }
+    // First pass: look for a definitive Authenticated result.
+    for join_result in &probe_results {
+        let (probe_result, source) = match join_result {
+            Ok(r) => r,
+            Err(_) => continue,
         };
-
+        let probe = match probe_result {
+            Ok(p) => p,
+            Err(_) => continue,
+        };
         if probe.timed_out {
-            probe_errors.push(format!("{}: timed out while checking auth status", source));
             continue;
         }
-
         if probe.success {
             return build_provider_status(
                 "claude-code",
@@ -2309,22 +2307,72 @@ async fn check_claude_provider_status() -> ProviderStatusDoc {
                 format!("Claude Code CLI is connected and ready ({})", source),
             );
         }
+        if let Some(true) = parse_claude_logged_in_flag(&probe.stdout, &probe.stderr) {
+            return build_provider_status(
+                "claude-code",
+                true,
+                ProviderAuthState::Authenticated,
+                ProviderAvailabilityReason::Ok,
+                format!("Claude Code CLI is connected and ready ({})", source),
+            );
+        }
+        let output = format!(
+            "{} {}",
+            probe.stdout.to_lowercase(),
+            probe.stderr.to_lowercase()
+        );
+        if looks_like_claude_authenticated_output(&output) {
+            return build_provider_status(
+                "claude-code",
+                true,
+                ProviderAuthState::Authenticated,
+                ProviderAvailabilityReason::Ok,
+                format!(
+                    "{} ({})",
+                    summarize_probe_output(
+                        &probe.stdout,
+                        &probe.stderr,
+                        "Claude Code CLI is connected and ready"
+                    ),
+                    source
+                ),
+            );
+        }
+    }
+
+    // Second pass: collect non-authenticated states.
+    for join_result in &probe_results {
+        let (probe_result, source) = match join_result {
+            Ok(r) => r,
+            Err(err) => {
+                probe_errors.push(format!("task join error: {}", err));
+                continue;
+            }
+        };
+        let probe = match probe_result {
+            Ok(p) => p,
+            Err(err) => {
+                probe_errors.push(format!("{}: {}", source, err));
+                continue;
+            }
+        };
+        if probe.timed_out {
+            probe_errors.push(format!("{}: timed out while checking auth status", source));
+            continue;
+        }
+        // Skip already-handled success cases.
+        if probe.success {
+            continue;
+        }
 
         if let Some(logged_in) = parse_claude_logged_in_flag(&probe.stdout, &probe.stderr) {
-            if logged_in {
-                return build_provider_status(
-                    "claude-code",
-                    true,
-                    ProviderAuthState::Authenticated,
-                    ProviderAvailabilityReason::Ok,
-                    format!("Claude Code CLI is connected and ready ({})", source),
-                );
+            if !logged_in {
+                unauthenticated_message = Some(format!(
+                    "{} ({})",
+                    summarize_probe_output(&probe.stdout, &probe.stderr, "Claude is not authenticated"),
+                    source
+                ));
             }
-            unauthenticated_message = Some(format!(
-                "{} ({})",
-                summarize_probe_output(&probe.stdout, &probe.stderr, "Claude is not authenticated"),
-                source
-            ));
             continue;
         }
 
@@ -2348,23 +2396,6 @@ async fn check_claude_provider_status() -> ProviderStatusDoc {
                 source
             ));
             continue;
-        }
-        if looks_like_claude_authenticated_output(&output) {
-            return build_provider_status(
-                "claude-code",
-                true,
-                ProviderAuthState::Authenticated,
-                ProviderAvailabilityReason::Ok,
-                format!(
-                    "{} ({})",
-                    summarize_probe_output(
-                        &probe.stdout,
-                        &probe.stderr,
-                        "Claude Code CLI is connected and ready"
-                    ),
-                    source
-                ),
-            );
         }
 
         probe_errors.push(format!(
@@ -2422,8 +2453,29 @@ async fn check_gemini_provider_status() -> ProviderStatusDoc {
         );
     }
 
+    // Fast path: if credentials already exist on disk or via env var, skip the
+    // expensive live probe (gemini -p ping actually calls the API and can take 20+s).
+    if gemini_api_key_configured() {
+        return build_provider_status(
+            "gemini-cli",
+            true,
+            ProviderAuthState::Authenticated,
+            ProviderAvailabilityReason::Ok,
+            "Gemini API key configured via GEMINI_API_KEY".to_string(),
+        );
+    }
+    if has_gemini_local_credentials() {
+        return build_provider_status(
+            "gemini-cli",
+            true,
+            ProviderAuthState::Authenticated,
+            ProviderAvailabilityReason::Ok,
+            "Gemini credentials detected on server (local credential files)".to_string(),
+        );
+    }
+
     let (probe_cmd, probe_args, timeout_secs) = if let Some(cmd) = gemini_cmd {
-        (cmd, vec!["-p".to_string(), "ping".to_string()], 20_u64)
+        (cmd, vec!["-p".to_string(), "ping".to_string()], 15_u64)
     } else {
         (
             npx_cmd.unwrap_or_default(),
@@ -2433,7 +2485,7 @@ async fn check_gemini_provider_status() -> ProviderStatusDoc {
                 "-p".to_string(),
                 "ping".to_string(),
             ],
-            25_u64,
+            20_u64,
         )
     };
 
@@ -2441,18 +2493,6 @@ async fn check_gemini_provider_status() -> ProviderStatusDoc {
     let probe = match probe {
         Ok(result) => result,
         Err(err) => {
-            if gemini_api_key_configured() || has_gemini_local_credentials() {
-                return build_provider_status(
-                    "gemini-cli",
-                    true,
-                    ProviderAuthState::Authenticated,
-                    ProviderAvailabilityReason::Ok,
-                    format!(
-                        "Gemini credentials detected on server (live probe failed to run: {})",
-                        err
-                    ),
-                );
-            }
             return build_provider_status(
                 "gemini-cli",
                 true,
@@ -2464,15 +2504,6 @@ async fn check_gemini_provider_status() -> ProviderStatusDoc {
     };
 
     if probe.timed_out {
-        if gemini_api_key_configured() || has_gemini_local_credentials() {
-            return build_provider_status(
-                "gemini-cli",
-                true,
-                ProviderAuthState::Authenticated,
-                ProviderAvailabilityReason::Ok,
-                "Gemini credentials detected on server (live probe timed out)".to_string(),
-            );
-        }
         return build_provider_status(
             "gemini-cli",
             true,
