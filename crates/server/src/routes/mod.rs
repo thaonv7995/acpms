@@ -283,6 +283,10 @@ pub fn create_router(state: AppState) -> Router {
             post(requirement_breakdowns::confirm_requirement_breakdown_manual),
         )
         .route(
+            "/projects/:project_id/requirements/:requirement_id/tasks/start-sequential",
+            post(requirement_breakdowns::start_requirement_task_sequence),
+        )
+        .route(
             "/projects/:project_id/requirements/:requirement_id/breakdown/:session_id",
             get(requirement_breakdowns::get_requirement_breakdown_session),
         )

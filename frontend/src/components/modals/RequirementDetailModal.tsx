@@ -5,6 +5,7 @@ import {
     updateRequirement,
     deleteRequirement,
     getRequirementAttachmentDownloadUrl,
+    startRequirementTaskSequence,
     type Requirement,
     type RequirementStatus,
 } from '../../api/requirements';
@@ -189,6 +190,11 @@ function dedupeLinkedTasks(tasks: Task[]): Task[] {
     return kept;
 }
 
+function taskStatusEligibleForSequence(task: Task): boolean {
+    const normalized = normalizeTaskStatus(task.status);
+    return normalized === 'todo' || normalized === 'in_progress';
+}
+
 interface RequirementDetailModalProps {
     isOpen: boolean;
     onClose: () => void;
@@ -215,10 +221,21 @@ export function RequirementDetailModal({
     const [isDeleting, setIsDeleting] = useState(false);
     const [statusDropdownOpen, setStatusDropdownOpen] = useState(false);
     const [isUpdatingStatus, setIsUpdatingStatus] = useState(false);
+    const [isStartingSequence, setIsStartingSequence] = useState(false);
+    const [sequenceMessage, setSequenceMessage] = useState<string | null>(null);
+    const [sequenceError, setSequenceError] = useState<string | null>(null);
+
+    useEffect(() => {
+        if (!isOpen) return;
+        setSequenceMessage(null);
+        setSequenceError(null);
+        setIsStartingSequence(false);
+    }, [isOpen, requirement?.id]);
 
     if (!isOpen || !requirement) return null;
 
     const visibleLinkedTasks = dedupeLinkedTasks(linkedTasks);
+    const sequenceEligibleTasks = visibleLinkedTasks.filter(taskStatusEligibleForSequence);
     const linkedTaskStatuses = visibleLinkedTasks.map((task) => normalizeTaskStatus(task.status));
     const linkedDoneCount = linkedTaskStatuses.filter((status) =>
         ['done', 'archived', 'cancelled', 'canceled'].includes(status)
@@ -271,6 +288,34 @@ export function RequirementDetailModal({
 
     const handleTaskClick = (taskId: string) => {
         navigate(`/projects/${projectId}/task/${taskId}`);
+    };
+
+    const handleStartRequirementSequence = async () => {
+        if (sequenceEligibleTasks.length === 0) {
+            setSequenceError('No todo/in-progress linked tasks available for sequential start.');
+            return;
+        }
+
+        setIsStartingSequence(true);
+        setSequenceError(null);
+        setSequenceMessage(null);
+        try {
+            const response = await startRequirementTaskSequence(projectId, requirement.id);
+            if (response.total_tasks === 0) {
+                setSequenceMessage('No eligible tasks to start.');
+            } else {
+                setSequenceMessage(
+                    `Sequential run started (${response.total_tasks} task(s)). Tasks will execute one-by-one.`
+                );
+            }
+            onRefresh();
+        } catch (err) {
+            setSequenceError(
+                err instanceof Error ? err.message : 'Failed to start linked tasks sequentially'
+            );
+        } finally {
+            setIsStartingSequence(false);
+        }
     };
 
     return (
@@ -405,6 +450,21 @@ export function RequirementDetailModal({
                             <h3 className="text-sm font-bold text-card-foreground mb-2">
                                 Linked Tasks ({visibleLinkedTasks.length})
                             </h3>
+                            {visibleLinkedTasks.length > 0 && (
+                                <p className="text-xs text-muted-foreground mb-2">
+                                    Eligible for sequential start: {sequenceEligibleTasks.length}
+                                </p>
+                            )}
+                            {sequenceMessage && (
+                                <div className="mb-2 rounded-md border border-emerald-500/30 bg-emerald-500/10 px-3 py-2 text-xs text-emerald-400">
+                                    {sequenceMessage}
+                                </div>
+                            )}
+                            {sequenceError && (
+                                <div className="mb-2 rounded-md border border-red-500/30 bg-red-500/10 px-3 py-2 text-xs text-red-400">
+                                    {sequenceError}
+                                </div>
+                            )}
                             {visibleLinkedTasks.length === 0 ? (
                                 <div className="text-sm text-muted-foreground bg-muted/30 rounded-lg p-4">
                                     No tasks linked yet.
@@ -455,6 +515,25 @@ export function RequirementDetailModal({
                                 Break into Tasks
                             </button>
                         )}
+                        <button
+                            onClick={handleStartRequirementSequence}
+                            disabled={isStartingSequence || sequenceEligibleTasks.length === 0}
+                            className="flex items-center gap-2 px-4 py-2 bg-blue-500/15 text-blue-400 text-sm font-semibold rounded-lg hover:bg-blue-500/25 disabled:opacity-50 disabled:cursor-not-allowed"
+                            title={
+                                sequenceEligibleTasks.length === 0
+                                    ? 'No todo/in-progress linked tasks to start'
+                                    : 'Start linked tasks one-by-one'
+                            }
+                        >
+                            <span
+                                className={`material-symbols-outlined text-[18px] ${
+                                    isStartingSequence ? 'animate-spin' : ''
+                                }`}
+                            >
+                                {isStartingSequence ? 'progress_activity' : 'playlist_play'}
+                            </span>
+                            {isStartingSequence ? 'Starting...' : 'Start All (Sequential)'}
+                        </button>
                         <button
                             onClick={onEdit}
                             className="flex items-center gap-2 px-4 py-2 bg-card border border-border text-card-foreground text-sm font-medium rounded-lg hover:bg-muted"

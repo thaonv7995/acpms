@@ -169,6 +169,17 @@ export interface ConfirmRequirementBreakdownManualResponse {
     }>;
 }
 
+export interface StartRequirementTaskSequenceRequest {
+    continue_on_failure?: boolean;
+}
+
+export interface StartRequirementTaskSequenceResponse {
+    run_id: string;
+    task_ids: string[];
+    total_tasks: number;
+    continue_on_failure: boolean;
+}
+
 export async function startRequirementBreakdown(
     projectId: string,
     requirementId: string
@@ -219,6 +230,17 @@ export async function confirmRequirementBreakdownManual(
 ): Promise<ConfirmRequirementBreakdownManualResponse> {
     return apiPost<ConfirmRequirementBreakdownManualResponse>(
         `${API_PREFIX}/projects/${projectId}/requirements/${requirementId}/breakdown/manual/confirm`,
+        payload
+    );
+}
+
+export async function startRequirementTaskSequence(
+    projectId: string,
+    requirementId: string,
+    payload: StartRequirementTaskSequenceRequest = {}
+): Promise<StartRequirementTaskSequenceResponse> {
+    return apiPost<StartRequirementTaskSequenceResponse>(
+        `${API_PREFIX}/projects/${projectId}/requirements/${requirementId}/tasks/start-sequential`,
         payload
     );
 }

@@ -381,8 +381,8 @@ export function ProjectDetailPage() {
               <button
                 onClick={() => setActiveTab('settings')}
                 className={`px-4 py-2 border text-sm font-medium rounded-lg transition-colors flex items-center gap-2 ${activeTab === 'settings'
-                    ? 'bg-primary/10 border-primary text-primary'
-                    : 'bg-card border-border text-card-foreground hover:bg-muted'
+                  ? 'bg-primary/10 border-primary text-primary'
+                  : 'bg-card border-border text-card-foreground hover:bg-muted'
                   }`}
               >
                 <span className="material-symbols-outlined text-[18px]">settings</span>
@@ -490,6 +490,7 @@ export function ProjectDetailPage() {
               {activeTab === 'kanban' && (
                 <TaskListTab
                   tasks={tasks}
+                  requirements={requirements}
                   projectId={project.id}
                   sprints={sprints}
                   selectedSprintId={selectedSprintId}
@@ -516,8 +517,8 @@ export function ProjectDetailPage() {
                     if (project) await updateRequirement(project.id, reqId, { status: newStatus });
                     refetch();
                   }}
-                  onAnalyzeWithAI={() => {/* Phase 3 */}}
-                  onImport={() => {/* Phase 2 placeholder */}}
+                  onAnalyzeWithAI={() => {/* Phase 3 */ }}
+                  onImport={() => {/* Phase 2 placeholder */ }}
                 />
               )}
               {activeTab === 'architecture' && (
@@ -618,7 +619,10 @@ export function ProjectDetailPage() {
       )}
 
       {project && !loading && !showAssistant && (
-        <FloatingChatButton onClick={handleOpenAssistant} />
+        <FloatingChatButton
+          onClick={handleOpenAssistant}
+          className="fixed bottom-20 right-6"
+        />
       )}
 
       {logsTask && (
@@ -744,8 +748,8 @@ export function ProjectDetailPage() {
                     setLinkForkError(null);
                     setForkRepositoryUrl(
                       repositoryContext.writable_repository_url ||
-                        repositoryContext.upstream_repository_url ||
-                        ''
+                      repositoryContext.upstream_repository_url ||
+                      ''
                     );
                   }}
                   className="px-4 py-2 rounded-lg text-sm font-semibold border border-border bg-card text-card-foreground hover:bg-muted transition-colors flex items-center gap-2"

@@ -89,6 +89,7 @@ function transformToKanbanTask(task: Task): KanbanTask {
         id: task.id,
         title: task.title,
         description: task.description,
+        requirement_id: task.requirement_id,
         type: typeMap[task.task_type] || 'feature',
         status: statusMap[task.status] || 'todo',
         priority,

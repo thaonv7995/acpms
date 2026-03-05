@@ -2,11 +2,13 @@
 import { useEffect, useMemo, useState } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { closeProjectSprint, type CloseSprintResult, type SprintCarryOverMode, type SprintWithRoadmapFields } from '../../api/sprints';
+import type { Requirement } from '../../api/requirements';
 import type { KanbanTask } from '../../types/project';
 import { logger } from '@/lib/logger';
 
 interface TaskListTabProps {
     tasks: KanbanTask[];
+    requirements: Requirement[];
     projectId: string;
     sprints: SprintWithRoadmapFields[];
     selectedSprintId: string | null;
@@ -16,6 +18,8 @@ interface TaskListTabProps {
     onTaskClick?: (taskId: string) => void;
     onViewLogs?: (taskId: string) => void;
 }
+
+const PAGE_SIZE = 10;
 
 const statusStyles: Record<KanbanTask['status'], { bg: string; text: string; label: string }> = {
     todo: { bg: 'bg-muted', text: 'text-muted-foreground', label: 'To Do' },
@@ -67,6 +71,7 @@ function formatSprintDateRange(startDate?: string | null, endDate?: string | nul
 
 export function TaskListTab({
     tasks,
+    requirements,
     projectId,
     sprints,
     selectedSprintId,
@@ -80,6 +85,8 @@ export function TaskListTab({
     const [searchQuery, setSearchQuery] = useState('');
     const [statusFilter, setStatusFilter] = useState<KanbanTask['status'] | 'all'>('all');
     const [typeFilter, setTypeFilter] = useState<KanbanTask['type'] | 'all'>('all');
+    const [requirementFilter, setRequirementFilter] = useState<string>('all');
+    const [currentPage, setCurrentPage] = useState(1);
 
     const [showCloseSprintModal, setShowCloseSprintModal] = useState(false);
     const [carryOverMode, setCarryOverMode] = useState<SprintCarryOverMode>('move_to_next');
@@ -141,6 +148,27 @@ export function TaskListTab({
         return maxSequence + 1;
     }, [sortedSprints]);
 
+    const requirementMap = useMemo(() => {
+        const map = new Map<string, Requirement>();
+        requirements.forEach((requirement) => {
+            map.set(requirement.id, requirement);
+        });
+        return map;
+    }, [requirements]);
+
+    const requirementFilterOptions = useMemo(() => {
+        const linkedRequirementIds = new Set<string>();
+        tasks.forEach((task) => {
+            if (task.requirement_id) {
+                linkedRequirementIds.add(task.requirement_id);
+            }
+        });
+
+        return requirements
+            .filter((requirement) => linkedRequirementIds.has(requirement.id))
+            .sort((a, b) => a.title.localeCompare(b.title));
+    }, [requirements, tasks]);
+
     useEffect(() => {
         if (!showCloseSprintModal) return;
 
@@ -161,6 +189,10 @@ export function TaskListTab({
         setNextSprintStartDate('');
         setNextSprintEndDate('');
     }, [showCloseSprintModal, plannedCandidateSprints, nextSprintSequence]);
+
+    useEffect(() => {
+        setCurrentPage(1);
+    }, [searchQuery, statusFilter, typeFilter, requirementFilter, selectedSprintId]);
 
     const handleTaskClick = (taskId: string) => {
         if (onTaskClick) {
@@ -257,20 +289,41 @@ export function TaskListTab({
     };
 
     // Filter tasks
-    const filteredTasks = tasks.filter(task => {
-        const matchesSearch = !searchQuery ||
-            task.title.toLowerCase().includes(searchQuery.toLowerCase()) ||
-            task.description?.toLowerCase().includes(searchQuery.toLowerCase());
-        const matchesStatus = statusFilter === 'all' || task.status === statusFilter;
-        const matchesType = typeFilter === 'all' || task.type === typeFilter;
-        return matchesSearch && matchesStatus && matchesType;
-    });
+    const filteredTasks = useMemo(() => {
+        return tasks.filter((task) => {
+            const matchesSearch = !searchQuery
+                || task.title.toLowerCase().includes(searchQuery.toLowerCase())
+                || task.description?.toLowerCase().includes(searchQuery.toLowerCase());
+            const matchesStatus = statusFilter === 'all' || task.status === statusFilter;
+            const matchesType = typeFilter === 'all' || task.type === typeFilter;
+            const matchesRequirement = requirementFilter === 'all'
+                || (requirementFilter === '__none__'
+                    ? !task.requirement_id
+                    : task.requirement_id === requirementFilter);
+            return matchesSearch && matchesStatus && matchesType && matchesRequirement;
+        });
+    }, [tasks, searchQuery, statusFilter, typeFilter, requirementFilter]);
 
     // Sort: in_progress first, then in_review, then todo, then done
-    const sortedTasks = [...filteredTasks].sort((a, b) => {
-        const statusOrder = { in_progress: 0, in_review: 1, todo: 2, done: 3 };
-        return statusOrder[a.status] - statusOrder[b.status];
-    });
+    const sortedTasks = useMemo(() => {
+        return [...filteredTasks].sort((a, b) => {
+            const statusOrder = { in_progress: 0, in_review: 1, todo: 2, done: 3 };
+            return statusOrder[a.status] - statusOrder[b.status];
+        });
+    }, [filteredTasks]);
+
+    const totalPages = Math.max(1, Math.ceil(sortedTasks.length / PAGE_SIZE));
+    const pageStart = sortedTasks.length === 0 ? 0 : (currentPage - 1) * PAGE_SIZE + 1;
+    const pageEnd = Math.min(currentPage * PAGE_SIZE, sortedTasks.length);
+    const shownRangeLabel = sortedTasks.length === 0 ? '0' : `${pageStart}-${pageEnd}`;
+    const paginatedTasks = useMemo(() => {
+        const startIdx = (currentPage - 1) * PAGE_SIZE;
+        return sortedTasks.slice(startIdx, startIdx + PAGE_SIZE);
+    }, [sortedTasks, currentPage]);
+
+    useEffect(() => {
+        setCurrentPage((prev) => (prev > totalPages ? totalPages : prev));
+    }, [totalPages]);
 
     return (
         <>
@@ -328,6 +381,21 @@ export function TaskListTab({
                             <option value="small_task">Small Task</option>
                             <option value="deploy">Deploy</option>
                         </select>
+
+                        {/* Requirement Filter */}
+                        <select
+                            value={requirementFilter}
+                            onChange={(e) => setRequirementFilter(e.target.value)}
+                            className="max-w-[280px] px-3 py-2 bg-card border border-border rounded-lg text-sm text-card-foreground focus:outline-none focus:ring-2 focus:ring-primary/20"
+                        >
+                            <option value="all">All Requirements</option>
+                            <option value="__none__">No Requirement Link</option>
+                            {requirementFilterOptions.map((requirement) => (
+                                <option key={requirement.id} value={requirement.id}>
+                                    {requirement.title}
+                                </option>
+                            ))}
+                        </select>
                     </div>
 
                     <div className="flex items-center gap-2">
@@ -356,7 +424,7 @@ export function TaskListTab({
 
                 {/* Task Count */}
                 <div className="text-sm text-muted-foreground">
-                    Showing {sortedTasks.length} of {tasks.length} tasks
+                    Showing {shownRangeLabel} of {sortedTasks.length} filtered tasks ({tasks.length} total)
                 </div>
 
                 {/* Task List */}
@@ -377,11 +445,14 @@ export function TaskListTab({
                             No tasks found
                         </div>
                     ) : (
-                        sortedTasks.map((task) => {
+                        paginatedTasks.map((task) => {
                             const status = statusStyles[task.status];
                             const type = typeStyles[task.type];
                             const priority = priorityStyles[task.priority];
                             const isWorking = !!task.agentWorking;
+                            const linkedRequirement = task.requirement_id
+                                ? requirementMap.get(task.requirement_id)
+                                : null;
 
                             return (
                                 <div
@@ -406,6 +477,11 @@ export function TaskListTab({
                                         {task.description && (
                                             <span className="text-xs text-muted-foreground truncate">
                                                 {task.description}
+                                            </span>
+                                        )}
+                                        {linkedRequirement && (
+                                            <span className="text-[11px] text-primary/90 truncate mt-0.5">
+                                                Requirement: {linkedRequirement.title}
                                             </span>
                                         )}
                                     </div>
@@ -467,6 +543,30 @@ export function TaskListTab({
                         })
                     )}
                 </div>
+
+                {sortedTasks.length > 0 && (
+                    <div className="flex items-center justify-between">
+                        <p className="text-xs text-muted-foreground">
+                            Page {currentPage} / {totalPages}
+                        </p>
+                        <div className="flex items-center gap-2">
+                            <button
+                                onClick={() => setCurrentPage((prev) => Math.max(1, prev - 1))}
+                                disabled={currentPage <= 1}
+                                className="px-3 py-1.5 text-xs rounded border border-border hover:bg-muted disabled:opacity-50 disabled:cursor-not-allowed"
+                            >
+                                Previous
+                            </button>
+                            <button
+                                onClick={() => setCurrentPage((prev) => Math.min(totalPages, prev + 1))}
+                                disabled={currentPage >= totalPages}
+                                className="px-3 py-1.5 text-xs rounded border border-border hover:bg-muted disabled:opacity-50 disabled:cursor-not-allowed"
+                            >
+                                Next
+                            </button>
+                        </div>
+                    </div>
+                )}
             </div>
 
             {/* Complete Sprint Modal */}

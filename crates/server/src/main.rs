@@ -149,6 +149,7 @@ fn spawn_log_upload_on_complete(
         routes::requirement_breakdowns::confirm_requirement_breakdown,
         routes::requirement_breakdowns::confirm_requirement_breakdown_manual,
         routes::requirement_breakdowns::cancel_requirement_breakdown,
+        routes::requirement_breakdowns::start_requirement_task_sequence,
         // Dashboard
         routes::dashboard::get_dashboard,
         // Task Attempts

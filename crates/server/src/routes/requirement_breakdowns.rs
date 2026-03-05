@@ -105,6 +105,20 @@ pub struct ConfirmManualRequirementBreakdownResponse {
     pub tasks: Vec<TaskDto>,
 }
 
+#[derive(Debug, Deserialize, Default)]
+pub struct StartRequirementTaskSequenceRequest {
+    #[serde(default)]
+    pub continue_on_failure: bool,
+}
+
+#[derive(Debug, Serialize)]
+pub struct StartRequirementTaskSequenceResponse {
+    pub run_id: Uuid,
+    pub task_ids: Vec<Uuid>,
+    pub total_tasks: usize,
+    pub continue_on_failure: bool,
+}
+
 #[derive(Debug, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum BreakdownSprintAssignmentMode {
@@ -240,6 +254,316 @@ fn task_type_as_str(task_type: TaskType) -> &'static str {
         TaskType::Init => "spike",
         TaskType::Deploy => "chore",
     }
+}
+
+fn with_requirement_execution_metadata(
+    metadata: &mut Value,
+    requirement_id: Uuid,
+    order: usize,
+    total: usize,
+    depends_on: Option<&[String]>,
+) {
+    let mut normalized = if metadata.is_object() {
+        metadata.clone()
+    } else {
+        json!({ "manual_payload": metadata.clone() })
+    };
+
+    if let Some(metadata_obj) = normalized.as_object_mut() {
+        metadata_obj.insert(
+            "execution_group".to_string(),
+            json!(format!("requirement:{}", requirement_id)),
+        );
+        metadata_obj.insert("execution_policy".to_string(), json!("sequential"));
+        metadata_obj.insert("execution_order".to_string(), json!(order));
+        metadata_obj.insert("execution_total".to_string(), json!(total));
+
+        let mut execution = metadata_obj
+            .get("execution")
+            .and_then(|value| value.as_object().cloned())
+            .unwrap_or_default();
+        execution.insert(
+            "group".to_string(),
+            json!(format!("requirement:{}", requirement_id)),
+        );
+        execution.insert("policy".to_string(), json!("sequential"));
+        execution.insert("order".to_string(), json!(order));
+        execution.insert("total".to_string(), json!(total));
+        if let Some(depends_on) = depends_on.filter(|items| !items.is_empty()) {
+            execution.insert("depends_on".to_string(), json!(depends_on));
+        }
+        metadata_obj.insert("execution".to_string(), Value::Object(execution));
+    }
+
+    *metadata = normalized;
+}
+
+fn is_breakdown_analysis_task(task: &Task) -> bool {
+    let mode = task
+        .metadata
+        .get("breakdown_mode")
+        .and_then(Value::as_str)
+        .map(str::trim)
+        .unwrap_or_default()
+        .to_ascii_lowercase();
+    let kind = task
+        .metadata
+        .get("breakdown_kind")
+        .and_then(Value::as_str)
+        .map(str::trim)
+        .unwrap_or_default()
+        .to_ascii_lowercase();
+    mode == "ai_support"
+        || kind == "analysis_session"
+        || task.title.trim_start().starts_with("[Breakdown]")
+}
+
+fn parse_execution_order(task: &Task) -> Option<u64> {
+    let parse_value = |value: Option<&Value>| -> Option<u64> {
+        match value {
+            Some(Value::Number(num)) => num.as_u64(),
+            Some(Value::String(raw)) => raw.trim().parse::<u64>().ok(),
+            _ => None,
+        }
+    };
+
+    parse_value(task.metadata.get("execution_order")).or_else(|| {
+        task.metadata
+            .get("execution")
+            .and_then(Value::as_object)
+            .and_then(|execution| parse_value(execution.get("order")))
+    })
+}
+
+fn sort_requirement_tasks_for_sequence(tasks: &mut [Task]) {
+    tasks.sort_by(|a, b| {
+        let a_order = parse_execution_order(a).unwrap_or(u64::MAX);
+        let b_order = parse_execution_order(b).unwrap_or(u64::MAX);
+        a_order
+            .cmp(&b_order)
+            .then_with(|| a.created_at.cmp(&b.created_at))
+            .then_with(|| a.id.cmp(&b.id))
+    });
+}
+
+fn task_status_is_eligible_for_requirement_sequence(status: TaskStatus) -> bool {
+    matches!(status, TaskStatus::Todo | TaskStatus::InProgress)
+}
+
+fn attempt_status_is_terminal(status: AttemptStatus) -> bool {
+    matches!(
+        status,
+        AttemptStatus::Success | AttemptStatus::Failed | AttemptStatus::Cancelled
+    )
+}
+
+async fn wait_for_attempt_terminal_status(
+    attempt_service: &TaskAttemptService,
+    attempt_id: Uuid,
+) -> Option<AttemptStatus> {
+    const MAX_POLLS: usize = 7200; // 6h with 3s interval.
+    for _ in 0..MAX_POLLS {
+        let attempt = attempt_service
+            .get_attempt(attempt_id)
+            .await
+            .ok()
+            .flatten()?;
+        if attempt_status_is_terminal(attempt.status) {
+            return Some(attempt.status);
+        }
+        sleep(Duration::from_secs(3)).await;
+    }
+    None
+}
+
+async fn run_requirement_task_sequence(
+    state: AppState,
+    auth_user: AuthUser,
+    project_id: Uuid,
+    requirement_id: Uuid,
+    run_id: Uuid,
+    task_ids: Vec<Uuid>,
+    continue_on_failure: bool,
+) {
+    let task_service = TaskService::new(state.db.clone());
+    let attempt_service = TaskAttemptService::new(state.db.clone());
+
+    tracing::info!(
+        run_id = %run_id,
+        project_id = %project_id,
+        requirement_id = %requirement_id,
+        task_count = task_ids.len(),
+        continue_on_failure,
+        "Starting requirement task sequence run"
+    );
+
+    for (idx, task_id) in task_ids.into_iter().enumerate() {
+        let maybe_task = match task_service.get_task(task_id).await {
+            Ok(task) => task,
+            Err(error) => {
+                tracing::error!(
+                    run_id = %run_id,
+                    task_id = %task_id,
+                    error = %error,
+                    "Failed to fetch task during sequence run"
+                );
+                if continue_on_failure {
+                    continue;
+                }
+                break;
+            }
+        };
+
+        let task = match maybe_task {
+            Some(task) => task,
+            None => {
+                tracing::warn!(
+                    run_id = %run_id,
+                    task_id = %task_id,
+                    "Task no longer exists, skipping sequence item"
+                );
+                continue;
+            }
+        };
+
+        if task.project_id != project_id || task.requirement_id != Some(requirement_id) {
+            tracing::warn!(
+                run_id = %run_id,
+                task_id = %task_id,
+                "Task no longer belongs to target project/requirement, skipping"
+            );
+            continue;
+        }
+
+        if !task_status_is_eligible_for_requirement_sequence(task.status) {
+            tracing::info!(
+                run_id = %run_id,
+                task_id = %task_id,
+                status = ?task.status,
+                "Skipping task due to non-eligible status"
+            );
+            continue;
+        }
+
+        let active_attempt = attempt_service
+            .get_task_attempts(task_id)
+            .await
+            .ok()
+            .and_then(|attempts| {
+                attempts
+                    .into_iter()
+                    .find(|attempt| {
+                        matches!(
+                            attempt.status,
+                            AttemptStatus::Queued | AttemptStatus::Running
+                        )
+                    })
+                    .map(|attempt| attempt.id)
+            });
+
+        let attempt_id = if let Some(existing_attempt_id) = active_attempt {
+            tracing::info!(
+                run_id = %run_id,
+                task_id = %task_id,
+                attempt_id = %existing_attempt_id,
+                index = idx + 1,
+                "Waiting for existing active attempt in requirement sequence"
+            );
+            existing_attempt_id
+        } else {
+            match task_attempts::create_task_attempt(
+                State(state.clone()),
+                auth_user.clone(),
+                Path(task_id),
+            )
+            .await
+            {
+                Ok((_status, Json(response))) => {
+                    if let Some(created_attempt) = response.data {
+                        tracing::info!(
+                            run_id = %run_id,
+                            task_id = %task_id,
+                            attempt_id = %created_attempt.id,
+                            index = idx + 1,
+                            "Started task attempt in requirement sequence"
+                        );
+                        created_attempt.id
+                    } else {
+                        tracing::error!(
+                            run_id = %run_id,
+                            task_id = %task_id,
+                            index = idx + 1,
+                            "Attempt creation response missing data"
+                        );
+                        if continue_on_failure {
+                            continue;
+                        }
+                        break;
+                    }
+                }
+                Err(error) => {
+                    tracing::error!(
+                        run_id = %run_id,
+                        task_id = %task_id,
+                        index = idx + 1,
+                        error = %error,
+                        "Failed to start task attempt in requirement sequence"
+                    );
+                    if continue_on_failure {
+                        continue;
+                    }
+                    break;
+                }
+            }
+        };
+
+        let terminal_status = wait_for_attempt_terminal_status(&attempt_service, attempt_id).await;
+        match terminal_status {
+            Some(status) if status == AttemptStatus::Success => {
+                tracing::info!(
+                    run_id = %run_id,
+                    task_id = %task_id,
+                    attempt_id = %attempt_id,
+                    index = idx + 1,
+                    "Requirement sequence item completed successfully"
+                );
+            }
+            Some(status) => {
+                tracing::warn!(
+                    run_id = %run_id,
+                    task_id = %task_id,
+                    attempt_id = %attempt_id,
+                    index = idx + 1,
+                    status = ?status,
+                    continue_on_failure,
+                    "Requirement sequence item completed with non-success status"
+                );
+                if !continue_on_failure {
+                    break;
+                }
+            }
+            None => {
+                tracing::error!(
+                    run_id = %run_id,
+                    task_id = %task_id,
+                    attempt_id = %attempt_id,
+                    index = idx + 1,
+                    continue_on_failure,
+                    "Requirement sequence timed out while waiting for attempt terminal status"
+                );
+                if !continue_on_failure {
+                    break;
+                }
+            }
+        }
+    }
+
+    tracing::info!(
+        run_id = %run_id,
+        project_id = %project_id,
+        requirement_id = %requirement_id,
+        "Finished requirement task sequence run"
+    );
 }
 
 fn extract_json_object(raw: &str) -> Result<Value, ApiError> {
@@ -1438,19 +1762,28 @@ pub async fn confirm_requirement_breakdown(
         }
     };
 
-    let mut created_tasks: Vec<Task> = Vec::with_capacity(proposed_tasks.len());
-    for task in proposed_tasks {
+    let total_tasks = proposed_tasks.len();
+    let mut created_tasks: Vec<Task> = Vec::with_capacity(total_tasks);
+    for (idx, task) in proposed_tasks.into_iter().enumerate() {
         let task_type = parse_supported_task_type(&task.task_type).ok_or_else(|| {
             ApiError::BadRequest(format!(
                 "Unsupported task_type '{}' in proposal",
                 task.task_type
             ))
         })?;
-        let metadata = json!({
+        let mut metadata = json!({
             "breakdown_session_id": session.id,
+            "breakdown_mode": "ai",
             "breakdown_kind": if task.kind.trim().is_empty() { "implementation" } else { task.kind.trim() },
             "estimate": task.estimate
         });
+        with_requirement_execution_metadata(
+            &mut metadata,
+            requirement_id,
+            idx + 1,
+            total_tasks,
+            Some(&task.depends_on),
+        );
 
         let created = sqlx::query_as::<_, Task>(
             r#"
@@ -1601,7 +1934,8 @@ pub async fn confirm_requirement_breakdown_manual(
         }
     };
 
-    let mut created_tasks: Vec<Task> = Vec::with_capacity(payload.tasks.len());
+    let total_tasks = payload.tasks.len();
+    let mut created_tasks: Vec<Task> = Vec::with_capacity(total_tasks);
     for (idx, task) in payload.tasks.iter().enumerate() {
         let title = task.title.trim();
         if title.is_empty() {
@@ -1664,6 +1998,13 @@ pub async fn confirm_requirement_breakdown_manual(
             metadata_obj.insert("breakdown_kind".to_string(), json!(normalized_kind));
             metadata_obj.insert("priority".to_string(), json!(priority));
         }
+        with_requirement_execution_metadata(
+            &mut metadata,
+            requirement_id,
+            idx + 1,
+            total_tasks,
+            None,
+        );
 
         let created = sqlx::query_as::<_, Task>(
             r#"
@@ -1703,6 +2044,101 @@ pub async fn confirm_requirement_breakdown_manual(
     Ok(Json(ApiResponse::success(
         response,
         "Manual breakdown tasks created",
+    )))
+}
+
+#[utoipa::path(
+    post,
+    path = "/api/v1/projects/{project_id}/requirements/{requirement_id}/tasks/start-sequential",
+    tag = "Requirements",
+    params(
+        ("project_id" = Uuid, Path, description = "Project ID"),
+        ("requirement_id" = Uuid, Path, description = "Requirement ID")
+    ),
+    responses(
+        (status = 200, description = "Requirement task sequence started"),
+        (status = 403, description = "Forbidden"),
+        (status = 404, description = "Requirement not found")
+    )
+)]
+pub async fn start_requirement_task_sequence(
+    State(state): State<AppState>,
+    auth_user: AuthUser,
+    Path((project_id, requirement_id)): Path<(Uuid, Uuid)>,
+    payload: Option<Json<StartRequirementTaskSequenceRequest>>,
+) -> ApiResult<Json<ApiResponse<StartRequirementTaskSequenceResponse>>> {
+    RbacChecker::check_permission(auth_user.id, project_id, Permission::ExecuteTask, &state.db)
+        .await?;
+
+    let requirement_exists: bool = sqlx::query_scalar(
+        "SELECT EXISTS(SELECT 1 FROM requirements WHERE id = $1 AND project_id = $2)",
+    )
+    .bind(requirement_id)
+    .bind(project_id)
+    .fetch_one(&state.db)
+    .await
+    .map_err(|e| ApiError::Internal(e.to_string()))?;
+    if !requirement_exists {
+        return Err(ApiError::NotFound("Requirement not found".to_string()));
+    }
+
+    let continue_on_failure = payload
+        .map(|body| body.0.continue_on_failure)
+        .unwrap_or(false);
+
+    let mut requirement_tasks = sqlx::query_as::<_, Task>(
+        r#"
+        SELECT id, project_id, title, description, task_type, status, assigned_to, parent_task_id,
+               requirement_id, sprint_id, gitlab_issue_id, metadata, created_by, created_at, updated_at
+        FROM tasks
+        WHERE project_id = $1
+          AND requirement_id = $2
+          AND task_type <> 'init'
+        "#,
+    )
+    .bind(project_id)
+    .bind(requirement_id)
+    .fetch_all(&state.db)
+    .await
+    .map_err(|e| ApiError::Internal(e.to_string()))?;
+
+    requirement_tasks.retain(|task| {
+        !is_breakdown_analysis_task(task)
+            && task_status_is_eligible_for_requirement_sequence(task.status)
+    });
+    sort_requirement_tasks_for_sequence(&mut requirement_tasks);
+
+    let task_ids: Vec<Uuid> = requirement_tasks.into_iter().map(|task| task.id).collect();
+    let run_id = Uuid::new_v4();
+
+    if !task_ids.is_empty() {
+        let state_clone = state.clone();
+        let auth_user_clone = auth_user.clone();
+        let task_ids_clone = task_ids.clone();
+        tokio::spawn(async move {
+            run_requirement_task_sequence(
+                state_clone,
+                auth_user_clone,
+                project_id,
+                requirement_id,
+                run_id,
+                task_ids_clone,
+                continue_on_failure,
+            )
+            .await;
+        });
+    }
+
+    let response = StartRequirementTaskSequenceResponse {
+        run_id,
+        total_tasks: task_ids.len(),
+        task_ids,
+        continue_on_failure,
+    };
+
+    Ok(Json(ApiResponse::success(
+        response,
+        "Requirement task sequence started",
     )))
 }
 
@@ -1777,6 +2213,31 @@ mod tests {
     use super::*;
     use chrono::Utc;
 
+    fn make_task_with_metadata(
+        title: &str,
+        status: TaskStatus,
+        metadata: Value,
+        created_at: DateTime<Utc>,
+    ) -> Task {
+        Task {
+            id: Uuid::new_v4(),
+            project_id: Uuid::new_v4(),
+            requirement_id: Some(Uuid::new_v4()),
+            sprint_id: None,
+            title: title.to_string(),
+            description: None,
+            task_type: TaskType::Feature,
+            status,
+            assigned_to: None,
+            parent_task_id: None,
+            gitlab_issue_id: None,
+            metadata,
+            created_by: Uuid::new_v4(),
+            created_at,
+            updated_at: created_at,
+        }
+    }
+
     #[test]
     fn parse_breakdown_output_accepts_json_with_missing_breakdown_task() {
         let raw = r#"{
@@ -1848,5 +2309,140 @@ BREAKDOWN_TASK {"title":"Add tests","description":"Cover breakdown parser and RB
         assert_eq!(tasks[0].task_type.as_deref(), Some("feature"));
         assert_eq!(tasks[1].title, "Add tests");
         assert_eq!(tasks[1].task_type.as_deref(), Some("test"));
+    }
+
+    #[test]
+    fn requirement_execution_metadata_sets_sequential_fields() {
+        let requirement_id = Uuid::new_v4();
+        let mut metadata = json!({
+            "breakdown_mode": "manual",
+            "execution": {
+                "no_code_changes": true
+            }
+        });
+        let depends_on = vec!["Task A".to_string(), "Task B".to_string()];
+
+        with_requirement_execution_metadata(&mut metadata, requirement_id, 2, 6, Some(&depends_on));
+
+        let execution_group = metadata
+            .get("execution_group")
+            .and_then(Value::as_str)
+            .unwrap_or_default()
+            .to_string();
+        assert_eq!(
+            execution_group,
+            format!("requirement:{}", requirement_id),
+            "execution_group should target requirement"
+        );
+        assert_eq!(metadata.get("execution_order"), Some(&json!(2)));
+        assert_eq!(metadata.get("execution_total"), Some(&json!(6)));
+
+        let execution = metadata
+            .get("execution")
+            .and_then(Value::as_object)
+            .expect("execution object should be present");
+        assert_eq!(execution.get("policy"), Some(&json!("sequential")));
+        assert_eq!(execution.get("order"), Some(&json!(2)));
+        assert_eq!(execution.get("total"), Some(&json!(6)));
+        assert_eq!(execution.get("depends_on"), Some(&json!(depends_on)));
+        assert_eq!(
+            execution.get("no_code_changes"),
+            Some(&json!(true)),
+            "existing execution fields should be preserved"
+        );
+    }
+
+    #[test]
+    fn requirement_execution_metadata_normalizes_non_object_metadata() {
+        let requirement_id = Uuid::new_v4();
+        let mut metadata = json!("raw-metadata");
+
+        with_requirement_execution_metadata(&mut metadata, requirement_id, 1, 3, None);
+
+        let metadata_obj = metadata
+            .as_object()
+            .expect("metadata should be normalized into object");
+        assert!(metadata_obj.contains_key("manual_payload"));
+        assert_eq!(
+            metadata_obj.get("execution_policy"),
+            Some(&json!("sequential"))
+        );
+        assert_eq!(metadata_obj.get("execution_order"), Some(&json!(1)));
+        assert_eq!(metadata_obj.get("execution_total"), Some(&json!(3)));
+    }
+
+    #[test]
+    fn parse_execution_order_reads_root_and_nested_fields() {
+        let now = Utc::now();
+        let root = make_task_with_metadata(
+            "Root order",
+            TaskStatus::Todo,
+            json!({ "execution_order": "5" }),
+            now,
+        );
+        let nested = make_task_with_metadata(
+            "Nested order",
+            TaskStatus::Todo,
+            json!({ "execution": { "order": 2 } }),
+            now,
+        );
+
+        assert_eq!(parse_execution_order(&root), Some(5));
+        assert_eq!(parse_execution_order(&nested), Some(2));
+    }
+
+    #[test]
+    fn sort_requirement_tasks_for_sequence_prefers_execution_order_then_created_at() {
+        let base = Utc::now();
+        let mut tasks = vec![
+            make_task_with_metadata(
+                "No order",
+                TaskStatus::Todo,
+                json!({}),
+                base + chrono::Duration::seconds(30),
+            ),
+            make_task_with_metadata(
+                "Order 2",
+                TaskStatus::Todo,
+                json!({ "execution_order": 2 }),
+                base + chrono::Duration::seconds(10),
+            ),
+            make_task_with_metadata(
+                "Order 1",
+                TaskStatus::Todo,
+                json!({ "execution": { "order": 1 } }),
+                base + chrono::Duration::seconds(20),
+            ),
+        ];
+
+        sort_requirement_tasks_for_sequence(&mut tasks);
+
+        let titles: Vec<&str> = tasks.iter().map(|task| task.title.as_str()).collect();
+        assert_eq!(titles, vec!["Order 1", "Order 2", "No order"]);
+    }
+
+    #[test]
+    fn breakdown_analysis_tasks_are_excluded_from_sequence() {
+        let analysis = make_task_with_metadata(
+            "[Breakdown][AI] Analyze",
+            TaskStatus::Todo,
+            json!({ "breakdown_kind": "analysis_session" }),
+            Utc::now(),
+        );
+        let execution = make_task_with_metadata(
+            "Implement endpoint",
+            TaskStatus::Todo,
+            json!({ "breakdown_kind": "implementation" }),
+            Utc::now(),
+        );
+
+        assert!(is_breakdown_analysis_task(&analysis));
+        assert!(!is_breakdown_analysis_task(&execution));
+        assert!(task_status_is_eligible_for_requirement_sequence(
+            TaskStatus::Todo
+        ));
+        assert!(!task_status_is_eligible_for_requirement_sequence(
+            TaskStatus::InReview
+        ));
     }
 }
