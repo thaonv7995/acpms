@@ -94,3 +94,129 @@ export async function getRequirementAttachmentDownloadUrl(
         data
     );
 }
+
+export type RequirementBreakdownStatus =
+    | 'queued'
+    | 'running'
+    | 'review'
+    | 'confirmed'
+    | 'failed'
+    | 'cancelled';
+
+export type RequirementBreakdownSprintAssignmentMode = 'active' | 'selected' | 'backlog';
+
+export interface RequirementBreakdownSession {
+    id: string;
+    project_id: string;
+    requirement_id: string;
+    created_by: string;
+    status: RequirementBreakdownStatus;
+    analysis?: Record<string, unknown> | null;
+    impact?: Array<Record<string, unknown>> | null;
+    plan?: Record<string, unknown> | null;
+    proposed_tasks?: Array<Record<string, unknown>> | null;
+    suggested_sprint_id?: string | null;
+    error_message?: string | null;
+    created_at: string;
+    updated_at: string;
+    started_at?: string | null;
+    completed_at?: string | null;
+    confirmed_at?: string | null;
+    cancelled_at?: string | null;
+}
+
+export interface ConfirmRequirementBreakdownRequest {
+    assignment_mode: RequirementBreakdownSprintAssignmentMode;
+    sprint_id?: string | null;
+}
+
+export interface ConfirmRequirementBreakdownResponse {
+    session: RequirementBreakdownSession;
+    tasks: Array<{
+        id: string;
+        title: string;
+        status: string;
+        task_type: string;
+        requirement_id?: string | null;
+        sprint_id?: string | null;
+    }>;
+}
+
+export interface ManualBreakdownTaskDraft {
+    title: string;
+    description?: string;
+    task_type: string;
+    estimate?: string | null;
+    kind?: string | null;
+}
+
+export interface ConfirmRequirementBreakdownManualRequest {
+    assignment_mode: RequirementBreakdownSprintAssignmentMode;
+    sprint_id?: string | null;
+    tasks: ManualBreakdownTaskDraft[];
+}
+
+export interface ConfirmRequirementBreakdownManualResponse {
+    tasks: Array<{
+        id: string;
+        title: string;
+        status: string;
+        task_type: string;
+        requirement_id?: string | null;
+        sprint_id?: string | null;
+    }>;
+}
+
+export async function startRequirementBreakdown(
+    projectId: string,
+    requirementId: string
+): Promise<RequirementBreakdownSession> {
+    return apiPost<RequirementBreakdownSession>(
+        `${API_PREFIX}/projects/${projectId}/requirements/${requirementId}/breakdown/start`,
+        {}
+    );
+}
+
+export async function getRequirementBreakdownSession(
+    projectId: string,
+    requirementId: string,
+    sessionId: string
+): Promise<RequirementBreakdownSession> {
+    return apiGet<RequirementBreakdownSession>(
+        `${API_PREFIX}/projects/${projectId}/requirements/${requirementId}/breakdown/${sessionId}`
+    );
+}
+
+export async function confirmRequirementBreakdown(
+    projectId: string,
+    requirementId: string,
+    sessionId: string,
+    payload: ConfirmRequirementBreakdownRequest
+): Promise<ConfirmRequirementBreakdownResponse> {
+    return apiPost<ConfirmRequirementBreakdownResponse>(
+        `${API_PREFIX}/projects/${projectId}/requirements/${requirementId}/breakdown/${sessionId}/confirm`,
+        payload
+    );
+}
+
+export async function cancelRequirementBreakdown(
+    projectId: string,
+    requirementId: string,
+    sessionId: string
+): Promise<RequirementBreakdownSession> {
+    return apiPost<RequirementBreakdownSession>(
+        `${API_PREFIX}/projects/${projectId}/requirements/${requirementId}/breakdown/${sessionId}/cancel`,
+        {}
+    );
+}
+
+export async function confirmRequirementBreakdownManual(
+    projectId: string,
+    requirementId: string,
+    payload: ConfirmRequirementBreakdownManualRequest
+): Promise<ConfirmRequirementBreakdownManualResponse> {
+    return apiPost<ConfirmRequirementBreakdownManualResponse>(
+        `${API_PREFIX}/projects/${projectId}/requirements/${requirementId}/breakdown/manual/confirm`,
+        payload
+    );
+}

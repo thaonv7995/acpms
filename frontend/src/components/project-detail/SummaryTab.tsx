@@ -317,14 +317,15 @@ export function SummaryTab({
                                         className="p-3 bg-muted/50 rounded-lg border border-border"
                                     >
                                         <div className="flex items-start gap-3">
-                                            <span className={`material-symbols-outlined text-lg ${
-                                                req.status === 'done' ? 'text-green-500' :
-                                                    req.status === 'in_progress' ? 'text-blue-500' :
-                                                        'text-muted-foreground'
+                                            {req.status === 'in_progress' ? (
+                                                <span className="inline-block w-4 h-4 rounded-full border-2 border-blue-500/35 border-t-blue-500 animate-spin mt-0.5" />
+                                            ) : (
+                                                <span className={`material-symbols-outlined text-lg ${
+                                                    req.status === 'done' ? 'text-green-500' : 'text-muted-foreground'
                                                 }`}>
-                                                {req.status === 'done' ? 'check_circle' :
-                                                    req.status === 'in_progress' ? 'progress_activity' : 'radio_button_unchecked'}
-                                            </span>
+                                                    {req.status === 'done' ? 'check_circle' : 'radio_button_unchecked'}
+                                                </span>
+                                            )}
                                             <div className="flex-1 min-w-0">
                                                 <p className="font-medium text-card-foreground truncate">{req.title}</p>
                                                 <div className="flex items-center gap-2 mt-1">

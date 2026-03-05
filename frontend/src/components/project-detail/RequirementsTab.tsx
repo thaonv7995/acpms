@@ -50,12 +50,49 @@ export function RequirementsTab({ requirements, rawTasks = [], onAddRequirement,
     const [statusDropdownReqId, setStatusDropdownReqId] = useState<string | null>(null);
     const [expandedReqIds, setExpandedReqIds] = useState<Set<string>>(new Set());
 
+    const normalizeTaskStatus = (status: string | undefined): string => {
+        if (!status) return 'todo';
+        return status
+            .trim()
+            .replace(/([a-z0-9])([A-Z])/g, '$1_$2')
+            .replace(/[\s-]+/g, '_')
+            .toLowerCase();
+    };
+
+    const getLinkedTasks = (reqId: string) => {
+        return rawTasks.filter((t) => t.requirement_id === reqId);
+    };
+
     const getLinkedTasksCount = (reqId: string) => {
-        return rawTasks.filter(t => t.requirement_id === reqId).length;
+        return getLinkedTasks(reqId).length;
     };
+
     const getLinkedTasksDoneCount = (reqId: string) => {
-        return rawTasks.filter(t => t.requirement_id === reqId && ['done', 'archived', 'cancelled', 'canceled'].includes((t.status || '').toLowerCase())).length;
+        return getLinkedTasks(reqId).filter((t) =>
+            ['done', 'archived', 'cancelled', 'canceled'].includes(normalizeTaskStatus(t.status))
+        ).length;
     };
+
+    const getDerivedRequirementStatus = (req: RequirementDisplay): RequirementStatus => {
+        const linkedTasks = getLinkedTasks(req.id);
+        if (linkedTasks.length === 0) return req.status;
+
+        const statuses = linkedTasks.map((t) => normalizeTaskStatus(t.status));
+        const doneCount = statuses.filter((s) =>
+            ['done', 'archived', 'cancelled', 'canceled'].includes(s)
+        ).length;
+
+        if (doneCount === statuses.length) return 'done';
+        if (
+            doneCount > 0 ||
+            statuses.some((s) => ['in_progress', 'in_review', 'blocked'].includes(s))
+        ) {
+            return 'in_progress';
+        }
+
+        return 'todo';
+    };
+
     return (
         <div className="flex flex-col gap-4">
             <div className="bg-card border border-border rounded-lg overflow-hidden">
@@ -87,7 +124,6 @@ export function RequirementsTab({ requirements, rawTasks = [], onAddRequirement,
                             <p className="text-muted-foreground/70 text-[10px] mt-0.5">Add requirements to define project scope</p>
                         </div>
                     ) : requirements.map((req) => {
-                        const statusStyle = statusStyles[req.status] || statusStyles.todo;
                         const priorityColor = req.priority === 'critical' ? 'text-red-500' :
                             req.priority === 'high' ? 'text-orange-500' : 'text-blue-500';
                         // Use content or description (for backward compatibility)
@@ -99,7 +135,17 @@ export function RequirementsTab({ requirements, rawTasks = [], onAddRequirement,
                         const shortId = req.id.slice(0, 8);
                         const linkedCount = getLinkedTasksCount(req.id);
                         const doneCount = getLinkedTasksDoneCount(req.id);
+                        const linkedTasks = getLinkedTasks(req.id);
+                        const hasAiBreakdown = linkedTasks.some((task) =>
+                            task.title?.startsWith('[Breakdown]') ||
+                            task.metadata?.breakdown_session_id != null ||
+                            task.metadata?.breakdown_kind === 'analysis_session'
+                        );
+                        const displayStatus = getDerivedRequirementStatus(req);
+                        const isAutoStatus = linkedCount > 0;
                         const isStatusDropdownOpen = statusDropdownReqId === req.id;
+                        const statusStyle = statusStyles[displayStatus] || statusStyles.todo;
+                        const isInProgressStatus = displayStatus === 'in_progress';
 
                         const toggleExpand = (e: React.MouseEvent) => {
                             e.stopPropagation();
@@ -135,9 +181,19 @@ export function RequirementsTab({ requirements, rawTasks = [], onAddRequirement,
                                         )}
                                     </p>
                                     {linkedCount > 0 && (
-                                        <div className="mt-1.5 flex items-center gap-1.5 text-[10px] text-muted-foreground">
+                                        <div className="mt-1.5 flex flex-wrap items-center gap-1.5 text-[10px] text-muted-foreground">
                                             <span className="material-symbols-outlined text-[12px]">task_alt</span>
                                             {doneCount}/{linkedCount} tasks
+                                            <span className={`inline-flex items-center gap-1 px-1.5 py-0.5 rounded ${
+                                                hasAiBreakdown
+                                                    ? 'bg-primary/15 text-primary'
+                                                    : 'bg-muted text-muted-foreground'
+                                            }`}>
+                                                <span className="material-symbols-outlined text-[11px]">
+                                                    {hasAiBreakdown ? 'auto_fix' : 'link'}
+                                                </span>
+                                                {hasAiBreakdown ? 'AI broken down' : 'Linked'}
+                                            </span>
                                         </div>
                                     )}
                                     {linkedCount === 0 && (
@@ -166,14 +222,23 @@ export function RequirementsTab({ requirements, rawTasks = [], onAddRequirement,
                                     </div>
                                     <div className="relative" onClick={(e) => e.stopPropagation()}>
                                         <button
-                                            onClick={() => setStatusDropdownReqId(isStatusDropdownOpen ? null : req.id)}
+                                            onClick={() => {
+                                                if (isAutoStatus) return;
+                                                setStatusDropdownReqId(isStatusDropdownOpen ? null : req.id);
+                                            }}
+                                            disabled={isAutoStatus}
                                             className={`flex items-center gap-1 text-[10px] font-bold px-1.5 py-0.5 rounded-full ${statusStyle.bg} ${statusStyle.text} hover:opacity-90`}
+                                            title={isAutoStatus ? 'Status is auto-derived from linked tasks' : 'Change requirement status'}
                                         >
-                                            <span className="material-symbols-outlined text-[12px]">{statusStyle.icon}</span>
-                                            {STATUS_LABELS[req.status]}
+                                            {isInProgressStatus ? (
+                                                <span className="inline-block w-3 h-3 rounded-full border-2 border-current/35 border-t-current animate-spin" />
+                                            ) : (
+                                                <span className="material-symbols-outlined text-[12px]">{statusStyle.icon}</span>
+                                            )}
+                                            {STATUS_LABELS[displayStatus]}
                                             <span className="material-symbols-outlined text-[12px]">expand_more</span>
                                         </button>
-                                        {isStatusDropdownOpen && (
+                                        {isStatusDropdownOpen && !isAutoStatus && (
                                             <>
                                                 <div className="fixed inset-0 z-10" onClick={() => setStatusDropdownReqId(null)} />
                                                 <div className="absolute right-0 top-full mt-1 z-20 py-1 bg-card border border-border rounded shadow-lg min-w-[100px]">

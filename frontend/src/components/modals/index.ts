@@ -3,6 +3,7 @@ export * from './CreateTaskModal';
 export * from './EditTaskModal';
 export * from './RequirementFormModal';
 export * from './RequirementDetailModal';
+export * from './RequirementBreakdownModal';
 export * from './ConfigureAgentModal';
 export * from './TaskDetailModal';
 export * from './EditProjectModal';

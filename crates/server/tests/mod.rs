@@ -35,6 +35,7 @@ pub mod health_tests;
 pub mod helpers;
 pub mod project_assistant_tests;
 pub mod projects_tests;
+pub mod requirement_breakdowns_tests;
 pub mod requirements_tests;
 pub mod reviews_tests;
 pub mod sprints_tests;

@@ -146,6 +146,15 @@ const taskStatusIcons: Record<string, string> = {
     done: 'check_circle',
 };
 
+function normalizeTaskStatus(status: string | undefined): string {
+    if (!status) return 'todo';
+    return status
+        .trim()
+        .replace(/([a-z0-9])([A-Z])/g, '$1_$2')
+        .replace(/[\s-]+/g, '_')
+        .toLowerCase();
+}
+
 interface RequirementDetailModalProps {
     isOpen: boolean;
     onClose: () => void;
@@ -175,8 +184,25 @@ export function RequirementDetailModal({
 
     if (!isOpen || !requirement) return null;
 
+    const linkedTaskStatuses = linkedTasks.map((task) => normalizeTaskStatus(task.status));
+    const linkedDoneCount = linkedTaskStatuses.filter((status) =>
+        ['done', 'archived', 'cancelled', 'canceled'].includes(status)
+    ).length;
+    const hasLinkedTasks = linkedTasks.length > 0;
+    const derivedRequirementStatus: RequirementStatus =
+        !hasLinkedTasks
+            ? requirement.status
+            : linkedDoneCount === linkedTaskStatuses.length
+                ? 'done'
+                : linkedDoneCount > 0 ||
+                    linkedTaskStatuses.some((status) => ['in_progress', 'in_review', 'blocked'].includes(status))
+                    ? 'in_progress'
+                    : 'todo';
+    const statusManagedByTasks = hasLinkedTasks;
+
     const shortId = requirement.id.slice(0, 8);
-    const statusStyle = statusStyles[requirement.status] || statusStyles.todo;
+    const statusStyle = statusStyles[derivedRequirementStatus] || statusStyles.todo;
+    const isInProgressStatus = derivedRequirementStatus === 'in_progress';
     const createdDate = requirement.created_at ? new Date(requirement.created_at).toLocaleDateString() : '';
 
     const handleDelete = async () => {
@@ -194,6 +220,7 @@ export function RequirementDetailModal({
     };
 
     const handleStatusChange = async (newStatus: RequirementStatus) => {
+        if (statusManagedByTasks) return;
         setStatusDropdownOpen(false);
         if (newStatus === requirement.status) return;
         setIsUpdatingStatus(true);
@@ -233,20 +260,35 @@ export function RequirementDetailModal({
                                         Due: {new Date(requirement.due_date + 'T12:00:00').toLocaleDateString()}
                                     </span>
                                 )}
+                                {statusManagedByTasks && (
+                                    <span className="text-xs text-muted-foreground bg-card/60 border border-border rounded-full px-2 py-0.5">
+                                        Status follows linked tasks
+                                    </span>
+                                )}
                             </div>
                         </div>
                         <div className="flex items-center gap-2 shrink-0">
                             <div className="relative">
                                 <button
-                                    onClick={() => setStatusDropdownOpen(!statusDropdownOpen)}
-                                    disabled={isUpdatingStatus}
+                                    onClick={() => {
+                                        if (statusManagedByTasks) return;
+                                        setStatusDropdownOpen(!statusDropdownOpen);
+                                    }}
+                                    disabled={isUpdatingStatus || statusManagedByTasks}
                                     className={`flex items-center gap-1 text-xs font-bold px-3 py-1.5 rounded-full ${statusStyle.bg} ${statusStyle.text} hover:opacity-90 transition-opacity`}
+                                    title={statusManagedByTasks ? 'Status is auto-derived from linked tasks' : 'Change requirement status'}
                                 >
-                                    <span className="material-symbols-outlined text-[14px]">{statusStyle.icon}</span>
-                                    {STATUS_LABELS[requirement.status]}
-                                    <span className="material-symbols-outlined text-[14px]">expand_more</span>
+                                    {isInProgressStatus ? (
+                                        <span className="inline-block w-3.5 h-3.5 rounded-full border-2 border-current/35 border-t-current animate-spin" />
+                                    ) : (
+                                        <span className="material-symbols-outlined text-[14px]">{statusStyle.icon}</span>
+                                    )}
+                                    {STATUS_LABELS[derivedRequirementStatus]}
+                                    {!statusManagedByTasks && (
+                                        <span className="material-symbols-outlined text-[14px]">expand_more</span>
+                                    )}
                                 </button>
-                                {statusDropdownOpen && (
+                                {statusDropdownOpen && !statusManagedByTasks && (
                                     <>
                                         <div className="fixed inset-0 z-10" onClick={() => setStatusDropdownOpen(false)} />
                                         <div className="absolute right-0 top-full mt-1 z-20 py-1 bg-card border border-border rounded-lg shadow-lg min-w-[140px]">
@@ -338,9 +380,9 @@ export function RequirementDetailModal({
                             ) : (
                                 <div className="space-y-2">
                                     {linkedTasks.map((task) => {
-                                        const taskStatus = (task.status || 'todo').toLowerCase().replace(' ', '_');
+                                        const taskStatus = normalizeTaskStatus(task.status);
                                         const icon = taskStatusIcons[taskStatus] || 'radio_button_unchecked';
-                                        const isDone = ['done', 'archived', 'cancelled', 'canceled'].includes((task.status || '').toLowerCase());
+                                        const isDone = ['done', 'archived', 'cancelled', 'canceled'].includes(taskStatus);
                                         return (
                                             <div
                                                 key={task.id}
@@ -353,7 +395,7 @@ export function RequirementDetailModal({
                                                 <div className="flex-1 min-w-0">
                                                     <p className="text-sm font-medium text-card-foreground truncate">{task.title}</p>
                                                     <p className="text-xs text-muted-foreground capitalize">
-                                                        {task.status || 'Todo'} · {task.task_type || 'feature'}
+                                                        {taskStatus.replace(/_/g, ' ')} · {task.task_type || 'feature'}
                                                     </p>
                                                 </div>
                                                 <span className="material-symbols-outlined text-muted-foreground text-[18px]">

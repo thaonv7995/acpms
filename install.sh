@@ -86,7 +86,7 @@ print_success_report() {
   echo "${C_GREEN}║${C_RESET}                                                                ${C_GREEN}║${C_RESET}"
   echo "${C_GREEN}╠════════════════════════════════════════════════════════════════╣${C_RESET}"
   [ "$OS" = "linux" ] && command -v systemctl >/dev/null 2>&1 && echo "${C_GREEN}║${C_RESET}  ${C_DIM}Status:    systemctl status acpms-server${C_RESET}                          ${C_GREEN}║${C_RESET}"
-  echo "${C_GREEN}║${C_RESET}  ${C_DIM}Uninstall: ./install.sh --uninstall${C_RESET}                             ${C_GREEN}║${C_RESET}"
+  echo "${C_GREEN}║${C_RESET}  ${C_DIM}Uninstall: bash -c "$(curl -fsSL https://raw.githubusercontent.com/thaonv7995/acpms/main/install.sh)" -- --uninstall${C_RESET}                             ${C_GREEN}║${C_RESET}"
   echo "${C_GREEN}╚════════════════════════════════════════════════════════════════╝${C_RESET}"
   echo
 }

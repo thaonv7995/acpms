@@ -2,7 +2,13 @@
 import { useState, useMemo, useEffect } from 'react';
 import { useParams, useNavigate } from 'react-router-dom';
 import { AppShell } from '../components/layout/AppShell';
-import { CreateTaskModal, ViewLogsModal, RequirementFormModal, RequirementDetailModal } from '../components/modals';
+import {
+  CreateTaskModal,
+  ViewLogsModal,
+  RequirementFormModal,
+  RequirementDetailModal,
+  RequirementBreakdownModal,
+} from '../components/modals';
 import { FloatingChatButton, ProjectAssistantPanel } from '../components/project-assistant';
 import { getTaskAttempts } from '../api/taskAttempts';
 import { createProjectFork, linkExistingFork, recheckProjectRepositoryAccess } from '../api/projects';
@@ -119,7 +125,9 @@ export function ProjectDetailPage() {
   const [showCreateTaskModal, setShowCreateTaskModal] = useState(false);
   const [showRequirementForm, setShowRequirementForm] = useState(false);
   const [showRequirementDetail, setShowRequirementDetail] = useState(false);
+  const [showRequirementBreakdown, setShowRequirementBreakdown] = useState(false);
   const [viewingRequirement, setViewingRequirement] = useState<typeof requirements[0] | null>(null);
+  const [breakdownRequirement, setBreakdownRequirement] = useState<typeof requirements[0] | null>(null);
   const [editingRequirement, setEditingRequirement] = useState<typeof requirements[0] | null>(null);
   const [logsTask, setLogsTask] = useState<KanbanTask | null>(null);
   const [logsAttemptId, setLogsAttemptId] = useState<string | null>(null);
@@ -568,7 +576,23 @@ export function ProjectDetailPage() {
           setShowRequirementForm(true);
         }}
         onRefresh={refetch}
-        onBreakIntoTasks={() => {/* Phase 3 */}}
+        onBreakIntoTasks={() => {
+          setBreakdownRequirement(viewingRequirement);
+          setShowRequirementDetail(false);
+          setShowRequirementBreakdown(true);
+        }}
+      />
+
+      <RequirementBreakdownModal
+        isOpen={showRequirementBreakdown}
+        onClose={() => {
+          setShowRequirementBreakdown(false);
+          setBreakdownRequirement(null);
+        }}
+        projectId={project.id}
+        requirement={breakdownRequirement}
+        sprints={sprints}
+        onCreated={refetch}
       />
 
       {showAssistant && project && (

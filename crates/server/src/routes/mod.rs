@@ -27,6 +27,7 @@ pub mod deployments;
 pub mod execution_processes;
 pub mod gitlab;
 pub mod preview;
+pub mod requirement_breakdowns;
 pub mod requirements;
 pub mod reviews;
 pub mod settings;
@@ -272,6 +273,26 @@ pub fn create_router(state: AppState) -> Router {
             get(requirements::get_requirement)
                 .put(requirements::update_requirement)
                 .delete(requirements::delete_requirement),
+        )
+        .route(
+            "/projects/:project_id/requirements/:requirement_id/breakdown/start",
+            post(requirement_breakdowns::start_requirement_breakdown),
+        )
+        .route(
+            "/projects/:project_id/requirements/:requirement_id/breakdown/manual/confirm",
+            post(requirement_breakdowns::confirm_requirement_breakdown_manual),
+        )
+        .route(
+            "/projects/:project_id/requirements/:requirement_id/breakdown/:session_id",
+            get(requirement_breakdowns::get_requirement_breakdown_session),
+        )
+        .route(
+            "/projects/:project_id/requirements/:requirement_id/breakdown/:session_id/confirm",
+            post(requirement_breakdowns::confirm_requirement_breakdown),
+        )
+        .route(
+            "/projects/:project_id/requirements/:requirement_id/breakdown/:session_id/cancel",
+            post(requirement_breakdowns::cancel_requirement_breakdown),
         )
         // Tasks routes
         .route(

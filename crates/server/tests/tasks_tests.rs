@@ -986,4 +986,118 @@ async fn test_list_tasks_filters_by_sprint_id() {
 
     cleanup_test_data(&pool, user_id, Some(project_id)).await;
 }
+
+#[tokio::test]
+#[ignore = "requires test database"]
+async fn test_requirement_status_auto_syncs_from_linked_task_status() {
+    let pool = setup_test_db().await;
+    let state = create_test_app_state(pool.clone()).await;
+    let router = create_router(state);
+
+    let (user_id, _) = create_test_user(&pool, None, None, None).await;
+    let token = generate_test_token(user_id);
+    let project_id = create_test_project(&pool, user_id, Some("Requirement status sync")).await;
+
+    let requirement = acpms_services::RequirementService::new(pool.clone())
+        .create_requirement(
+            user_id,
+            acpms_db::models::CreateRequirementRequest {
+                project_id,
+                title: "Requirement sync".to_string(),
+                content: "Status should follow linked task progress".to_string(),
+                sprint_id: None,
+                priority: Some(acpms_db::models::RequirementPriority::Medium),
+                due_date: None,
+                metadata: None,
+            },
+        )
+        .await
+        .expect("failed to create requirement");
+
+    let create_task_body = json!({
+        "project_id": project_id.to_string(),
+        "requirement_id": requirement.id.to_string(),
+        "title": "Linked task",
+        "description": "Task connected to requirement",
+        "task_type": "Feature"
+    });
+
+    let (create_status, create_resp): (axum::http::StatusCode, String) =
+        make_request_with_string_headers(
+            &router,
+            "POST",
+            "/api/v1/tasks",
+            Some(&create_task_body.to_string()),
+            vec![
+                ("content-type", "application/json".to_string()),
+                auth_header_bearer(&token),
+            ],
+        )
+        .await;
+    assert_eq!(create_status, 201, "create task failed: {}", create_resp);
+    let create_json: serde_json::Value =
+        serde_json::from_str(&create_resp).expect("invalid create response json");
+    let task_id = create_json["data"]["id"]
+        .as_str()
+        .expect("missing task id")
+        .to_string();
+
+    let update_to_progress = json!({ "status": "in_progress" });
+    let (progress_status, progress_resp): (axum::http::StatusCode, String) =
+        make_request_with_string_headers(
+            &router,
+            "PUT",
+            &format!("/api/v1/tasks/{}/status", task_id),
+            Some(&update_to_progress.to_string()),
+            vec![
+                ("content-type", "application/json".to_string()),
+                auth_header_bearer(&token),
+            ],
+        )
+        .await;
+    assert_eq!(
+        progress_status, 200,
+        "update to in_progress failed: {}",
+        progress_resp
+    );
+
+    let requirement_status_after_progress: String =
+        sqlx::query_scalar("SELECT status::text FROM requirements WHERE id = $1")
+            .bind(requirement.id)
+            .fetch_one(&pool)
+            .await
+            .expect("failed to fetch requirement status after in_progress");
+    assert_eq!(
+        requirement_status_after_progress, "in_progress",
+        "Expected requirement status to become in_progress when linked task starts"
+    );
+
+    let update_to_done = json!({ "status": "done" });
+    let (done_status, done_resp): (axum::http::StatusCode, String) =
+        make_request_with_string_headers(
+            &router,
+            "PUT",
+            &format!("/api/v1/tasks/{}/status", task_id),
+            Some(&update_to_done.to_string()),
+            vec![
+                ("content-type", "application/json".to_string()),
+                auth_header_bearer(&token),
+            ],
+        )
+        .await;
+    assert_eq!(done_status, 200, "update to done failed: {}", done_resp);
+
+    let requirement_status_after_done: String =
+        sqlx::query_scalar("SELECT status::text FROM requirements WHERE id = $1")
+            .bind(requirement.id)
+            .fetch_one(&pool)
+            .await
+            .expect("failed to fetch requirement status after done");
+    assert_eq!(
+        requirement_status_after_done, "done",
+        "Expected requirement status to become done when all linked tasks are done"
+    );
+
+    cleanup_test_data(&pool, user_id, Some(project_id)).await;
+}
 // End test module

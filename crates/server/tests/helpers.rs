@@ -459,6 +459,11 @@ pub async fn cleanup_test_data(pool: &PgPool, user_id: Uuid, project_id: Option<
 
 /// Delete all test data associated with a single project.
 pub async fn delete_test_project(pool: &PgPool, project_id: Uuid) {
+    let _ = sqlx::query("DELETE FROM requirement_breakdown_sessions WHERE project_id = $1")
+        .bind(project_id)
+        .execute(pool)
+        .await;
+
     let _ = sqlx::query("DELETE FROM project_assistant_sessions WHERE project_id = $1")
         .bind(project_id)
         .execute(pool)
