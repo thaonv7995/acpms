@@ -16,3 +16,10 @@ Multi-account / multi-tenant: architecture, UI mockup, legacy migration plan, fe
 - [v2-multi-account-ui-mockup.md](v2-multi-account/v2-multi-account-ui-mockup.md) – UI mockup
 - [v2-legacy-features-migration-plan.md](v2-multi-account/v2-legacy-features-migration-plan.md) – Legacy features migration plan
 - [feasibility_study_multi_account.md](v2-multi-account/feasibility_study_multi_account.md) – Feasibility study
+
+## [ephemeral-sandbox](ephemeral-sandbox/)
+
+Docker container isolation for AI agent execution to ensure system security and dependency isolation.
+
+- [01_overview.md](ephemeral-sandbox/01_overview.md) - Architecture & Overview
+- [02_execution_flow.md](ephemeral-sandbox/02_execution_flow.md) - Docker Volume Mount Execution Flow

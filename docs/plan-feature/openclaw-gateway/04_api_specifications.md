@@ -24,6 +24,11 @@ All endpoints (except `openapi.json`) require:
 *   **Purpose**: Checks the precise status of a running executor instance. Note: While Webhooks push this data aggressively, a fallback GET request is standard for recovery.
 *   **Returns**: Session status enum (Starting, Running, Paused, Completed, Failed), current logs/context buffer.
 
+### 1.4 Real-time Session Stream (SSE)
+*   **Endpoint**: `GET /api/openclaw/v1/sessions/{session_id}/stream`
+*   **Purpose**: Subscribes to Server-Sent Events (SSE) to receive real-time execution logs, stdout, and thought processes from the Agent.
+*   **Returns**: `text/event-stream` of JSON events. See [07_streaming_api.md](07_streaming_api.md) for full details.
+
 ---
 
 ## 2. Control Plane (Write/Execute APIs)
@@ -58,3 +63,15 @@ All endpoints (except `openapi.json`) require:
 ### 2.3 Stop/Pause Session (Emergency Stop)
 *   **Endpoint**: `POST /api/openclaw/v1/sessions/{session_id}/pause`
 *   **Purpose**: Gives OpenClaw control over runaway processes or erroneous scripts executed by the internal agents.
+
+### 2.4 Provide Human Input (HITL)
+*   **Endpoint**: `POST /api/openclaw/v1/sessions/{session_id}/input`
+*   **Purpose**: Responds to a `session.needs_input` webhook by providing text to the Agent's standard input. Allows humans to clarify requirements or authorize actions mid-flight.
+*   **Payload**:
+    ```json
+    {
+      "input_text": "The secret code is 123456",
+      "action": "submit"
+    }
+    ```
+*   **Returns**: `200 OK` if the input was successfully piped into the running agent process. See [08_hitl_api.md](08_hitl_api.md) for full details.
