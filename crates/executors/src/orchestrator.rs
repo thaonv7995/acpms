@@ -429,6 +429,13 @@ enum AgentCliProvider {
 }
 
 impl AgentCliProvider {
+    const ALL: [Self; 4] = [
+        Self::ClaudeCode,
+        Self::OpenAiCodex,
+        Self::GeminiCli,
+        Self::CursorCli,
+    ];
+
     fn from_str(s: &str) -> Self {
         match s.trim().to_lowercase().as_str() {
             "claude-code" => Self::ClaudeCode,
@@ -455,6 +462,17 @@ impl AgentCliProvider {
             Self::GeminiCli => "Google Gemini",
             Self::CursorCli => "Cursor CLI",
         }
+    }
+
+    fn fallback_order(default_provider: Self) -> Vec<Self> {
+        let mut ordered = Vec::with_capacity(Self::ALL.len());
+        ordered.push(default_provider);
+        ordered.extend(
+            Self::ALL
+                .into_iter()
+                .filter(|provider| *provider != default_provider),
+        );
+        ordered
     }
 }
 
@@ -746,41 +764,86 @@ impl ExecutorOrchestrator {
         })
     }
 
-    async fn resolve_selected_agent_cli(
+    async fn resolve_provider_readiness(
         &self,
+        provider: AgentCliProvider,
         attempt_id_for_log: Option<Uuid>,
-    ) -> Result<(AgentCliProvider, Option<HashMap<String, String>>)> {
-        let settings = self.fetch_system_settings().await?;
-        let provider = AgentCliProvider::from_str(&settings.agent_cli_provider);
-
+    ) -> Result<Option<HashMap<String, String>>> {
         if matches!(provider, AgentCliProvider::ClaudeCode) {
             self.verify_claude_session(attempt_id_for_log).await?;
         }
 
-        let provider_env = match Self::resolve_provider_command_env(provider) {
-            Ok(env) => env,
-            Err(err) => {
-                if let Some(attempt_id) = attempt_id_for_log {
-                    let _ = self.log(attempt_id, "system", &err.to_string()).await;
-                }
-                return Err(err);
-            }
-        };
+        Self::resolve_provider_command_env(provider)
+    }
 
-        Ok((provider, provider_env))
+    async fn resolve_selected_agent_cli_with_fallback(
+        &self,
+        attempt_id_for_log: Option<Uuid>,
+    ) -> Result<(AgentCliProvider, Option<HashMap<String, String>>)> {
+        let settings = self.fetch_system_settings().await?;
+        let selected_provider = AgentCliProvider::from_str(&settings.agent_cli_provider);
+        let mut failure_reasons: Vec<String> = Vec::new();
+
+        for provider in AgentCliProvider::fallback_order(selected_provider) {
+            match self
+                .resolve_provider_readiness(provider, attempt_id_for_log)
+                .await
+            {
+                Ok(provider_env) => {
+                    if provider != selected_provider {
+                        let fallback_msg = format!(
+                            "Default agent provider {} is unavailable. Falling back to {}.",
+                            selected_provider.display_name(),
+                            provider.display_name()
+                        );
+                        if let Some(attempt_id) = attempt_id_for_log {
+                            let _ = self.log(attempt_id, "system", &fallback_msg).await;
+                        }
+                        warn!(
+                            selected_provider = selected_provider.as_str(),
+                            fallback_provider = provider.as_str(),
+                            "Agent provider fallback activated"
+                        );
+                    }
+                    return Ok((provider, provider_env));
+                }
+                Err(err) => {
+                    let reason =
+                        format!("{} unavailable: {}", provider.display_name(), err);
+                    if let Some(attempt_id) = attempt_id_for_log {
+                        let _ = self.log(attempt_id, "system", &reason).await;
+                    }
+                    warn!(
+                        provider = provider.as_str(),
+                        error = %err,
+                        "Agent provider unavailable during runtime selection"
+                    );
+                    failure_reasons.push(reason);
+                }
+            }
+        }
+
+        if failure_reasons.is_empty() {
+            bail!("No available agent provider found");
+        }
+        bail!(
+            "No available agent provider found. {}",
+            failure_reasons.join(" | ")
+        );
     }
 
     async fn resolve_agent_cli(
         &self,
         attempt_id: Uuid,
     ) -> Result<(AgentCliProvider, Option<HashMap<String, String>>)> {
-        self.resolve_selected_agent_cli(Some(attempt_id)).await
+        self.resolve_selected_agent_cli_with_fallback(Some(attempt_id))
+            .await
     }
 
     async fn resolve_agent_cli_for_assistant(
         &self,
     ) -> Result<(AgentCliProvider, Option<HashMap<String, String>>)> {
-        self.resolve_selected_agent_cli(None).await
+        self.resolve_selected_agent_cli_with_fallback(None).await
     }
 
     async fn set_attempt_executor(
@@ -6783,6 +6846,33 @@ mod tests {
             err.to_string().contains("Cursor CLI not found"),
             "unexpected error: {err}"
         );
+    }
+
+    #[test]
+    fn agent_cli_provider_fallback_order_keeps_selected_first() {
+        let ordered = AgentCliProvider::fallback_order(AgentCliProvider::GeminiCli);
+        assert_eq!(
+            ordered,
+            vec![
+                AgentCliProvider::GeminiCli,
+                AgentCliProvider::ClaudeCode,
+                AgentCliProvider::OpenAiCodex,
+                AgentCliProvider::CursorCli
+            ]
+        );
+    }
+
+    #[test]
+    fn agent_cli_provider_fallback_order_contains_all_providers_once() {
+        let ordered = AgentCliProvider::fallback_order(AgentCliProvider::CursorCli);
+        assert_eq!(ordered.len(), AgentCliProvider::ALL.len());
+        for provider in AgentCliProvider::ALL {
+            assert!(
+                ordered.contains(&provider),
+                "fallback order should include provider {}",
+                provider.as_str()
+            );
+        }
     }
 
     #[test]
