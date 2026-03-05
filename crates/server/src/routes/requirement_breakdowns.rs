@@ -121,8 +121,10 @@ pub struct ManualBreakdownTaskDraftRequest {
     pub title: String,
     pub description: Option<String>,
     pub task_type: String,
-    pub estimate: Option<String>,
+    pub priority: Option<String>,
+    pub assigned_to: Option<Uuid>,
     pub kind: Option<String>,
+    pub metadata: Option<Value>,
 }
 
 #[derive(Debug, Deserialize)]
@@ -200,6 +202,22 @@ fn parse_supported_task_type(value: &str) -> Option<TaskType> {
         "hotfix" => Some(TaskType::Hotfix),
         "spike" => Some(TaskType::Spike),
         "small_task" => Some(TaskType::SmallTask),
+        _ => None,
+    }
+}
+
+fn parse_supported_priority(value: Option<&str>) -> Option<&'static str> {
+    match value
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+        .unwrap_or("medium")
+        .to_ascii_lowercase()
+        .as_str()
+    {
+        "low" => Some("low"),
+        "medium" => Some("medium"),
+        "high" => Some("high"),
+        "critical" => Some("critical"),
         _ => None,
     }
 }
@@ -1084,6 +1102,30 @@ pub async fn confirm_requirement_breakdown_manual(
                 idx, task.task_type
             ))
         })?;
+        let priority = parse_supported_priority(task.priority.as_deref()).ok_or_else(|| {
+            ApiError::BadRequest(format!(
+                "tasks[{}].priority '{}' is not supported",
+                idx,
+                task.priority.as_deref().unwrap_or_default()
+            ))
+        })?;
+
+        if let Some(assignee_id) = task.assigned_to {
+            let is_member: bool = sqlx::query_scalar(
+                "SELECT EXISTS(SELECT 1 FROM project_members WHERE project_id = $1 AND user_id = $2)",
+            )
+            .bind(project_id)
+            .bind(assignee_id)
+            .fetch_one(&mut *tx)
+            .await
+            .map_err(|e| ApiError::Internal(e.to_string()))?;
+            if !is_member {
+                return Err(ApiError::BadRequest(format!(
+                    "tasks[{}].assigned_to must belong to the project",
+                    idx
+                )));
+            }
+        }
 
         let description = task
             .description
@@ -1099,19 +1141,23 @@ pub async fn confirm_requirement_breakdown_manual(
             .filter(|value| !value.is_empty())
             .unwrap_or("implementation");
 
-        let metadata = json!({
-            "breakdown_mode": "manual",
-            "breakdown_kind": normalized_kind,
-            "estimate": task.estimate.as_deref().map(|v| v.trim()),
-        });
+        let mut metadata = task.metadata.clone().unwrap_or_else(|| json!({}));
+        if !metadata.is_object() {
+            metadata = json!({ "manual_payload": metadata });
+        }
+        if let Some(metadata_obj) = metadata.as_object_mut() {
+            metadata_obj.insert("breakdown_mode".to_string(), json!("manual"));
+            metadata_obj.insert("breakdown_kind".to_string(), json!(normalized_kind));
+            metadata_obj.insert("priority".to_string(), json!(priority));
+        }
 
         let created = sqlx::query_as::<_, Task>(
             r#"
             INSERT INTO tasks (
-                project_id, title, description, task_type, status,
+                project_id, title, description, task_type, status, assigned_to,
                 requirement_id, sprint_id, created_by, metadata
             )
-            VALUES ($1, $2, $3, $4::task_type, $5::task_status, $6, $7, $8, $9)
+            VALUES ($1, $2, $3, $4::task_type, $5::task_status, $6, $7, $8, $9, $10)
             RETURNING id, project_id, title, description, task_type, status, assigned_to, parent_task_id, requirement_id, sprint_id, gitlab_issue_id, metadata, created_by, created_at, updated_at
             "#,
         )
@@ -1120,6 +1166,7 @@ pub async fn confirm_requirement_breakdown_manual(
         .bind(description)
         .bind(task_type)
         .bind(TaskStatus::Todo)
+        .bind(task.assigned_to)
         .bind(requirement_id)
         .bind(resolved_sprint_id)
         .bind(auth_user.id)

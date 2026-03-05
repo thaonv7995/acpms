@@ -592,6 +592,7 @@ export function ProjectDetailPage() {
         projectId={project.id}
         requirement={breakdownRequirement}
         sprints={sprints}
+        members={members}
         onCreated={refetch}
       />
 

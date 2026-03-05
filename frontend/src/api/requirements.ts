@@ -146,8 +146,10 @@ export interface ManualBreakdownTaskDraft {
     title: string;
     description?: string;
     task_type: string;
-    estimate?: string | null;
+    priority?: 'low' | 'medium' | 'high' | 'critical';
+    assigned_to?: string | null;
     kind?: string | null;
+    metadata?: Record<string, unknown>;
 }
 
 export interface ConfirmRequirementBreakdownManualRequest {

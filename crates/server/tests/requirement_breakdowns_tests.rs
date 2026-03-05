@@ -371,18 +371,22 @@ async fn test_breakdown_manual_confirm_creates_todo_tasks_without_attempts() {
                         "title": "Plan scope and assumptions",
                         "description": "Prepare implementation scope notes",
                         "task_type": "spike",
+                        "priority": "high",
+                        "assigned_to": user_id,
                         "kind": "analysis_session"
                     },
                     {
                         "title": "Implement API flow",
                         "description": "Add endpoint and validation",
                         "task_type": "feature",
+                        "priority": "critical",
                         "kind": "implementation"
                     },
                     {
                         "title": "Add regression tests",
                         "description": "Cover critical paths",
                         "task_type": "test",
+                        "priority": "low",
                         "kind": "implementation"
                     }
                 ]
@@ -416,6 +420,40 @@ async fn test_breakdown_manual_confirm_creates_todo_tasks_without_attempts() {
             "Expected task status=todo"
         );
     }
+    let expected_assignee = user_id.to_string();
+    assert_eq!(
+        tasks[0]["assigned_to"].as_str(),
+        Some(expected_assignee.as_str()),
+        "Expected assigned_to to be persisted for manual breakdown task"
+    );
+
+    let task_rows: Vec<(String, Option<Uuid>, Option<String>)> = sqlx::query_as(
+        r#"
+        SELECT title, assigned_to, metadata->>'priority' as priority
+        FROM tasks
+        WHERE project_id = $1 AND requirement_id = $2
+        ORDER BY created_at ASC
+        "#,
+    )
+    .bind(project_id)
+    .bind(requirement.id)
+    .fetch_all(&pool)
+    .await
+    .expect("failed to fetch created tasks");
+
+    assert_eq!(
+        task_rows.len(),
+        3,
+        "Expected persisted tasks to match manual confirmation count"
+    );
+    assert_eq!(
+        task_rows[0].1,
+        Some(user_id),
+        "First task should be assigned"
+    );
+    assert_eq!(task_rows[0].2.as_deref(), Some("high"));
+    assert_eq!(task_rows[1].2.as_deref(), Some("critical"));
+    assert_eq!(task_rows[2].2.as_deref(), Some("low"));
 
     let attempts_count: i64 = sqlx::query_scalar(
         r#"
@@ -436,4 +474,82 @@ async fn test_breakdown_manual_confirm_creates_todo_tasks_without_attempts() {
     );
 
     cleanup_test_data(&pool, user_id, Some(project_id)).await;
+}
+
+#[tokio::test]
+#[ignore = "requires test database"]
+async fn test_breakdown_manual_confirm_rejects_assignee_not_in_project() {
+    let pool = setup_test_db().await;
+    let state = create_test_app_state(pool.clone()).await;
+    let router = create_router(state);
+
+    let (user_id, _) = create_test_user(&pool, None, None, None).await;
+    let token = generate_test_token(user_id);
+    let project_id =
+        create_test_project(&pool, user_id, Some("Breakdown Manual Assignee Validation")).await;
+
+    let (foreign_user_id, _) = create_test_user(&pool, None, None, None).await;
+
+    use acpms_services::RequirementService;
+    let requirement = RequirementService::new(pool.clone())
+        .create_requirement(
+            user_id,
+            acpms_db::models::CreateRequirementRequest {
+                project_id,
+                title: "Manual breakdown assignee validation".to_string(),
+                content: "Validate assignee ownership".to_string(),
+                sprint_id: None,
+                priority: Some(acpms_db::models::RequirementPriority::Medium),
+                due_date: None,
+                metadata: None,
+            },
+        )
+        .await
+        .expect("failed to create requirement");
+
+    let (status, body) = make_request_with_string_headers(
+        &router,
+        "POST",
+        &format!(
+            "/api/v1/projects/{}/requirements/{}/breakdown/manual/confirm",
+            project_id, requirement.id
+        ),
+        Some(
+            &json!({
+                "assignment_mode": "backlog",
+                "tasks": [
+                    {
+                        "title": "Implement validation",
+                        "description": "Should reject non-member assignee",
+                        "task_type": "feature",
+                        "priority": "medium",
+                        "assigned_to": foreign_user_id,
+                        "kind": "implementation"
+                    }
+                ]
+            })
+            .to_string(),
+        ),
+        vec![
+            ("content-type", "application/json".to_string()),
+            auth_header_bearer(&token),
+        ],
+    )
+    .await;
+
+    assert_eq!(
+        status,
+        axum::http::StatusCode::BAD_REQUEST,
+        "Expected 400 for non-member assignee, got {}: {}",
+        status,
+        body
+    );
+    assert!(
+        body.contains("assigned_to"),
+        "Expected assigned_to ownership validation error, got {}",
+        body
+    );
+
+    cleanup_test_data(&pool, user_id, Some(project_id)).await;
+    cleanup_test_data(&pool, foreign_user_id, None).await;
 }
