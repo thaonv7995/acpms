@@ -34,7 +34,6 @@ import { PreviewPanelWrapper } from './project-tasks/preview-panel-wrapper';
 import { usePreviewReadiness } from '../hooks/usePreviewReadiness';
 import { createTaskAttempt, cancelAttempt, getTaskAttempts } from '../api/taskAttempts';
 import { deleteTask } from '../api/tasks';
-import { resolveKanbanColumnStatus } from '../utils/kanbanColumns';
 
 type PreviewDeliveryKind = 'live_preview' | 'artifact_download' | 'unsupported';
 
@@ -225,7 +224,7 @@ export function ProjectTasksPage() {
     columnConfig,
     setColumnConfig,
     rawTasks,
-    updateStatus,
+    moveTaskToColumn,
     closeTask,
     closeAllDone,
   } = useKanban(kanbanProjectId);
@@ -404,33 +403,17 @@ export function ProjectTasksPage() {
 
   const handleTaskMoveFromKanban = useCallback(
     async (targetTaskId: string, targetColumnId: string) => {
-      const targetColumn = columns.find((column) => column.id === targetColumnId);
-      if (!targetColumn) return;
-
       const sourceColumn = columns.find((column) =>
         column.tasks.some((candidate) => candidate.id === targetTaskId)
       );
 
-      if (sourceColumn && sourceColumn.id === targetColumn.id) {
+      if (sourceColumn && sourceColumn.id === targetColumnId) {
         return;
       }
 
-      if (sourceColumn && sourceColumn.status === targetColumn.status) {
-        return;
-      }
-
-      const task = columns
-        .flatMap((column) => column.tasks)
-        .find((candidate) => candidate.id === targetTaskId);
-      if (task) {
-        const currentDisplayStatus = resolveKanbanColumnStatus(task.status, columnConfig);
-        if (currentDisplayStatus === targetColumn.status) {
-          return;
-        }
-      }
-      await updateStatus(targetTaskId, targetColumn.status);
+      await moveTaskToColumn(targetTaskId, targetColumnId, 0);
     },
-    [columnConfig, columns, updateStatus]
+    [columns, moveTaskToColumn]
   );
 
   const refreshKanbanAfterExecutionAction = useCallback(async () => {

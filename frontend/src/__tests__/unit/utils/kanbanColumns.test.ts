@@ -15,9 +15,9 @@ describe('kanbanColumns config defaults', () => {
     expect(resolveKanbanColumnStatus('blocked')).toBe('in_review');
   });
 
-  it('always keeps todo visible and hides archived when optional column is disabled', () => {
+  it('keeps backlog tasks visible under TODO when backlog column is disabled', () => {
     expect(resolveKanbanColumnStatus('todo')).toBe('todo');
-    expect(resolveKanbanColumnStatus('backlog')).toBeNull();
+    expect(resolveKanbanColumnStatus('backlog')).toBe('todo');
     expect(resolveKanbanColumnStatus('archived')).toBeNull();
   });
 

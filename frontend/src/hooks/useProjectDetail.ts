@@ -88,13 +88,15 @@ function transformToKanbanTask(task: Task): KanbanTask {
     // Get priority from metadata
     const priority = (task.metadata?.priority as KanbanTask['priority']) || 'medium';
 
+    const status = statusMap[task.status] || 'todo';
+
     return {
         id: task.id,
         title: task.title,
         description: task.description,
         requirement_id: task.requirement_id,
         type: typeMap[task.task_type] || 'feature',
-        status: statusMap[task.status] || 'todo',
+        status,
         priority,
         progress: task.metadata?.progress as number | undefined,
         assignee: task.assigned_to ? {

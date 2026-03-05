@@ -72,15 +72,22 @@ export function KanbanProvider({
         return;
       }
 
-      // Extract column ID from drop zone ID (format: "column-{columnId}")
-      const overColumnId = over.id as string;
-      if (!overColumnId.startsWith('column-')) {
-        onDragEnd?.();
-        return;
+      const overId = String(over.id ?? '');
+      const overData = (over.data?.current ?? {}) as Record<string, unknown>;
+
+      // Prefer explicit droppable metadata, then fallback to ID parsing.
+      let newColumnId =
+        typeof overData.columnId === 'string'
+          ? overData.columnId
+          : undefined;
+      if (!newColumnId) {
+        if (overId.startsWith('column-')) {
+          newColumnId = overId.replace('column-', '');
+        } else if (overId.startsWith('col-')) {
+          newColumnId = overId;
+        }
       }
 
-      // Parse column ID (e.g., "column-col-in-review" -> "col-in-review")
-      const newColumnId = overColumnId.replace('column-', '');
       if (!newColumnId) {
         onDragEnd?.();
         return;

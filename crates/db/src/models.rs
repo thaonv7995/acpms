@@ -102,6 +102,7 @@ impl TaskType {
 #[serde(rename_all = "snake_case")]
 #[ts(export)]
 pub enum TaskStatus {
+    Backlog,
     Todo,
     InProgress,
     InReview, // Agent completed, waiting for human to review diff and approve

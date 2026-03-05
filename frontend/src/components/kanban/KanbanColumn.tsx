@@ -46,7 +46,8 @@ export function KanbanColumn({
 }: KanbanColumnProps) {
     // Make column a drop target
     const { setNodeRef, isOver } = useDroppable({
-        id: `column-${column.id}`,
+        id: column.id,
+        data: { columnId: column.id },
     });
 
     // Get status label

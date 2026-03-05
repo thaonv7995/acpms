@@ -445,9 +445,14 @@ impl TaskService {
         let valid = match (from, to) {
             // Allow staying in same status
             (a, b) if a == b => true,
+            // From BACKLOG
+            (Backlog, Todo) => true,
+            (Backlog, InProgress) => true,
             // From TODO
+            (Todo, Backlog) => true,
             (Todo, InProgress) => true,
             // From IN_PROGRESS
+            (InProgress, Backlog) => true,
             (InProgress, Todo) => true,
             (InProgress, InReview) => true,
             (InProgress, Done) => true,
@@ -455,12 +460,14 @@ impl TaskService {
             (InReview, InProgress) => true,
             (InReview, Done) => true,
             // From BLOCKED
+            (Blocked, Backlog) => true,    // Allow de-prioritizing
             (Blocked, Todo) => true,       // Allow resetting
             (Blocked, InProgress) => true, // Allow retry
             // From DONE
             (Done, Archived) => true,
             (Done, InProgress) => true, // Allow reopening
             // From ARCHIVED
+            (Archived, Backlog) => true, // Allow unarchiving to backlog
             (Archived, InProgress) => true, // Allow unarchiving
             // All other transitions forbidden
             _ => false,
