@@ -641,11 +641,12 @@ impl StatusManager {
         }
         let _ = flush_agent_log_buffer().await;
         // Update attempt status to failed with completed_at timestamp
-        sqlx::query(
+        let result = sqlx::query(
             r#"
             UPDATE task_attempts
             SET status = 'failed', error_message = $1, completed_at = NOW()
             WHERE id = $2
+              AND status != 'cancelled'
             "#,
         )
         .bind(error)
@@ -653,6 +654,10 @@ impl StatusManager {
         .execute(db_pool)
         .await
         .context("Failed to set attempt failed status")?;
+
+        if result.rows_affected() == 0 {
+            return Ok(());
+        }
 
         // Reset task status from 'in_progress' to 'todo' when attempt fails
         // This prevents tasks from being stuck in 'in_progress' state

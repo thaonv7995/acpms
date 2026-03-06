@@ -6,6 +6,25 @@ use helpers::*;
 
 // Test module
 use serde_json::json;
+use std::fs;
+use std::path::Path;
+use std::process::Command;
+use std::time::Duration;
+
+fn run_git(path: &Path, args: &[&str]) {
+    let output = Command::new("git")
+        .arg("-C")
+        .arg(path)
+        .args(args)
+        .output()
+        .expect("failed to execute git command");
+    assert!(
+        output.status.success(),
+        "git {:?} failed: {}",
+        args,
+        String::from_utf8_lossy(&output.stderr)
+    );
+}
 
 fn direct_gitops_repository_context() -> serde_json::Value {
     json!({
@@ -453,6 +472,117 @@ async fn test_cancel_attempt() {
 
     assert!(response["success"].as_bool().unwrap());
 
+    cleanup_test_data(&pool, user_id, Some(project_id)).await;
+}
+
+#[tokio::test]
+#[ignore = "requires test database"]
+async fn test_cancel_attempt_cleans_up_worktree_without_force() {
+    let pool = setup_test_db().await;
+    let state = create_test_app_state(pool.clone()).await;
+    let worktrees_base = state.worktrees_path.read().await.clone();
+    let router = create_router(state);
+
+    let (user_id, _) = create_test_user(&pool, None, None, None).await;
+    let token = generate_test_token(user_id);
+    let project_id = create_test_project(&pool, user_id, Some("Cancel Cleanup Project")).await;
+    let task_id = create_test_task(&pool, project_id, user_id, Some("Cancel Cleanup Task")).await;
+    let attempt_id = create_test_attempt(&pool, task_id, Some("running")).await;
+
+    let repo_relative_path = format!("cancel-cleanup-{}", project_id);
+    let repo_path = worktrees_base.join(&repo_relative_path);
+    fs::create_dir_all(&repo_path).expect("failed to create test repo dir");
+    run_git(&repo_path, &["init", "-b", "main"]);
+    run_git(
+        &repo_path,
+        &["config", "user.email", "cancel-test@example.com"],
+    );
+    run_git(&repo_path, &["config", "user.name", "Cancel Cleanup Test"]);
+    fs::write(repo_path.join("README.md"), "initial\n").expect("failed to seed repository");
+    run_git(&repo_path, &["add", "README.md"]);
+    run_git(&repo_path, &["commit", "-m", "initial commit"]);
+
+    let worktree_path = worktrees_base.join(format!("attempt-{attempt_id}"));
+    let branch_name = format!("feat/attempt-{attempt_id}");
+    run_git(
+        &repo_path,
+        &[
+            "worktree",
+            "add",
+            "-b",
+            &branch_name,
+            worktree_path.to_str().expect("invalid worktree path"),
+            "main",
+        ],
+    );
+
+    sqlx::query(
+        r#"
+        UPDATE projects
+        SET metadata = metadata || jsonb_build_object('repo_relative_path', $2)
+        WHERE id = $1
+        "#,
+    )
+    .bind(project_id)
+    .bind(&repo_relative_path)
+    .execute(&pool)
+    .await
+    .expect("failed to seed project repo_relative_path");
+
+    let request_body = json!({
+        "reason": "Cleanup without force",
+        "force": false
+    });
+
+    let (status, body): (axum::http::StatusCode, String) = make_request_with_string_headers(
+        &router,
+        "POST",
+        &format!("/api/v1/attempts/{}/cancel", attempt_id),
+        Some(&request_body.to_string()),
+        vec![
+            ("content-type", "application/json".to_string()),
+            auth_header_bearer(&token),
+        ],
+    )
+    .await;
+
+    assert_eq!(status, 200, "Expected 200 OK, got {}: {}", status, body);
+
+    tokio::time::timeout(Duration::from_secs(5), async {
+        loop {
+            if !worktree_path.exists() {
+                break;
+            }
+            tokio::time::sleep(Duration::from_millis(100)).await;
+        }
+    })
+    .await
+    .expect("timed out waiting for cancel cleanup to remove worktree");
+
+    assert!(
+        !worktree_path.exists(),
+        "worktree directory should be removed after cancel"
+    );
+
+    let branch_exists = Command::new("git")
+        .arg("-C")
+        .arg(&repo_path)
+        .args(["branch", "--list", &branch_name])
+        .output()
+        .expect("failed to check branch existence");
+    assert!(
+        branch_exists.status.success(),
+        "git branch --list failed: {}",
+        String::from_utf8_lossy(&branch_exists.stderr)
+    );
+    assert!(
+        String::from_utf8_lossy(&branch_exists.stdout)
+            .trim()
+            .is_empty(),
+        "attempt branch should be deleted after cancel cleanup"
+    );
+
+    let _ = fs::remove_dir_all(&repo_path);
     cleanup_test_data(&pool, user_id, Some(project_id)).await;
 }
 

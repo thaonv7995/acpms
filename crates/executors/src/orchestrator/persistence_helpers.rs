@@ -736,7 +736,7 @@ impl ExecutorOrchestrator {
         // Get project's repo_path from attempt metadata
         let repo_path = self.get_repo_path_from_attempt(attempt_id).await?;
 
-        self.log(attempt_id, "system", "Cleaning up after review...")
+        self.log(attempt_id, "system", "Cleaning up worktree...")
             .await?;
 
         if let Err(e) = self

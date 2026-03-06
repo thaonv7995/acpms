@@ -733,9 +733,7 @@ mod tests {
         assert!(!skills
             .iter()
             .any(|skill| skill == "deploy-cloudflare-workers"));
-        assert!(!skills
-            .iter()
-            .any(|skill| skill == "cloudflare-dns-route"));
+        assert!(!skills.iter().any(|skill| skill == "cloudflare-dns-route"));
     }
 
     #[test]

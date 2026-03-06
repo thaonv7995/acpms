@@ -1038,9 +1038,7 @@ impl PreviewManager {
         let exposure = if local_only_exposure {
             let host_port = extract_local_preview_port(&tunnel.preview_url)
                 .unwrap_or_else(|| preview_local_public_port(attempt_id));
-            PreviewExposureMode::Local {
-                host_port,
-            }
+            PreviewExposureMode::Local { host_port }
         } else {
             let credentials_json = self
                 .encryption

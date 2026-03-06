@@ -2079,54 +2079,56 @@ pub async fn cancel_attempt(
         tracing::warn!("Failed to emit cancellation log for {}: {}", attempt_id, e);
     }
 
-    // Run diff capture + S3 upload + cleanup in background when force kill (avoids blocking response).
-    if payload.force {
-        if let Some(worktree_path_str) = attempt
-            .metadata
-            .get("worktree_path")
-            .and_then(|v| v.as_str())
-        {
-            let worktree_path = std::path::PathBuf::from(worktree_path_str);
-            if worktree_path.exists() {
-                let orchestrator = state.orchestrator.clone();
-                let storage = state.storage_service.clone();
-                let pool_bg = pool.clone();
-                let aid = attempt_id;
-                let task_id = attempt.task_id;
-                tokio::spawn(async move {
-                    if let Ok(snapshot) = orchestrator
-                        .collect_diffs_for_s3(aid, task_id, &worktree_path)
-                        .await
-                    {
-                        let s3_key = acpms_executors::AttemptDiffSnapshot::generate_s3_key(
-                            aid,
-                            snapshot.saved_at,
+    // Always cleanup worktree after terminal cancellation. For force-kill requests,
+    // capture diffs first when the worktree still exists.
+    let orchestrator = state.orchestrator.clone();
+    let storage = state.storage_service.clone();
+    let pool_bg = pool.clone();
+    let aid = attempt_id;
+    let task_id = attempt.task_id;
+    let capture_diffs_before_cleanup = payload.force;
+    let worktree_path = attempt
+        .metadata
+        .get("worktree_path")
+        .and_then(|v| v.as_str())
+        .map(std::path::PathBuf::from);
+
+    tokio::spawn(async move {
+        if capture_diffs_before_cleanup {
+            if let Some(worktree_path) = worktree_path.as_ref().filter(|path| path.exists()) {
+                if let Ok(snapshot) = orchestrator
+                    .collect_diffs_for_s3(aid, task_id, worktree_path)
+                    .await
+                {
+                    let s3_key = acpms_executors::AttemptDiffSnapshot::generate_s3_key(
+                        aid,
+                        snapshot.saved_at,
+                    );
+                    let snapshot_size = snapshot.calculate_total_size();
+                    if storage.upload_json(&s3_key, &snapshot).await.is_ok() {
+                        let _ = sqlx::query(
+                            "UPDATE task_attempts SET s3_diff_key = $1, s3_diff_size = $2, s3_diff_saved_at = $3 WHERE id = $4",
+                        )
+                        .bind(&s3_key)
+                        .bind(snapshot_size)
+                        .bind(snapshot.saved_at)
+                        .bind(aid)
+                        .execute(&pool_bg)
+                        .await;
+                        tracing::info!(
+                            "Saved {} file diffs to S3 before cancel: {}",
+                            snapshot.total_files,
+                            s3_key
                         );
-                        let snapshot_size = snapshot.calculate_total_size();
-                        if storage.upload_json(&s3_key, &snapshot).await.is_ok() {
-                            let _ = sqlx::query(
-                                "UPDATE task_attempts SET s3_diff_key = $1, s3_diff_size = $2, s3_diff_saved_at = $3 WHERE id = $4",
-                            )
-                            .bind(&s3_key)
-                            .bind(snapshot_size)
-                            .bind(snapshot.saved_at)
-                            .bind(aid)
-                            .execute(&pool_bg)
-                            .await;
-                            tracing::info!(
-                                "Saved {} file diffs to S3 before cancel: {}",
-                                snapshot.total_files,
-                                s3_key
-                            );
-                        }
                     }
-                    if let Err(e) = orchestrator.cleanup_worktree_public(aid).await {
-                        tracing::warn!("Worktree cleanup failed after force cancel: {}", e);
-                    }
-                });
+                }
             }
         }
-    }
+
+        if let Err(e) = orchestrator.cleanup_worktree_public(aid).await {
+            tracing::warn!("Worktree cleanup failed after cancel: {}", e);
+        }
+    });
 
     let response = ApiResponse::success((), format!("Attempt cancelled: {}", reason));
     Ok(Json(response))

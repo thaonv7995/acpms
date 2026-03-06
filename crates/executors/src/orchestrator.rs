@@ -752,11 +752,11 @@ impl ExecutorOrchestrator {
         // Hint CLIs to avoid interactive UI mode during health probe.
         cmd.env("CI", "1");
 
-        let output = match tokio::time::timeout(Duration::from_secs(timeout_secs), cmd.output()).await
-        {
-            Ok(result) => result.context("Failed to execute CLI probe")?,
-            Err(_) => return Ok((false, String::new(), String::new(), true)),
-        };
+        let output =
+            match tokio::time::timeout(Duration::from_secs(timeout_secs), cmd.output()).await {
+                Ok(result) => result.context("Failed to execute CLI probe")?,
+                Err(_) => return Ok((false, String::new(), String::new(), true)),
+            };
 
         Ok((
             output.status.success(),
@@ -769,7 +769,8 @@ impl ExecutorOrchestrator {
     async fn verify_gemini_auth_readiness(
         provider_env: Option<&HashMap<String, String>>,
     ) -> Result<()> {
-        let env = provider_env.ok_or_else(|| anyhow::anyhow!("Missing Gemini provider runtime env"))?;
+        let env =
+            provider_env.ok_or_else(|| anyhow::anyhow!("Missing Gemini provider runtime env"))?;
         let command = env
             .get(EXEC_GEMINI_CMD_ENV)
             .map(String::as_str)
@@ -903,8 +904,7 @@ impl ExecutorOrchestrator {
                     return Ok((provider, provider_env));
                 }
                 Err(err) => {
-                    let reason =
-                        format!("{} unavailable: {}", provider.display_name(), err);
+                    let reason = format!("{} unavailable: {}", provider.display_name(), err);
                     if let Some(attempt_id) = attempt_id_for_log {
                         let _ = self.log(attempt_id, "system", &reason).await;
                     }
@@ -4555,8 +4555,8 @@ impl ExecutorOrchestrator {
 
         let mut child_opt = session.child.lock().await.take();
         if let Some(ref mut child) = child_opt {
-            let _ = terminate_process(child, session.interrupt_sender, GRACEFUL_SHUTDOWN_TIMEOUT)
-                .await;
+            let _ =
+                terminate_process(child, session.interrupt_sender, GRACEFUL_SHUTDOWN_TIMEOUT).await;
         }
     }
 
@@ -5279,8 +5279,7 @@ impl ExecutorOrchestrator {
                                 .await
                                 {
                                     if role == "assistant" {
-                                        last_emitted_assistant_text =
-                                            Some(display_content.clone());
+                                        last_emitted_assistant_text = Some(display_content.clone());
                                     }
                                     let _ = broadcast_tx_stdout.send(AgentEvent::AssistantLog(
                                         AssistantLogMessage {
@@ -5566,19 +5565,24 @@ impl ExecutorOrchestrator {
         failure_reason: &str,
         error_message: &str,
     ) -> Result<()> {
-        sqlx::query(
+        let result = sqlx::query(
             r#"UPDATE task_attempts
                SET status = 'failed',
                    completed_at = now(),
                    error_message = $2,
                    failure_reason = $3
-               WHERE id = $1"#,
+               WHERE id = $1
+                 AND status != 'cancelled'"#,
         )
         .bind(attempt_id)
         .bind(error_message)
         .bind(failure_reason)
         .execute(&self.db_pool)
         .await?;
+
+        if result.rows_affected() == 0 {
+            return Ok(());
+        }
 
         // Broadcast failure event
         let _ = self
@@ -5617,6 +5621,18 @@ impl ExecutorOrchestrator {
     ) -> Result<()> {
         // First, mark the current attempt as failed
         self.fail_attempt(attempt_id, error).await?;
+
+        let current_status: Option<String> =
+            sqlx::query_scalar("SELECT status::text FROM task_attempts WHERE id = $1")
+                .bind(attempt_id)
+                .fetch_optional(&self.db_pool)
+                .await
+                .ok()
+                .flatten();
+
+        if current_status.as_deref() == Some("cancelled") {
+            return Ok(());
+        }
 
         // Get project_id from task
         let project_id: Uuid =
