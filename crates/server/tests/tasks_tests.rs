@@ -6,6 +6,42 @@ use helpers::*;
 
 // Test module
 use serde_json::json;
+use std::fs;
+use std::path::Path;
+use std::process::Command;
+
+fn direct_gitops_repository_context() -> serde_json::Value {
+    json!({
+        "provider": "github",
+        "access_mode": "direct_gitops",
+        "verification_status": "verified",
+        "can_clone": true,
+        "can_push": true,
+        "can_open_change_request": true,
+        "can_merge": true,
+        "can_manage_webhooks": true,
+        "can_fork": true,
+        "effective_clone_url": "https://github.com/example/test-repo",
+        "writable_repository_url": "https://github.com/example/test-repo",
+        "default_branch": "main",
+        "verified_at": "2026-03-04T00:00:00Z"
+    })
+}
+
+fn run_git(path: &Path, args: &[&str]) {
+    let output = Command::new("git")
+        .arg("-C")
+        .arg(path)
+        .args(args)
+        .output()
+        .expect("failed to execute git command");
+    assert!(
+        output.status.success(),
+        "git {:?} failed: {}",
+        args,
+        String::from_utf8_lossy(&output.stderr)
+    );
+}
 
 #[tokio::test]
 #[ignore = "requires test database"]
@@ -224,6 +260,218 @@ async fn test_update_task_status() {
 
 #[tokio::test]
 #[ignore = "requires test database"]
+async fn test_update_task_status_to_in_progress_creates_attempt() {
+    let pool = setup_test_db().await;
+    let state = create_test_app_state(pool.clone()).await;
+    let router = create_router(state);
+
+    let (user_id, _) = create_test_user(&pool, None, None, None).await;
+    let token = generate_test_token(user_id);
+    let project_id = create_test_project(&pool, user_id, None).await;
+    seed_project_repository_context(
+        &pool,
+        project_id,
+        Some("https://github.com/example/test-repo"),
+        direct_gitops_repository_context(),
+    )
+    .await;
+    let task_id = create_test_task(&pool, project_id, user_id, None).await;
+
+    let request_body = json!({
+        "status": "in_progress"
+    });
+
+    let (status, body): (axum::http::StatusCode, String) = make_request_with_string_headers(
+        &router,
+        "PUT",
+        &format!("/api/v1/tasks/{}/status", task_id),
+        Some(&request_body.to_string()),
+        vec![
+            ("content-type", "application/json".to_string()),
+            auth_header_bearer(&token),
+        ],
+    )
+    .await;
+
+    assert_eq!(status, 200, "Expected 200 OK, got {}: {}", status, body);
+
+    let attempt_count: i64 =
+        sqlx::query_scalar("SELECT COUNT(*) FROM task_attempts WHERE task_id = $1")
+            .bind(task_id)
+            .fetch_one(&pool)
+            .await
+            .expect("Failed to count task attempts");
+    assert_eq!(
+        attempt_count, 1,
+        "moving task to in_progress should create a new attempt"
+    );
+
+    let task_status: String = sqlx::query_scalar("SELECT status::text FROM tasks WHERE id = $1")
+        .bind(task_id)
+        .fetch_one(&pool)
+        .await
+        .expect("Failed to fetch task status");
+    assert_eq!(task_status, "in_progress");
+
+    cleanup_test_data(&pool, user_id, Some(project_id)).await;
+}
+
+#[tokio::test]
+#[ignore = "requires test database"]
+async fn test_update_task_status_from_in_progress_cancels_active_attempt() {
+    let pool = setup_test_db().await;
+    let state = create_test_app_state(pool.clone()).await;
+    let router = create_router(state);
+
+    let (user_id, _) = create_test_user(&pool, None, None, None).await;
+    let token = generate_test_token(user_id);
+    let project_id = create_test_project(&pool, user_id, None).await;
+    let task_id = create_test_task(&pool, project_id, user_id, None).await;
+    let _previous_attempt_id = create_test_attempt(&pool, task_id, Some("success")).await;
+    let attempt_id = create_test_attempt(&pool, task_id, Some("running")).await;
+
+    sqlx::query("UPDATE tasks SET status = 'in_progress' WHERE id = $1")
+        .bind(task_id)
+        .execute(&pool)
+        .await
+        .expect("Failed to set task status to in_progress");
+
+    let request_body = json!({
+        "status": "done"
+    });
+
+    let (status, body): (axum::http::StatusCode, String) = make_request_with_string_headers(
+        &router,
+        "PUT",
+        &format!("/api/v1/tasks/{}/status", task_id),
+        Some(&request_body.to_string()),
+        vec![
+            ("content-type", "application/json".to_string()),
+            auth_header_bearer(&token),
+        ],
+    )
+    .await;
+
+    assert_eq!(status, 200, "Expected 200 OK, got {}: {}", status, body);
+
+    let task_status: String = sqlx::query_scalar("SELECT status::text FROM tasks WHERE id = $1")
+        .bind(task_id)
+        .fetch_one(&pool)
+        .await
+        .expect("Failed to fetch task status");
+    assert_eq!(task_status, "done");
+
+    let attempt_status: String =
+        sqlx::query_scalar("SELECT status::text FROM task_attempts WHERE id = $1")
+            .bind(attempt_id)
+            .fetch_one(&pool)
+            .await
+            .expect("Failed to fetch attempt status");
+    assert_eq!(attempt_status, "cancelled");
+
+    let cancelled_via_task_status_change: bool = sqlx::query_scalar(
+        "SELECT COALESCE((metadata ->> 'cancelled_via_task_status_change')::boolean, false) FROM task_attempts WHERE id = $1",
+    )
+    .bind(attempt_id)
+    .fetch_one(&pool)
+    .await
+    .expect("Failed to fetch attempt metadata");
+    assert!(
+        cancelled_via_task_status_change,
+        "attempt should be marked as cancelled via task status change"
+    );
+
+    cleanup_test_data(&pool, user_id, Some(project_id)).await;
+}
+
+#[tokio::test]
+#[ignore = "requires test database"]
+async fn test_update_task_status_cleans_review_worktree_when_moving_to_done() {
+    let pool = setup_test_db().await;
+    let state = create_test_app_state(pool.clone()).await;
+    let worktrees_base = state.worktrees_path.read().await.clone();
+    let router = create_router(state);
+
+    let (user_id, _) = create_test_user(&pool, None, None, None).await;
+    let token = generate_test_token(user_id);
+    let project_id = create_test_project(&pool, user_id, Some("Review Cleanup Project")).await;
+    let task_id = create_test_task(&pool, project_id, user_id, Some("Review Cleanup Task")).await;
+    let attempt_id = create_test_attempt(&pool, task_id, Some("success")).await;
+
+    let repo_relative_path = format!("review-cleanup-{}", project_id);
+    let repo_path = worktrees_base.join(&repo_relative_path);
+    fs::create_dir_all(&repo_path).expect("failed to create test repo dir");
+    run_git(&repo_path, &["init", "-b", "main"]);
+    run_git(
+        &repo_path,
+        &["config", "user.email", "tasks-test@example.com"],
+    );
+    run_git(&repo_path, &["config", "user.name", "Tasks Test"]);
+    fs::write(repo_path.join("README.md"), "initial\n").expect("failed to seed repository");
+    run_git(&repo_path, &["add", "README.md"]);
+    run_git(&repo_path, &["commit", "-m", "initial commit"]);
+
+    let worktree_path = worktrees_base.join(format!("attempt-{attempt_id}"));
+    let branch_name = format!("feat/attempt-{attempt_id}");
+    run_git(
+        &repo_path,
+        &[
+            "worktree",
+            "add",
+            "-b",
+            &branch_name,
+            worktree_path.to_str().expect("invalid worktree path"),
+            "main",
+        ],
+    );
+
+    sqlx::query("UPDATE tasks SET status = 'in_review' WHERE id = $1")
+        .bind(task_id)
+        .execute(&pool)
+        .await
+        .expect("Failed to set task to in_review");
+
+    sqlx::query(
+        r#"
+        UPDATE projects
+        SET metadata = metadata || jsonb_build_object('repo_relative_path', $2)
+        WHERE id = $1
+        "#,
+    )
+    .bind(project_id)
+    .bind(&repo_relative_path)
+    .execute(&pool)
+    .await
+    .expect("failed to seed project repo_relative_path");
+
+    let request_body = json!({
+        "status": "done"
+    });
+
+    let (status, body): (axum::http::StatusCode, String) = make_request_with_string_headers(
+        &router,
+        "PUT",
+        &format!("/api/v1/tasks/{}/status", task_id),
+        Some(&request_body.to_string()),
+        vec![
+            ("content-type", "application/json".to_string()),
+            auth_header_bearer(&token),
+        ],
+    )
+    .await;
+
+    assert_eq!(status, 200, "Expected 200 OK, got {}: {}", status, body);
+    assert!(
+        !worktree_path.exists(),
+        "review worktree should be removed when task leaves in_review"
+    );
+
+    let _ = fs::remove_dir_all(&repo_path);
+    cleanup_test_data(&pool, user_id, Some(project_id)).await;
+}
+
+#[tokio::test]
+#[ignore = "requires test database"]
 async fn test_assign_task() {
     let pool = setup_test_db().await;
     let state = create_test_app_state(pool.clone()).await;
@@ -307,6 +555,79 @@ async fn test_delete_task() {
 
     assert!(response["success"].as_bool().unwrap());
 
+    cleanup_test_data(&pool, user_id, Some(project_id)).await;
+}
+
+#[tokio::test]
+#[ignore = "requires test database"]
+async fn test_delete_task_cleans_attempt_worktree() {
+    let pool = setup_test_db().await;
+    let state = create_test_app_state(pool.clone()).await;
+    let worktrees_base = state.worktrees_path.read().await.clone();
+    let router = create_router(state);
+
+    let (user_id, _) = create_test_user(&pool, None, None, None).await;
+    let token = generate_test_token(user_id);
+    let project_id = create_test_project(&pool, user_id, Some("Delete Cleanup Project")).await;
+    let task_id = create_test_task(&pool, project_id, user_id, Some("Delete Cleanup Task")).await;
+    let attempt_id = create_test_attempt(&pool, task_id, Some("success")).await;
+
+    let repo_relative_path = format!("delete-cleanup-{}", project_id);
+    let repo_path = worktrees_base.join(&repo_relative_path);
+    fs::create_dir_all(&repo_path).expect("failed to create test repo dir");
+    run_git(&repo_path, &["init", "-b", "main"]);
+    run_git(
+        &repo_path,
+        &["config", "user.email", "delete-cleanup@example.com"],
+    );
+    run_git(&repo_path, &["config", "user.name", "Delete Cleanup Test"]);
+    fs::write(repo_path.join("README.md"), "initial\n").expect("failed to seed repository");
+    run_git(&repo_path, &["add", "README.md"]);
+    run_git(&repo_path, &["commit", "-m", "initial commit"]);
+
+    let worktree_path = worktrees_base.join(format!("attempt-{attempt_id}"));
+    let branch_name = format!("feat/attempt-{attempt_id}");
+    run_git(
+        &repo_path,
+        &[
+            "worktree",
+            "add",
+            "-b",
+            &branch_name,
+            worktree_path.to_str().expect("invalid worktree path"),
+            "main",
+        ],
+    );
+
+    sqlx::query(
+        r#"
+        UPDATE projects
+        SET metadata = metadata || jsonb_build_object('repo_relative_path', $2)
+        WHERE id = $1
+        "#,
+    )
+    .bind(project_id)
+    .bind(&repo_relative_path)
+    .execute(&pool)
+    .await
+    .expect("failed to seed project repo_relative_path");
+
+    let (status, body): (axum::http::StatusCode, String) = make_request_with_string_headers(
+        &router,
+        "DELETE",
+        &format!("/api/v1/tasks/{}", task_id),
+        None,
+        vec![auth_header_bearer(&token)],
+    )
+    .await;
+
+    assert_eq!(status, 200, "Expected 200 OK, got {}: {}", status, body);
+    assert!(
+        !worktree_path.exists(),
+        "attempt worktree should be removed when deleting task"
+    );
+
+    let _ = fs::remove_dir_all(&repo_path);
     cleanup_test_data(&pool, user_id, Some(project_id)).await;
 }
 

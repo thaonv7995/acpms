@@ -1075,6 +1075,66 @@ async fn test_cancel_attempt_reverts_to_previous_status_when_task_was_done() {
 
 #[tokio::test]
 #[ignore = "requires test database"]
+async fn test_cancel_attempt_reverts_to_stored_previous_task_status_without_prior_attempt() {
+    let pool = setup_test_db().await;
+    let state = create_test_app_state(pool.clone()).await;
+    let router = create_router(state);
+
+    let (user_id, _) = create_test_user(&pool, None, None, None).await;
+    let token = generate_test_token(user_id);
+    let project_id = create_test_project(&pool, user_id, None).await;
+    let task_id = create_test_task(&pool, project_id, user_id, None).await;
+    let running_attempt_id = create_test_attempt(&pool, task_id, Some("running")).await;
+
+    sqlx::query("UPDATE tasks SET status = 'in_progress' WHERE id = $1")
+        .bind(task_id)
+        .execute(&pool)
+        .await
+        .expect("Failed to set task to in_progress");
+
+    sqlx::query(
+        r#"
+        UPDATE task_attempts
+        SET metadata = metadata || '{"previous_task_status":"done"}'::jsonb
+        WHERE id = $1
+        "#,
+    )
+    .bind(running_attempt_id)
+    .execute(&pool)
+    .await
+    .expect("Failed to seed previous_task_status");
+
+    let request_body = json!({ "reason": "User cancelled rerun" });
+    let (status, body): (axum::http::StatusCode, String) = make_request_with_string_headers(
+        &router,
+        "POST",
+        &format!("/api/v1/attempts/{}/cancel", running_attempt_id),
+        Some(&request_body.to_string()),
+        vec![
+            ("content-type", "application/json".to_string()),
+            auth_header_bearer(&token),
+        ],
+    )
+    .await;
+
+    assert_eq!(status, 200, "Expected 200 OK, got {}: {}", status, body);
+
+    let task_status: String = sqlx::query_scalar("SELECT status::text FROM tasks WHERE id = $1")
+        .bind(task_id)
+        .fetch_one(&pool)
+        .await
+        .expect("Failed to fetch task status");
+
+    assert_eq!(
+        task_status, "done",
+        "Task should revert to stored previous_task_status when cancelling a rerun"
+    );
+
+    cleanup_test_data(&pool, user_id, Some(project_id)).await;
+}
+
+#[tokio::test]
+#[ignore = "requires test database"]
 async fn test_resume_attempt_rejects_running_attempt() {
     let pool = setup_test_db().await;
     let state = create_test_app_state(pool.clone()).await;

@@ -1,8 +1,10 @@
 use acpms_db::{models::*, PgPool};
+use acpms_executors::{AgentEvent, StatusManager, StatusMessage};
 use acpms_services::TaskService;
 use axum::extract::{Path, Query, State};
 use axum::http::StatusCode;
 use axum::Json;
+use chrono::Utc;
 use serde::{Deserialize, Serialize};
 use std::time::Duration;
 use uuid::Uuid;
@@ -11,6 +13,7 @@ use validator::Validate;
 use crate::api::{ApiResponse, TaskDto};
 use crate::error::{ApiError, ApiResult};
 use crate::middleware::{AuthUser, Permission, RbacChecker, ValidatedJson};
+use crate::routes::task_attempts;
 use crate::AppState;
 use utoipa::{IntoParams, ToSchema};
 
@@ -74,6 +77,230 @@ fn sanitize_task_attachment_filename(filename: &str) -> String {
     } else {
         trimmed.to_string()
     }
+}
+
+async fn list_task_attempts(pool: &PgPool, task_id: Uuid) -> Result<Vec<(Uuid, String)>, ApiError> {
+    sqlx::query_as::<_, (Uuid, String)>(
+        r#"
+        SELECT id, status::text
+        FROM task_attempts
+        WHERE task_id = $1
+        ORDER BY created_at DESC
+        "#,
+    )
+    .bind(task_id)
+    .fetch_all(pool)
+    .await
+    .map_err(|e| ApiError::Internal(format!("Failed to fetch task attempts: {}", e)))
+}
+
+async fn cleanup_task_attempt_worktrees(
+    state: &AppState,
+    task_id: Uuid,
+    stop_active_attempts: bool,
+) -> ApiResult<()> {
+    let attempt_rows = list_task_attempts(&state.db, task_id).await?;
+    if attempt_rows.is_empty() {
+        return Ok(());
+    }
+
+    let worktrees_base = state.worktrees_path.read().await.clone();
+
+    for (attempt_id, status) in attempt_rows {
+        if stop_active_attempts && matches!(status.as_str(), "queued" | "running") {
+            if let Some(worker_pool) = &state.worker_pool {
+                if let Err(e) = worker_pool.cancel(attempt_id).await {
+                    let message = e.to_string();
+                    if !message.contains("No active job found") {
+                        tracing::warn!(
+                            "Failed to cancel active attempt {} during task cleanup: {}",
+                            attempt_id,
+                            message
+                        );
+                    }
+                }
+            }
+
+            if let Err(e) = state.orchestrator.terminate_session(attempt_id).await {
+                tracing::warn!(
+                    "terminate_session for attempt {} during task cleanup returned: {}",
+                    attempt_id,
+                    e
+                );
+            }
+        }
+
+        let worktree_path = worktrees_base.join(format!("attempt-{}", attempt_id));
+        if !worktree_path.exists() {
+            continue;
+        }
+
+        state
+            .orchestrator
+            .cleanup_worktree_public(attempt_id)
+            .await
+            .map_err(|e| {
+                ApiError::Internal(format!(
+                    "Failed to cleanup worktree for attempt {}: {}",
+                    attempt_id, e
+                ))
+            })?;
+    }
+
+    Ok(())
+}
+
+async fn fetch_task_or_404(pool: &PgPool, task_id: Uuid) -> ApiResult<Task> {
+    let task_service = TaskService::new(pool.clone());
+    task_service
+        .get_task(task_id)
+        .await
+        .map_err(|e| ApiError::Internal(e.to_string()))?
+        .ok_or_else(|| ApiError::NotFound("Task not found".to_string()))
+}
+
+async fn start_attempt_for_status_transition(
+    state: &AppState,
+    auth_user: &AuthUser,
+    existing_task: &Task,
+) -> ApiResult<Task> {
+    if existing_task.status == TaskStatus::InReview {
+        let _ = task_attempts::create_task_attempt_from_edit(
+            State(state.clone()),
+            auth_user.clone(),
+            Path(existing_task.id),
+        )
+        .await?;
+    } else {
+        let _ = task_attempts::create_task_attempt(
+            State(state.clone()),
+            auth_user.clone(),
+            Path(existing_task.id),
+        )
+        .await?;
+    }
+
+    fetch_task_or_404(&state.db, existing_task.id).await
+}
+
+async fn cancel_active_task_attempts_for_status_change(
+    state: &AppState,
+    auth_user: &AuthUser,
+    task_id: Uuid,
+    cleanup_worktrees: bool,
+) -> ApiResult<()> {
+    let active_attempt_ids = sqlx::query_scalar::<_, Uuid>(
+        r#"
+        SELECT id
+        FROM task_attempts
+        WHERE task_id = $1 AND status IN ('queued', 'running')
+        ORDER BY created_at DESC
+        "#,
+    )
+    .bind(task_id)
+    .fetch_all(&state.db)
+    .await
+    .map_err(|e| ApiError::Internal(format!("Failed to fetch active attempts: {}", e)))?;
+
+    if active_attempt_ids.is_empty() {
+        return Ok(());
+    }
+
+    let reason = "Cancelled because task status was manually changed".to_string();
+    let mut cancelled_attempt_ids = Vec::new();
+
+    for attempt_id in active_attempt_ids {
+        if let Some(worker_pool) = &state.worker_pool {
+            if let Err(e) = worker_pool.cancel(attempt_id).await {
+                let message = e.to_string();
+                if !message.contains("No active job found") {
+                    tracing::warn!(
+                        "Failed to cancel active attempt {} during task status change: {}",
+                        attempt_id,
+                        message
+                    );
+                }
+            }
+        }
+
+        if let Err(e) = state.orchestrator.terminate_session(attempt_id).await {
+            tracing::warn!(
+                "terminate_session for attempt {} during task status change returned: {}",
+                attempt_id,
+                e
+            );
+        }
+
+        let result = sqlx::query(
+            r#"
+            UPDATE task_attempts
+            SET status = 'cancelled',
+                error_message = $2,
+                completed_at = NOW(),
+                metadata = metadata || jsonb_build_object(
+                    'cancelled_by', $3::text,
+                    'force_kill', false,
+                    'cancelled_via_task_status_change', true
+                )
+            WHERE id = $1
+              AND status IN ('queued', 'running')
+            "#,
+        )
+        .bind(attempt_id)
+        .bind(&reason)
+        .bind(auth_user.id.to_string())
+        .execute(&state.db)
+        .await
+        .map_err(|e| ApiError::Internal(format!("Failed to cancel active attempt: {}", e)))?;
+
+        if result.rows_affected() == 0 {
+            continue;
+        }
+
+        cancelled_attempt_ids.push(attempt_id);
+
+        let _ = state.broadcast_tx.send(AgentEvent::Status(StatusMessage {
+            attempt_id,
+            status: AttemptStatus::Cancelled,
+            timestamp: Utc::now(),
+        }));
+
+        if let Err(e) = StatusManager::log(
+            &state.db,
+            &state.broadcast_tx,
+            attempt_id,
+            "system",
+            &reason,
+        )
+        .await
+        {
+            tracing::warn!(
+                "Failed to emit task-status cancellation log for {}: {}",
+                attempt_id,
+                e
+            );
+        }
+    }
+
+    if cleanup_worktrees {
+        let worktrees_base = state.worktrees_path.read().await.clone();
+        for attempt_id in cancelled_attempt_ids {
+            let worktree_path = worktrees_base.join(format!("attempt-{}", attempt_id));
+            if !worktree_path.exists() {
+                continue;
+            }
+
+            if let Err(e) = state.orchestrator.cleanup_worktree_public(attempt_id).await {
+                tracing::warn!(
+                    attempt_id = %attempt_id,
+                    error = %e,
+                    "Failed to cleanup cancelled attempt worktree after task status change"
+                );
+            }
+        }
+    }
+
+    Ok(())
 }
 
 #[utoipa::path(
@@ -274,11 +501,12 @@ pub async fn get_task(
     )
 )]
 pub async fn update_task(
-    State(pool): State<PgPool>,
+    State(state): State<AppState>,
     auth_user: AuthUser,
     Path(task_id): Path<Uuid>,
     Json(req): Json<UpdateTaskRequest>,
 ) -> ApiResult<Json<ApiResponse<TaskDto>>> {
+    let pool = state.db.clone();
     let task_service = TaskService::new(pool.clone());
     let existing_task = task_service
         .get_task(task_id)
@@ -294,6 +522,30 @@ pub async fn update_task(
         &pool,
     )
     .await?;
+
+    if matches!(existing_task.status, TaskStatus::InProgress)
+        && req
+            .status
+            .map(|status| status != TaskStatus::InProgress)
+            .unwrap_or(false)
+    {
+        cancel_active_task_attempts_for_status_change(
+            &state,
+            &auth_user,
+            task_id,
+            req.status != Some(TaskStatus::InReview),
+        )
+        .await?;
+    }
+
+    if matches!(existing_task.status, TaskStatus::InReview)
+        && req
+            .status
+            .map(|status| status != TaskStatus::InReview && status != TaskStatus::InProgress)
+            .unwrap_or(false)
+    {
+        cleanup_task_attempt_worktrees(&state, task_id, false).await?;
+    }
 
     let task = task_service
         .update_task(task_id, req)
@@ -320,10 +572,11 @@ pub async fn update_task(
     )
 )]
 pub async fn delete_task(
-    State(pool): State<PgPool>,
+    State(state): State<AppState>,
     auth_user: AuthUser,
     Path(task_id): Path<Uuid>,
 ) -> ApiResult<Json<ApiResponse<()>>> {
+    let pool = state.db.clone();
     let task_service = TaskService::new(pool.clone());
     let existing_task = task_service
         .get_task(task_id)
@@ -339,6 +592,8 @@ pub async fn delete_task(
         &pool,
     )
     .await?;
+
+    cleanup_task_attempt_worktrees(&state, task_id, true).await?;
 
     task_service
         .delete_task(task_id)
@@ -365,17 +620,14 @@ pub async fn delete_task(
     )
 )]
 pub async fn update_task_status(
-    State(pool): State<PgPool>,
+    State(state): State<AppState>,
     auth_user: AuthUser,
     Path(task_id): Path<Uuid>,
     ValidatedJson(req): ValidatedJson<UpdateStatusRequest>,
 ) -> ApiResult<Json<ApiResponse<TaskDto>>> {
+    let pool = state.db.clone();
     let task_service = TaskService::new(pool.clone());
-    let existing_task = task_service
-        .get_task(task_id)
-        .await
-        .map_err(|e| ApiError::Internal(e.to_string()))?
-        .ok_or_else(|| ApiError::NotFound("Task not found".to_string()))?;
+    let existing_task = fetch_task_or_404(&pool, task_id).await?;
 
     // Check permission using RBAC
     RbacChecker::check_permission(
@@ -385,6 +637,34 @@ pub async fn update_task_status(
         &pool,
     )
     .await?;
+
+    task_service
+        .validate_status_transition(existing_task.status, req.status)
+        .map_err(|e| ApiError::BadRequest(e.to_string()))?;
+
+    if req.status == TaskStatus::InProgress && existing_task.status != TaskStatus::InProgress {
+        let task = start_attempt_for_status_transition(&state, &auth_user, &existing_task).await?;
+        let dto = TaskDto::from(task);
+        let response = ApiResponse::success(dto, "Task moved to agent processing");
+        return Ok(Json(response));
+    }
+
+    if existing_task.status == TaskStatus::InProgress && req.status != TaskStatus::InProgress {
+        cancel_active_task_attempts_for_status_change(
+            &state,
+            &auth_user,
+            task_id,
+            req.status != TaskStatus::InReview,
+        )
+        .await?;
+    }
+
+    if existing_task.status == TaskStatus::InReview
+        && req.status != TaskStatus::InReview
+        && req.status != TaskStatus::InProgress
+    {
+        cleanup_task_attempt_worktrees(&state, task_id, false).await?;
+    }
 
     let task = task_service
         .update_task_status(task_id, req.status)

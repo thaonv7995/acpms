@@ -553,6 +553,74 @@ fn parse_job_priority(priority: &str) -> JobPriority {
     }
 }
 
+fn task_status_to_metadata_value(status: TaskStatus) -> &'static str {
+    match status {
+        TaskStatus::Backlog => "backlog",
+        TaskStatus::Todo => "todo",
+        TaskStatus::InProgress => "in_progress",
+        TaskStatus::InReview => "in_review",
+        TaskStatus::Blocked => "blocked",
+        TaskStatus::Done => "done",
+        TaskStatus::Archived => "archived",
+    }
+}
+
+fn task_status_from_metadata_value(value: &str) -> Option<TaskStatus> {
+    match value {
+        "backlog" => Some(TaskStatus::Backlog),
+        "todo" => Some(TaskStatus::Todo),
+        "in_progress" => Some(TaskStatus::InProgress),
+        "in_review" => Some(TaskStatus::InReview),
+        "blocked" => Some(TaskStatus::Blocked),
+        "done" => Some(TaskStatus::Done),
+        "archived" => Some(TaskStatus::Archived),
+        _ => None,
+    }
+}
+
+fn revert_task_status_from_previous_attempt_status(value: &str) -> Option<TaskStatus> {
+    match value {
+        "success" => Some(TaskStatus::Done),
+        "failed" => Some(TaskStatus::InReview),
+        "cancelled" => Some(TaskStatus::InReview),
+        _ => None,
+    }
+}
+
+async fn resolve_revert_task_status(
+    pool: &sqlx::PgPool,
+    task_id: Uuid,
+    attempt_id: Uuid,
+    attempt_metadata: &serde_json::Value,
+) -> Result<TaskStatus, sqlx::Error> {
+    if let Some(status) = attempt_metadata
+        .get("previous_task_status")
+        .and_then(|v| v.as_str())
+        .and_then(task_status_from_metadata_value)
+    {
+        return Ok(status);
+    }
+
+    let previous_attempt_status = sqlx::query_scalar::<_, String>(
+        r#"
+        SELECT status::text
+        FROM task_attempts
+        WHERE task_id = $1 AND id != $2 AND status IN ('success', 'failed', 'cancelled')
+        ORDER BY created_at DESC
+        LIMIT 1
+        "#,
+    )
+    .bind(task_id)
+    .bind(attempt_id)
+    .fetch_optional(pool)
+    .await?;
+
+    Ok(previous_attempt_status
+        .as_deref()
+        .and_then(revert_task_status_from_previous_attempt_status)
+        .unwrap_or(TaskStatus::Todo))
+}
+
 async fn mark_submission_failed(
     attempt_service: &TaskAttemptService,
     task_service: &TaskService,
@@ -810,15 +878,24 @@ pub async fn create_task_attempt(
         )));
     }
 
+    let previous_task_status = task.status;
     let attempt_service = TaskAttemptService::new(pool.clone());
-    let attempt = attempt_service.create_attempt(task_id).await.map_err(|e| {
-        let message = e.to_string();
-        if message.contains("already has an active attempt") {
-            ApiError::BadRequest(message)
-        } else {
-            ApiError::Internal(message)
-        }
-    })?;
+    let attempt = attempt_service
+        .create_attempt_with_metadata(
+            task_id,
+            serde_json::json!({
+                "previous_task_status": task_status_to_metadata_value(previous_task_status),
+            }),
+        )
+        .await
+        .map_err(|e| {
+            let message = e.to_string();
+            if message.contains("already has an active attempt") {
+                ApiError::BadRequest(message)
+            } else {
+                ApiError::Internal(message)
+            }
+        })?;
 
     // Update task status to InProgress
     if let Err(error) = task_service
@@ -929,7 +1006,7 @@ pub async fn create_task_attempt(
                 &task_service,
                 attempt_id,
                 task.id,
-                TaskStatus::Todo,
+                previous_task_status,
                 message.clone(),
             )
             .await;
@@ -1739,9 +1816,23 @@ pub async fn resume_attempt(
         tracing::warn!("Failed to log user follow-up: {}", e);
     }
 
+    let original_task_status = task.status;
+
+    sqlx::query(
+        r#"
+        UPDATE task_attempts
+        SET metadata = metadata || jsonb_build_object('previous_task_status', $2::text)
+        WHERE id = $1
+        "#,
+    )
+    .bind(attempt_id)
+    .bind(task_status_to_metadata_value(original_task_status))
+    .execute(&pool)
+    .await
+    .map_err(|e| ApiError::Internal(format!("Failed to persist previous task status: {}", e)))?;
+
     let original_attempt_status = attempt.status;
     let original_attempt_error = attempt.error_message.clone();
-    let original_task_status = task.status;
 
     // Reset attempt status to Running (clear completed_at)
     attempt_service
@@ -2029,28 +2120,11 @@ pub async fn cancel_attempt(
     .map_err(|e| ApiError::Internal(format!("Failed to update attempt status: {}", e)))?;
 
     // Revert task status to what it was before this attempt started.
-    // If there was a successful attempt before → done; failed → in_review; none → todo.
-    let revert_status: TaskStatus = sqlx::query_scalar::<_, String>(
-        r#"
-        SELECT status::text
-        FROM task_attempts
-        WHERE task_id = $1 AND id != $2 AND status IN ('success', 'failed', 'cancelled')
-        ORDER BY created_at DESC
-        LIMIT 1
-        "#,
-    )
-    .bind(task.id)
-    .bind(attempt_id)
-    .fetch_optional(&pool)
-    .await
-    .map_err(|e| ApiError::Internal(format!("Failed to fetch previous attempt: {}", e)))?
-    .and_then(|s| match s.as_str() {
-        "success" => Some(TaskStatus::Done),
-        "failed" => Some(TaskStatus::InReview),
-        "cancelled" => Some(TaskStatus::InReview),
-        _ => None,
-    })
-    .unwrap_or(TaskStatus::Todo);
+    // Prefer the explicit snapshot stored on attempt creation, then fall back
+    // to previous terminal attempts for backward compatibility.
+    let revert_status = resolve_revert_task_status(&pool, task.id, attempt_id, &attempt.metadata)
+        .await
+        .map_err(|e| ApiError::Internal(format!("Failed to resolve revert task status: {}", e)))?;
 
     sqlx::query("UPDATE tasks SET status = $2, updated_at = NOW() WHERE id = $1")
         .bind(task.id)
@@ -3902,12 +3976,14 @@ pub async fn retry_attempt(
 
     // Create new retry attempt with metadata linking to previous attempt
     let retry_count = retry_info.retry_count + 1;
+    let previous_task_status = task.status;
     let retry_metadata = serde_json::json!({
         "retry_count": retry_count,
         "previous_attempt_id": attempt_id.to_string(),
         "previous_error": attempt.error_message,
         "manual_retry": true,
         "retried_by": auth_user.id.to_string(),
+        "previous_task_status": task_status_to_metadata_value(previous_task_status),
     });
 
     let new_attempt = attempt_service
@@ -4031,7 +4107,7 @@ pub async fn retry_attempt(
                 &task_service,
                 new_attempt.id,
                 task.id,
-                TaskStatus::Todo,
+                previous_task_status,
                 message.clone(),
             )
             .await;
