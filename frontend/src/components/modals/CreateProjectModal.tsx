@@ -14,6 +14,7 @@
 
 import { useState, useCallback, useEffect } from 'react';
 import { useNavigate } from 'react-router-dom';
+import { useQueryClient } from '@tanstack/react-query';
 import {
   createProject,
   importProjectCreateFork,
@@ -63,6 +64,7 @@ const defaultConfig: ProjectConfig = {
 
 export function CreateProjectModal({ isOpen, onClose }: CreateProjectModalProps) {
   const navigate = useNavigate();
+  const queryClient = useQueryClient();
 
   // Wizard state
   const [currentStep, setCurrentStep] = useState<WizardStep>('method');
@@ -327,6 +329,11 @@ export function CreateProjectModal({ isOpen, onClose }: CreateProjectModalProps)
           reference_keys: referenceKeys.length > 0 ? referenceKeys : undefined,
         });
       }
+
+      await Promise.all([
+        queryClient.invalidateQueries({ queryKey: ['/api/v1/projects'] }),
+        queryClient.invalidateQueries({ queryKey: ['/api/v1/dashboard'] }),
+      ]);
 
       navigate(`/projects/${project.id}`);
       handleClose();

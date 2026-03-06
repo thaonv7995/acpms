@@ -555,6 +555,10 @@ export function ProjectDetailPage() {
         repositoryContext={rawProject?.repository_context}
         sprints={sprints}
         members={members}
+        navigateToProjectOnCreate={false}
+        onCreate={async () => {
+          await refetch();
+        }}
       />
 
       <RequirementFormModal
@@ -565,7 +569,9 @@ export function ProjectDetailPage() {
         }}
         projectId={project.id}
         requirement={editingRequirement}
-        onSuccess={refetch}
+        onSuccess={async () => {
+          await refetch();
+        }}
       />
 
       <RequirementDetailModal

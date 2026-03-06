@@ -75,7 +75,7 @@ interface RequirementFormModalProps {
     onClose: () => void;
     projectId: string;
     requirement?: Requirement | null; // null = create mode
-    onSuccess?: () => void;
+    onSuccess?: () => void | Promise<void>;
 }
 
 export function RequirementFormModal({
@@ -252,7 +252,9 @@ export function RequirementFormModal({
                     metadata,
                 });
             }
-            onSuccess?.();
+            if (onSuccess) {
+                await onSuccess();
+            }
             onClose();
         } catch (err) {
             setError(err instanceof Error ? err.message : 'Failed to save requirement');

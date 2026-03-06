@@ -1,6 +1,7 @@
 import { useCallback, useMemo, useState, useEffect, useRef } from 'react';
 import { useParams, useSearchParams, useLocation, useNavigate } from 'react-router-dom';
 import { useMediaQuery } from '@mui/material';
+import { useQueryClient } from '@tanstack/react-query';
 import { AppShell } from '../components/layout/AppShell';
 import { TasksLayout, type LayoutMode } from '../components/layout/TasksLayout';
 import { NewCard } from '../components/ui/new-card';
@@ -134,6 +135,7 @@ export function ProjectTasksPage() {
   const [searchParams] = useSearchParams();
   const navigate = useNavigate();
   const location = useLocation();
+  const queryClient = useQueryClient();
   const isMobile = useMediaQuery('(max-width: 768px)');
 
   // Determine projectId from URL structure:
@@ -429,8 +431,8 @@ export function ProjectTasksPage() {
     await refetch();
   }, [refetch]);
 
-  const handleTaskCreated = useCallback(() => {
-    void refreshKanbanAfterExecutionAction();
+  const handleTaskCreated = useCallback(async () => {
+    await refreshKanbanAfterExecutionAction();
   }, [refreshKanbanAfterExecutionAction]);
 
   useEffect(() => {
@@ -632,6 +634,11 @@ export function ProjectTasksPage() {
     setIsDeletingTask(true);
     try {
       await deleteTask(taskToDelete.id);
+      await Promise.all([
+        queryClient.invalidateQueries({ queryKey: ['/api/v1/tasks'] }),
+        queryClient.invalidateQueries({ queryKey: ['/api/v1/projects'] }),
+        queryClient.invalidateQueries({ queryKey: ['/api/v1/dashboard'] }),
+      ]);
       await refreshKanbanAfterExecutionAction();
 
       if (taskToDelete.id === taskId) {
@@ -642,7 +649,14 @@ export function ProjectTasksPage() {
     } finally {
       setIsDeletingTask(false);
     }
-  }, [pendingDeleteTask, isDeletingTask, refreshKanbanAfterExecutionAction, taskId, handleClosePanel]);
+  }, [
+    pendingDeleteTask,
+    isDeletingTask,
+    queryClient,
+    refreshKanbanAfterExecutionAction,
+    taskId,
+    handleClosePanel,
+  ]);
 
   const handleCloseDeleteModal = useCallback(() => {
     if (isDeletingTask) return;

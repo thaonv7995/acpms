@@ -1,5 +1,6 @@
 import { useEffect, useMemo, useRef, useState, type ChangeEvent, type DragEvent } from 'react';
 import { useNavigate } from 'react-router-dom';
+import { useQueryClient } from '@tanstack/react-query';
 import { ProjectSelector } from './create-task/ProjectSelector';
 import { TaskMetadataGrid } from './create-task/TaskMetadataGrid';
 import { AIDescriptionField } from './create-task/AIDescriptionField';
@@ -62,7 +63,7 @@ interface CreateTaskModalProps {
         sprint?: string;
         taskId?: string;
         autoStarted?: boolean;
-    }) => void;
+    }) => void | Promise<void>;
 }
 
 function formatBytes(bytes: number): string {
@@ -84,6 +85,7 @@ export function CreateTaskModal({
 }: CreateTaskModalProps) {
     const { projects, apiProjects, loading: projectsLoading } = useProjects({ limit: 500 });
     const navigate = useNavigate();
+    const queryClient = useQueryClient();
     const attachmentInputRef = useRef<HTMLInputElement | null>(null);
 
     const [isCreating, setIsCreating] = useState(false);
@@ -347,8 +349,14 @@ export function CreateTaskModal({
                 }
             }
 
+            await Promise.all([
+                queryClient.invalidateQueries({ queryKey: ['/api/v1/tasks'] }),
+                queryClient.invalidateQueries({ queryKey: ['/api/v1/projects'] }),
+                queryClient.invalidateQueries({ queryKey: ['/api/v1/dashboard'] }),
+            ]);
+
             if (onCreate) {
-                onCreate({
+                await onCreate({
                     projectId: finalProjectId,
                     title: title.trim(),
                     description,

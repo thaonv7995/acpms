@@ -1,6 +1,7 @@
 // SettingsTab Component for ProjectDetail
 import { useState } from 'react';
 import { useNavigate } from 'react-router-dom';
+import { useQueryClient } from '@tanstack/react-query';
 import { GitLabIntegrationSettings } from '../projects/GitLabIntegrationSettings';
 import { ProjectMembersPanel } from './ProjectMembersPanel';
 import { deleteProject, syncProjectRepository } from '../../api/projects';
@@ -32,6 +33,7 @@ export function SettingsTab({ projectId, projectName, repositoryUrl, requireRevi
         return roles.includes('owner') || roles.includes('admin');
     }));
     const navigate = useNavigate();
+    const queryClient = useQueryClient();
     const [showGitLabModal, setShowGitLabModal] = useState(false);
     const [showDeleteConfirm, setShowDeleteConfirm] = useState(false);
     const [deleteConfirmText, setDeleteConfirmText] = useState('');
@@ -66,6 +68,12 @@ export function SettingsTab({ projectId, projectName, repositoryUrl, requireRevi
                 deleteLocalFolder,
                 deleteGitRepo,
             });
+            queryClient.removeQueries({ queryKey: [`/api/v1/projects/${projectId}`] });
+            await Promise.all([
+                queryClient.invalidateQueries({ queryKey: ['/api/v1/projects'] }),
+                queryClient.invalidateQueries({ queryKey: ['/api/v1/dashboard'] }),
+                queryClient.invalidateQueries({ queryKey: ['/api/v1/tasks'] }),
+            ]);
             navigate('/projects');
         } catch (err) {
             setDeleteError(err instanceof Error ? err.message : 'Failed to delete project');
