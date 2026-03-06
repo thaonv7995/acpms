@@ -11,6 +11,7 @@ use sqlx::PgPool;
 use std::{
     collections::BTreeMap,
     fs,
+    net::TcpListener,
     path::{Path, PathBuf},
     process::Command,
 };
@@ -334,7 +335,7 @@ impl PreviewManager {
 
         let tunnel_name = format!("local-{}", self.generate_tunnel_name(task_name, attempt_id));
         let tunnel_id = format!("{}{}", LOCAL_PREVIEW_TUNNEL_PREFIX, Uuid::new_v4());
-        let preview_url = local_preview_url(attempt_id);
+        let preview_url = local_preview_url(allocate_preview_local_public_port(attempt_id)?);
         let credentials_encrypted = self
             .encryption
             .encrypt("{}")
@@ -1035,8 +1036,10 @@ impl PreviewManager {
         let dev_image = resolve_preview_dev_image(&worktree_path, &dev_command);
         let compose_path = runtime_dir.join("docker-compose.preview.yml");
         let exposure = if local_only_exposure {
+            let host_port = extract_local_preview_port(&tunnel.preview_url)
+                .unwrap_or_else(|| preview_local_public_port(attempt_id));
             PreviewExposureMode::Local {
-                host_port: preview_local_public_port(attempt_id),
+                host_port,
             }
         } else {
             let credentials_json = self
@@ -1919,8 +1922,55 @@ fn preview_local_public_port(attempt_id: Uuid) -> u16 {
     base.saturating_add(offset).min(u16::MAX as u32) as u16
 }
 
-fn local_preview_url(attempt_id: Uuid) -> String {
-    format!("http://localhost:{}", preview_local_public_port(attempt_id))
+fn allocate_preview_local_public_port(attempt_id: Uuid) -> Result<u16> {
+    let preferred = preview_local_public_port(attempt_id);
+    if is_loopback_port_available(preferred) {
+        return Ok(preferred);
+    }
+
+    let base = preview_local_port_base() as u32;
+    let span = preview_local_port_span().max(1) as u32;
+    let preferred_offset = (preferred as u32).saturating_sub(base) % span;
+
+    for step in 1..span {
+        let candidate = base + ((preferred_offset + step) % span);
+        if candidate > u16::MAX as u32 {
+            continue;
+        }
+        let candidate = candidate as u16;
+        if is_loopback_port_available(candidate) {
+            return Ok(candidate);
+        }
+    }
+
+    anyhow::bail!(
+        "No available loopback preview port found in range {}-{}",
+        preview_local_port_base(),
+        preview_local_port_base().saturating_add(preview_local_port_span().saturating_sub(1))
+    )
+}
+
+fn is_loopback_port_available(port: u16) -> bool {
+    TcpListener::bind(("127.0.0.1", port)).is_ok()
+}
+
+fn extract_local_preview_port(preview_url: &str) -> Option<u16> {
+    let trimmed = preview_url.trim();
+    let without_scheme = trimmed
+        .strip_prefix("http://")
+        .or_else(|| trimmed.strip_prefix("https://"))?;
+    let authority = without_scheme.split('/').next()?.trim();
+    if let Some(port) = authority.strip_prefix("localhost:") {
+        return port.parse::<u16>().ok().filter(|port| *port > 0);
+    }
+    if let Some(port) = authority.strip_prefix("127.0.0.1:") {
+        return port.parse::<u16>().ok().filter(|port| *port > 0);
+    }
+    None
+}
+
+fn local_preview_url(port: u16) -> String {
+    format!("http://localhost:{}", port)
 }
 
 fn is_local_preview_tunnel_id(tunnel_id: &str) -> bool {
@@ -2603,6 +2653,43 @@ mod tests {
         assert!(compose.contains("127.0.0.1:43123:3000"));
         assert!(!compose.contains("cloudflared:"));
         let _ = fs::remove_dir_all(worktree);
+    }
+
+    #[test]
+    fn extract_local_preview_port_supports_localhost_and_loopback() {
+        assert_eq!(
+            extract_local_preview_port("http://localhost:43123"),
+            Some(43123)
+        );
+        assert_eq!(
+            extract_local_preview_port("http://127.0.0.1:43124/path"),
+            Some(43124)
+        );
+        assert_eq!(
+            extract_local_preview_port("https://example.com:43125"),
+            None
+        );
+    }
+
+    #[test]
+    fn allocate_preview_local_public_port_skips_occupied_preferred_port() {
+        let mut reserved = None;
+        let mut attempt_id = Uuid::new_v4();
+        let mut preferred = preview_local_public_port(attempt_id);
+
+        for _ in 0..128 {
+            if let Ok(listener) = TcpListener::bind(("127.0.0.1", preferred)) {
+                reserved = Some(listener);
+                break;
+            }
+            attempt_id = Uuid::new_v4();
+            preferred = preview_local_public_port(attempt_id);
+        }
+
+        let _listener = reserved.expect("failed to reserve a preferred preview port for test");
+        let allocated =
+            allocate_preview_local_public_port(attempt_id).expect("should find fallback port");
+        assert_ne!(allocated, preferred);
     }
 
     #[test]

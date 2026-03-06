@@ -39,6 +39,8 @@ docker-compose.override.yml
 # Generated
 frontend/src/shared/types.ts.backup
 
+.acpms/skills/community-anthropic/
+.acpms/skills/community-openai/
 # Temporary
 tmp/
 temp/

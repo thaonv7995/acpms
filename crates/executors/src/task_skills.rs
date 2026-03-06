@@ -129,6 +129,7 @@ fn derive_skill_chain(
         .or_else(|| task.metadata.get("auto_deploy").and_then(|v| v.as_bool()))
         .unwrap_or(settings.auto_deploy);
     let preview_delivery_enabled = auto_deploy_enabled || settings.preview_enabled;
+    let is_standard_task = !matches!(task.task_type, TaskType::Deploy);
 
     if matches!(task.task_type, TaskType::Deploy) {
         push_skill(&mut ids, &mut seen, "build-artifact");
@@ -170,27 +171,20 @@ fn derive_skill_chain(
     match project_type {
         ProjectType::Web => {
             push_skill(&mut ids, &mut seen, "build-artifact");
-            if preview_delivery_enabled {
+            if preview_delivery_enabled && is_standard_task {
                 push_skill(&mut ids, &mut seen, "cloudflare-config-validate");
                 push_skill(&mut ids, &mut seen, "cloudflare-tunnel-setup-guide");
                 push_skill(&mut ids, &mut seen, "deploy-precheck-cloudflare");
                 push_skill(&mut ids, &mut seen, "setup-cloudflare-tunnel");
-                push_skill(&mut ids, &mut seen, "deploy-cloudflare-pages");
-                push_skill(&mut ids, &mut seen, "cloudflare-dns-route");
-                push_skill(&mut ids, &mut seen, "post-deploy-smoke-and-healthcheck");
-                push_skill(&mut ids, &mut seen, "update-deployment-metadata");
             }
         }
         ProjectType::Api => {
             push_skill(&mut ids, &mut seen, "build-artifact");
-            if preview_delivery_enabled {
+            if preview_delivery_enabled && is_standard_task {
                 push_skill(&mut ids, &mut seen, "cloudflare-config-validate");
                 push_skill(&mut ids, &mut seen, "cloudflare-tunnel-setup-guide");
                 push_skill(&mut ids, &mut seen, "deploy-precheck-cloudflare");
-                push_skill(&mut ids, &mut seen, "deploy-cloudflare-workers");
-                push_skill(&mut ids, &mut seen, "cloudflare-dns-route");
-                push_skill(&mut ids, &mut seen, "post-deploy-smoke-and-healthcheck");
-                push_skill(&mut ids, &mut seen, "update-deployment-metadata");
+                push_skill(&mut ids, &mut seen, "setup-cloudflare-tunnel");
             }
         }
         ProjectType::Desktop => {
@@ -703,7 +697,7 @@ mod tests {
     }
 
     #[test]
-    fn project_preview_alias_enables_live_preview_skill_chain() {
+    fn project_preview_alias_enables_preview_target_skill_chain_without_production_deploy() {
         let task = Task {
             id: uuid::Uuid::new_v4(),
             project_id: uuid::Uuid::new_v4(),
@@ -732,6 +726,53 @@ mod tests {
 
         assert!(skills
             .iter()
+            .any(|skill| skill == "deploy-precheck-cloudflare"));
+        assert!(skills
+            .iter()
+            .any(|skill| skill == "setup-cloudflare-tunnel"));
+        assert!(!skills
+            .iter()
             .any(|skill| skill == "deploy-cloudflare-workers"));
+        assert!(!skills
+            .iter()
+            .any(|skill| skill == "cloudflare-dns-route"));
+    }
+
+    #[test]
+    fn web_preview_skill_chain_skips_production_pages_deploy_for_standard_tasks() {
+        let task = Task {
+            id: uuid::Uuid::new_v4(),
+            project_id: uuid::Uuid::new_v4(),
+            requirement_id: None,
+            sprint_id: None,
+            title: "Ship web preview".to_string(),
+            description: None,
+            task_type: TaskType::Feature,
+            status: acpms_db::models::TaskStatus::Todo,
+            assigned_to: None,
+            parent_task_id: None,
+            gitlab_issue_id: None,
+            metadata: serde_json::json!({}),
+            created_by: uuid::Uuid::new_v4(),
+            created_at: chrono::Utc::now(),
+            updated_at: chrono::Utc::now(),
+        };
+
+        let settings = ProjectSettings {
+            auto_deploy: true,
+            ..ProjectSettings::default()
+        };
+
+        let skills = resolve_skill_chain(&task, &settings, ProjectType::Web);
+
+        assert!(skills
+            .iter()
+            .any(|skill| skill == "deploy-precheck-cloudflare"));
+        assert!(skills
+            .iter()
+            .any(|skill| skill == "setup-cloudflare-tunnel"));
+        assert!(!skills
+            .iter()
+            .any(|skill| skill == "deploy-cloudflare-pages"));
     }
 }

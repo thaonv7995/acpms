@@ -1187,7 +1187,7 @@ You are tasked with creating a new {} project and initializing it with a basic p
                     }
                 };
 
-                status
+                Some(status)
             }
             AgentCliProvider::OpenAiCodex
             | AgentCliProvider::GeminiCli
@@ -1363,8 +1363,42 @@ You are tasked with creating a new {} project and initializing it with a basic p
                         AgentCliProvider::ClaudeCode => unreachable!(),
                     }
 
-                    let status = child_ref.wait().await?;
-                    // Ensure cleanup of any child processes
+                    // The agent finished streaming user-visible output. Close live stdin so
+                    // single-turn providers do not sit idle waiting for more input forever.
+                    if let Some(session) = self.active_sessions.lock().await.get_mut(&attempt_id) {
+                        session.input_sender = None;
+                    }
+
+                    // Mirror normal task execution: do not let init attempts hang forever after
+                    // the stream has already completed.
+                    let status = match tokio::time::timeout(
+                        AGENT_EXIT_TIMEOUT_AFTER_STREAM,
+                        child_ref.wait(),
+                    )
+                    .await
+                    {
+                        Ok(Ok(status)) => Some(status),
+                        Ok(Err(err)) => {
+                            let msg = format!("Failed to wait for agent process exit: {}", err);
+                            self.log(attempt_id, "stderr", &msg).await?;
+                            return Err(anyhow::anyhow!(msg));
+                        }
+                        Err(_) => {
+                            self.log(
+                                attempt_id,
+                                "stderr",
+                                &format!(
+                                    "Agent process did not exit after stream completion (>{:?}). Forcing shutdown to avoid hang.",
+                                    AGENT_EXIT_TIMEOUT_AFTER_STREAM
+                                ),
+                            )
+                            .await?;
+                            let _ =
+                                terminate_process(child_ref, None, GRACEFUL_SHUTDOWN_TIMEOUT).await;
+                            None
+                        }
+                    };
+
                     let _ = kill_process_group(child_ref).await;
                     Ok::<_, anyhow::Error>(status)
                 };
@@ -1428,7 +1462,7 @@ You are tasked with creating a new {} project and initializing it with a basic p
             }
         };
 
-        if status.success() {
+        if status.map(|value| value.success()).unwrap_or(true) {
             // Flush log buffer so REPO_URL (in stdout/system) is in agent_logs before extraction.
             let _ = crate::agent_log_buffer::flush_agent_log_buffer().await;
 

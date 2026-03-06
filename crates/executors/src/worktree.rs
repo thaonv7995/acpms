@@ -228,25 +228,19 @@ impl WorktreeManager {
                 // Don't fail on fetch warning, continue to pull
             }
 
-            // Detect default branch and pull
+            // Detect default branch on the remote we intend to sync from.
+            let sync_remote = upstream_url.map(|_| "upstream").unwrap_or("origin");
             let default_branch = self
-                .detect_default_branch(
-                    repo_path,
-                    upstream_url.map(|_| "upstream").unwrap_or("origin"),
-                )
+                .detect_default_branch(repo_path, sync_remote)
                 .await
-                .unwrap_or_else(|_| "origin/main".to_string());
-
-            // Extract just the branch name (e.g., "main" from "origin/main")
-            let branch_name = default_branch
-                .strip_prefix("origin/")
-                .unwrap_or(&default_branch);
+                .unwrap_or_else(|_| format!("{}/main", sync_remote));
+            let (pull_remote, branch_name) = parse_tracking_branch(&default_branch, sync_remote);
 
             // Checkout the default branch first (in case we're on a detached HEAD or different branch)
             let checkout_output = Command::new("git")
                 .current_dir(repo_path)
                 .arg("checkout")
-                .arg(branch_name)
+                .arg(&branch_name)
                 .stdout(Stdio::piped())
                 .stderr(Stdio::piped())
                 .output()
@@ -263,8 +257,8 @@ impl WorktreeManager {
             let pull_output = git_command_non_interactive()
                 .current_dir(repo_path)
                 .arg("pull")
-                .arg("origin")
-                .arg(branch_name)
+                .arg(&pull_remote)
+                .arg(&branch_name)
                 .stdout(Stdio::piped())
                 .stderr(Stdio::piped())
                 .output()
@@ -991,6 +985,24 @@ pub(crate) fn repo_url_matches(lhs: &str, rhs: &str) -> bool {
     }
 }
 
+fn parse_tracking_branch(default_branch: &str, fallback_remote: &str) -> (String, String) {
+    let trimmed = default_branch.trim();
+    if trimmed.is_empty() || trimmed == "HEAD" {
+        return (fallback_remote.to_string(), "main".to_string());
+    }
+
+    for remote in ["origin", "upstream"] {
+        let prefix = format!("{}/", remote);
+        if let Some(branch) = trimmed.strip_prefix(&prefix) {
+            if !branch.trim().is_empty() {
+                return (remote.to_string(), branch.to_string());
+            }
+        }
+    }
+
+    (fallback_remote.to_string(), trimmed.to_string())
+}
+
 fn git_command_non_interactive() -> Command {
     let mut cmd = Command::new("git");
     // Never block on terminal auth prompts in server/executor mode.
@@ -1074,7 +1086,7 @@ fn parse_repo_identity(raw: &str) -> Option<(String, String)> {
 
 #[cfg(test)]
 mod tests {
-    use super::{inject_pat_into_url, repo_url_matches};
+    use super::{inject_pat_into_url, parse_tracking_branch, repo_url_matches};
 
     #[test]
     fn inject_pat_into_https_gitlab_url() {
@@ -1124,5 +1136,33 @@ mod tests {
             "https://gitlab.example.com/group/repo.git",
             "git@gitlab.example.com:group/repo.git"
         ));
+    }
+
+    #[test]
+    fn parse_tracking_branch_from_origin_ref() {
+        let (remote, branch) = parse_tracking_branch("origin/main", "origin");
+        assert_eq!(remote, "origin");
+        assert_eq!(branch, "main");
+    }
+
+    #[test]
+    fn parse_tracking_branch_from_upstream_ref() {
+        let (remote, branch) = parse_tracking_branch("upstream/main", "upstream");
+        assert_eq!(remote, "upstream");
+        assert_eq!(branch, "main");
+    }
+
+    #[test]
+    fn parse_tracking_branch_keeps_local_branch_name() {
+        let (remote, branch) = parse_tracking_branch("release/2026", "origin");
+        assert_eq!(remote, "origin");
+        assert_eq!(branch, "release/2026");
+    }
+
+    #[test]
+    fn parse_tracking_branch_handles_head_fallback() {
+        let (remote, branch) = parse_tracking_branch("HEAD", "upstream");
+        assert_eq!(remote, "upstream");
+        assert_eq!(branch, "main");
     }
 }
