@@ -2,8 +2,8 @@
 //! POST/GET sessions, session isolation (user_id == auth_user.id).
 
 use acpms_db::models::{
-    CreateRequirementRequest, CreateTaskRequest, ProjectAssistantSession, RequirementPriority,
-    TaskType,
+    project_repo_relative_path, CreateRequirementRequest, CreateTaskRequest,
+    ProjectAssistantSession, RequirementPriority, TaskType,
 };
 use acpms_executors::{
     append_assistant_log, parse_jsonl_to_messages, read_assistant_log_file, AgentEvent,
@@ -27,6 +27,38 @@ use crate::AppState;
 
 const SESSION_START_MESSAGE: &str =
     "The project assistant session has just started. Greet the user briefly and confirm you are ready to help with this project.";
+
+fn resolve_project_assistant_repo_path(
+    worktrees_path: &std::path::Path,
+    project_id: Uuid,
+    project_name: &str,
+    project_metadata: &serde_json::Value,
+) -> std::path::PathBuf {
+    worktrees_path.join(project_repo_relative_path(
+        project_id,
+        project_metadata,
+        project_name,
+    ))
+}
+
+async fn load_project_assistant_repo_path(
+    state: &AppState,
+    project_id: Uuid,
+) -> Result<std::path::PathBuf, ApiError> {
+    let project = ProjectService::new(state.db.clone())
+        .get_project(project_id)
+        .await
+        .map_err(|e| ApiError::Internal(e.to_string()))?
+        .ok_or_else(|| ApiError::NotFound("Project not found".to_string()))?;
+
+    let worktrees_path = state.worktrees_path.read().await.clone();
+    Ok(resolve_project_assistant_repo_path(
+        &worktrees_path,
+        project.id,
+        &project.name,
+        &project.metadata,
+    ))
+}
 
 async fn read_session_log_bytes(
     state: &AppState,
@@ -499,8 +531,7 @@ pub async fn start_session(
         build_project_instruction(&state, project_id, session_id, SESSION_START_MESSAGE, None)
             .await?;
 
-    let worktrees_path = state.worktrees_path.read().await.clone();
-    let repo_path = worktrees_path.join(format!("assistant-{}-{}", project_id, auth_user.id));
+    let repo_path = load_project_assistant_repo_path(&state, project_id).await?;
 
     let job = ProjectAssistantJob {
         session_id,
@@ -640,8 +671,7 @@ pub async fn post_message(
         .await
         .map_err(|e| ApiError::Internal(e.to_string()))?;
 
-    let worktrees_path = state.worktrees_path.read().await.clone();
-    let repo_path = worktrees_path.join(format!("assistant-{}-{}", project_id, auth_user.id));
+    let repo_path = load_project_assistant_repo_path(&state, project_id).await?;
 
     let job = ProjectAssistantJob {
         session_id,
@@ -665,6 +695,46 @@ pub async fn post_message(
         StatusCode::ACCEPTED,
         Json(ApiResponse::success((), "Message submitted")),
     ))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use serde_json::json;
+
+    #[test]
+    fn resolve_project_assistant_repo_path_uses_project_repo_relative_path() {
+        let project_id = Uuid::new_v4();
+        let worktrees_path = std::path::Path::new("/tmp/worktrees");
+        let metadata = json!({
+            "repo_relative_path": "landing-page-2"
+        });
+
+        let resolved = resolve_project_assistant_repo_path(
+            worktrees_path,
+            project_id,
+            "Landing Page",
+            &metadata,
+        );
+
+        assert_eq!(resolved, worktrees_path.join("landing-page-2"));
+    }
+
+    #[test]
+    fn resolve_project_assistant_repo_path_falls_back_to_project_slug() {
+        let project_id = Uuid::new_v4();
+        let worktrees_path = std::path::Path::new("/tmp/worktrees");
+        let metadata = json!({});
+
+        let resolved = resolve_project_assistant_repo_path(
+            worktrees_path,
+            project_id,
+            "Landing Page",
+            &metadata,
+        );
+
+        assert_eq!(resolved, worktrees_path.join("landing-page"));
+    }
 }
 
 /// POST /api/v1/projects/:project_id/assistant/sessions/:session_id/input
