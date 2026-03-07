@@ -2016,7 +2016,6 @@ impl ExecutorOrchestrator {
                     .maybe_run_agent_driven_deploy_validation(
                         attempt_id,
                         task_id,
-                        require_review,
                         &worktree_path,
                         provider,
                         &agent_env_for_followup,

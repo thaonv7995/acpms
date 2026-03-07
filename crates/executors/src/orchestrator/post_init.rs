@@ -8,10 +8,14 @@ use std::path::Path;
 use std::time::Duration;
 use tokio::sync::watch;
 use uuid::Uuid;
+use url::Url;
 
 const MAX_VALIDATION_OUTPUT_CHARS: usize = 12_000;
-const MAX_VALIDATION_FIX_ROUNDS: usize = 2;
+const MAX_VALIDATION_FIX_ROUNDS: usize = 3;
 const MAX_DEPLOY_VALIDATION_COMMAND_TIMEOUT: Duration = Duration::from_secs(8 * 60);
+const PREVIEW_START_PROBE_RETRIES: usize = 15;
+const PREVIEW_START_PROBE_INTERVAL: Duration = Duration::from_secs(1);
+const PREVIEW_START_PROBE_TIMEOUT: Duration = Duration::from_secs(2);
 
 fn preview_delivery_enabled(
     task_metadata: &serde_json::Value,
@@ -87,6 +91,16 @@ fn architecture_edge(source: &str, target: &str, label: &str) -> serde_json::Val
         "target": target,
         "label": label
     })
+}
+
+fn preview_target_socket(preview_target: &str) -> Option<(String, u16)> {
+    let parsed = Url::parse(preview_target).ok()?;
+    let host = parsed.host_str()?.to_string();
+    let port = parsed.port_or_known_default()?;
+    match host.as_str() {
+        "localhost" | "127.0.0.1" | "0.0.0.0" | "::1" => Some((host, port)),
+        _ => None,
+    }
 }
 
 fn push_architecture_node(
@@ -634,6 +648,42 @@ else echo 'Missing Dockerfile or compose file (docker-compose.yml / compose.yml)
         })
     }
 
+    async fn preview_target_reachable(&self, preview_target: &str) -> bool {
+        let Some((host, port)) = preview_target_socket(preview_target) else {
+            return false;
+        };
+
+        matches!(
+            tokio::time::timeout(
+                PREVIEW_START_PROBE_TIMEOUT,
+                tokio::net::TcpStream::connect((host.as_str(), port)),
+            )
+            .await,
+            Ok(Ok(_))
+        )
+    }
+
+    async fn ensure_preview_target_ready(
+        &self,
+        preview_target: &str,
+    ) -> Result<()> {
+        if self.preview_target_reachable(preview_target).await {
+            return Ok(());
+        }
+
+        for _ in 0..PREVIEW_START_PROBE_RETRIES {
+            if self.preview_target_reachable(preview_target).await {
+                return Ok(());
+            }
+            tokio::time::sleep(PREVIEW_START_PROBE_INTERVAL).await;
+        }
+
+        bail!(
+            "Preview target {} was reported, but nothing is listening on that address. The agent must actually start the preview runtime before reporting PREVIEW_TARGET.",
+            preview_target
+        );
+    }
+
     fn build_post_init_fix_instruction(
         &self,
         project: &Project,
@@ -765,15 +815,17 @@ Project type: {}
 ### Required actions
 1. Fix deployment-related files and configs (Dockerfile, compose files, startup scripts, env wiring).
 2. Ensure the app can be deployed for preview/runtime.
-3. Start preview runtime and output `PREVIEW_TARGET: http://127.0.0.1:<port>` in your final message.
+3. Start preview runtime and make sure the reported local port is actually serving traffic before you finish.
+   Only output `PREVIEW_TARGET: http://127.0.0.1:<port>` after `curl` or an equivalent probe succeeds against that local URL.
+4. Creating only `Dockerfile`, `docker-compose.yml`, or `.acpms/preview-output.json` is NOT enough. The preview runtime must actually be running.
    If you launch preview via Docker, also write `.acpms/preview-output.json` with
    `preview_target` and `runtime_control` metadata, for example:
    `{{"preview_target":"http://127.0.0.1:8080","runtime_control":{{"controllable":true,"runtime_type":"docker_container","container_name":"my-preview"}}}}`
    or
    `{{"preview_target":"http://127.0.0.1:8080","runtime_control":{{"controllable":true,"runtime_type":"docker_compose_project","compose_project_name":"my-preview-project"}}}}`
-4. Re-run the failing deployment command(s) before finishing.
-5. Commit and push fixes to the same branch/repository.
-6. Summarize root cause and deployment fixes in final output.
+5. Re-run the failing deployment command(s) before finishing.
+6. Commit and push fixes to the same branch/repository.
+7. Summarize root cause and deployment fixes in final output.
 "#,
             current_round,
             max_rounds,
@@ -784,6 +836,55 @@ Project type: {}
             failed.exit_code,
             output,
             docker_hints
+        )
+    }
+
+    fn build_preview_runtime_fix_instruction(
+        &self,
+        project: &Project,
+        preview_target: Option<&str>,
+        failure_message: &str,
+        current_round: usize,
+        max_rounds: usize,
+    ) -> String {
+        let preview_target_line = preview_target
+            .map(|value| format!("Current reported PREVIEW_TARGET: `{}`", value))
+            .unwrap_or_else(|| "Current reported PREVIEW_TARGET: missing".to_string());
+
+        format!(
+            r#"## Preview runtime fix ({}/{}).
+
+Preview verification is still failing even after deployment validation commands passed.
+
+Project: {}
+Project type: {}
+
+### Current preview verification issue
+{}
+
+### Current preview contract state
+{}
+
+### Required actions
+1. Treat this as a real preview-runtime failure, not a config-only task.
+2. Start or restart the preview runtime yourself in this attempt.
+3. If using Docker Compose, actually run `docker compose up -d --build` (or the repo-equivalent command). If using a single container, actually run `docker run -d ...`.
+4. Stop/remove any stale preview container, compose project, or port-conflicting runtime first.
+5. You may create, edit, or delete Docker/compose/supporting files as needed until the preview works.
+6. Verify the local runtime responds successfully before finishing, for example with `curl -sf http://127.0.0.1:<port>` or another real HTTP check.
+7. Only after the runtime is reachable, write `.acpms/preview-output.json` with `preview_target`, `preview_url`, and `runtime_control`.
+8. Only after the runtime is reachable, print:
+   - `PREVIEW_TARGET: http://127.0.0.1:<port>`
+   - `PREVIEW_URL: <public-or-local-url>`
+9. If no public URL exists, `PREVIEW_URL` must equal `PREVIEW_TARGET`.
+10. If you still cannot make preview run, output `DEPLOYMENT_FAILURE_REASON: <root cause>`.
+"#,
+            current_round,
+            max_rounds,
+            project.name,
+            project.project_type.display_name(),
+            failure_message,
+            preview_target_line
         )
     }
 
@@ -1375,6 +1476,15 @@ Project type: {}
                 last_failure_signature = Some(failure_signature);
 
                 if pass == fix_rounds {
+                    self.log(
+                        attempt_id,
+                        "stderr",
+                        &format!(
+                            "Agent could not fix post-init validation after {} auto-fix attempts. Please review the failing command and continue with a follow-up if needed.",
+                            fix_rounds
+                        ),
+                    )
+                    .await?;
                     bail!(
                         "Validation command `{}` still failing after {} passes (exit code: {:?})",
                         failure.command,
@@ -1549,6 +1659,15 @@ Project type: {}
                 last_failure_signature = Some(failure_signature);
 
                 if pass == fix_rounds {
+                    self.log(
+                        attempt_id,
+                        "stderr",
+                        &format!(
+                            "Agent could not make deployment validation pass after {} auto-fix attempts. Please review the deployment files and continue with a follow-up if needed.",
+                            fix_rounds
+                        ),
+                    )
+                    .await?;
                     bail!(
                         "Deployment validation command `{}` still failing after {} passes (exit code: {:?})",
                         failure.command,
@@ -1624,15 +1743,10 @@ Project type: {}
         &self,
         attempt_id: Uuid,
         task_id: Uuid,
-        require_review: bool,
         worktree_path: &Path,
         provider: AgentCliProvider,
         agent_env: &HashMap<String, String>,
     ) -> Result<Option<String>> {
-        if require_review {
-            return Ok(None);
-        }
-
         let task_snapshot = match self.fetch_task(task_id).await {
             Ok(task) => task,
             Err(err) => {
@@ -1705,37 +1819,115 @@ Project type: {}
         .await?;
 
         if matches!(project.project_type, ProjectType::Web) {
-            let preview_target = self
-                .persist_preview_target_from_attempt_logs(attempt_id, Some(worktree_path))
-                .await?;
-            if let Some(pt) = &preview_target {
-                return Ok(Some(pt.clone()));
-            }
-            // Extract agent-reported reason when PREVIEW_TARGET is missing
-            let lines: Vec<String> = self
-                .fetch_attempt_log_lines(attempt_id, "deployment failure reason")
-                .await
-                .unwrap_or_default();
-            let agent_reason = super::extract_labeled_value(&lines, "DEPLOYMENT_FAILURE_REASON")
-                .or_else(|| super::extract_labeled_value(&lines, "deployment_failure_reason"));
-            let msg = if let Some(reason) = &agent_reason {
-                format!(
-                    "Preview delivery failed: Agent reported — {}. \
-                    (Agent must output DEPLOYMENT_FAILURE_REASON when PREVIEW_TARGET cannot be provided.)",
-                    reason.trim()
+            let preview_fix_rounds =
+                (project_settings.max_retries.max(0) as usize).clamp(1, MAX_VALIDATION_FIX_ROUNDS);
+            let worktree_path_buf = worktree_path.to_path_buf();
+
+            for pass in 0..=preview_fix_rounds {
+                let preview_target = self
+                    .persist_preview_target_from_attempt_logs(attempt_id, Some(worktree_path))
+                    .await?;
+                let preview_issue = if let Some(pt) = &preview_target {
+                    match self.ensure_preview_target_ready(pt).await {
+                        Ok(()) => return Ok(Some(pt.clone())),
+                        Err(err) => err.to_string(),
+                    }
+                } else {
+                    let lines: Vec<String> = self
+                        .fetch_attempt_log_lines(attempt_id, "deployment failure reason")
+                        .await
+                        .unwrap_or_default();
+                    let agent_reason = super::extract_labeled_value(
+                        &lines,
+                        "DEPLOYMENT_FAILURE_REASON",
+                    )
+                    .or_else(|| {
+                        super::extract_labeled_value(&lines, "deployment_failure_reason")
+                    });
+                    if let Some(reason) = &agent_reason {
+                        format!(
+                            "Preview delivery failed: Agent reported — {}. (Agent must output DEPLOYMENT_FAILURE_REASON when PREVIEW_TARGET cannot be provided.)",
+                            reason.trim()
+                        )
+                    } else {
+                        "Preview delivery is enabled but agent did not output PREVIEW_TARGET. Deploy preview requires: start the app (e.g. docker compose up -d or npm run dev) and output PREVIEW_TARGET: http://127.0.0.1:<port> plus PREVIEW_URL: <public-or-local-url>, or create .acpms/preview-output.json with preview_target, preview_url, and runtime_control metadata for stoppable Docker preview. PREVIEW_URL may be the same local URL as PREVIEW_TARGET when no public URL exists. If you cannot provide PREVIEW_TARGET, you MUST output DEPLOYMENT_FAILURE_REASON: <root cause> (e.g. app failed to start, port conflict, docker compose error, Cloudflare not configured)."
+                            .to_string()
+                    }
+                };
+
+                if pass == preview_fix_rounds {
+                    self.log(
+                        attempt_id,
+                        "stderr",
+                        &format!(
+                            "Agent could not make the preview runtime work after {} auto-fix attempts. Please review the preview logs and continue with a follow-up if needed.",
+                            preview_fix_rounds
+                        ),
+                    )
+                    .await?;
+                    self.log(attempt_id, "stderr", &preview_issue).await?;
+                    bail!("{}", preview_issue);
+                }
+
+                self.log(
+                    attempt_id,
+                    "system",
+                    &format!(
+                        "Preview runtime verification failed. Starting preview auto-fix round {}/{}.",
+                        pass + 1,
+                        preview_fix_rounds
+                    ),
                 )
-            } else {
-                "Preview delivery is enabled but agent did not output PREVIEW_TARGET. \
-                Deploy preview requires: start the app (e.g. docker compose up -d or npm run dev) \
-                and output PREVIEW_TARGET: http://127.0.0.1:<port> plus PREVIEW_URL: <public-or-local-url>, \
-                or create .acpms/preview-output.json with preview_target, preview_url, and runtime_control metadata \
-                for stoppable Docker preview. PREVIEW_URL may be the same local URL as PREVIEW_TARGET when no public URL exists. \
-                If you cannot provide PREVIEW_TARGET, you MUST output DEPLOYMENT_FAILURE_REASON: <root cause> \
-                (e.g. app failed to start, port conflict, docker compose error, Cloudflare not configured)."
-                    .to_string()
-            };
-            self.log(attempt_id, "stderr", &msg).await?;
-            bail!("{}", msg);
+                .await?;
+
+                let fix_instruction = self.build_preview_runtime_fix_instruction(
+                    &project,
+                    preview_target.as_deref(),
+                    &preview_issue,
+                    pass + 1,
+                    preview_fix_rounds,
+                );
+                let (_cancel_tx, cancel_rx) = watch::channel(false);
+                let execute_fix = self.execute_agent(
+                    attempt_id,
+                    &worktree_path_buf,
+                    &fix_instruction,
+                    cancel_rx,
+                    provider,
+                    Some(agent_env.clone()),
+                );
+
+                match tokio::time::timeout(deploy_task_timeout, execute_fix).await {
+                    Ok(Ok(())) => {
+                        self.log(
+                            attempt_id,
+                            "system",
+                            "Preview auto-fix round completed. Re-running deployment validation and preview verification...",
+                        )
+                        .await?;
+                    }
+                    Ok(Err(e)) => {
+                        bail!("Preview auto-fix round failed: {}", e);
+                    }
+                    Err(_) => {
+                        bail!(
+                            "Preview auto-fix round timed out after {} minutes",
+                            project_settings.timeout_mins
+                        );
+                    }
+                }
+
+                self.run_deployment_validation_with_auto_fix(
+                    attempt_id,
+                    &project,
+                    worktree_path,
+                    provider,
+                    agent_env,
+                    deploy_task_timeout,
+                    &project_settings,
+                )
+                .await?;
+            }
         }
 
         Ok(None)

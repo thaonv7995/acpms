@@ -113,6 +113,13 @@ struct CreateDnsRecordResult {
 }
 
 #[derive(Debug, Deserialize)]
+struct ListDnsRecordsResponse {
+    result: Vec<CreateDnsRecordResult>,
+    success: bool,
+    errors: Vec<CloudflareError>,
+}
+
+#[derive(Debug, Deserialize)]
 struct CloudflareError {
     code: i32,
     message: String,
@@ -196,11 +203,8 @@ impl CloudflareClient {
             .context("Failed to send create tunnel request")?;
 
         let status = response.status();
-        let response_body: CreateTunnelResponse = Self::parse_json_response(
-            response,
-            "Failed to parse create tunnel response",
-        )
-        .await?;
+        let response_body: CreateTunnelResponse =
+            Self::parse_json_response(response, "Failed to parse create tunnel response").await?;
 
         if !response_body.success {
             let error_messages: Vec<String> = response_body
@@ -301,11 +305,8 @@ impl CloudflareClient {
             .context("Failed to send get tunnel request")?;
 
         let status = response.status();
-        let response_body: GetTunnelResponse = Self::parse_json_response(
-            response,
-            "Failed to parse get tunnel response",
-        )
-        .await?;
+        let response_body: GetTunnelResponse =
+            Self::parse_json_response(response, "Failed to parse get tunnel response").await?;
 
         if !response_body.success {
             let error_messages: Vec<String> = response_body
@@ -345,11 +346,9 @@ impl CloudflareClient {
             .context("Failed to send account verification request")?;
 
         let status = response.status();
-        let response_body: GetAccountResponse = Self::parse_json_response(
-            response,
-            "Failed to parse account verification response",
-        )
-        .await?;
+        let response_body: GetAccountResponse =
+            Self::parse_json_response(response, "Failed to parse account verification response")
+                .await?;
 
         if !response_body.success {
             let error_messages: Vec<String> = response_body
@@ -382,6 +381,23 @@ impl CloudflareClient {
         record_type: &str,
         proxied: bool,
     ) -> Result<String> {
+        if let Some(existing_record_id) = self
+            .find_dns_record(zone_id, name, record_type)
+            .await
+            .context("Failed to check existing DNS record before create")?
+        {
+            return self
+                .update_dns_record(
+                    zone_id,
+                    &existing_record_id,
+                    name,
+                    content,
+                    record_type,
+                    proxied,
+                )
+                .await;
+        }
+
         let url = self.endpoint(&format!("zones/{}/dns_records", zone_id));
 
         let mut headers = HeaderMap::new();
@@ -410,11 +426,9 @@ impl CloudflareClient {
             .context("Failed to send create DNS record request")?;
 
         let status = response.status();
-        let response_body: CreateDnsRecordResponse = Self::parse_json_response(
-            response,
-            "Failed to parse create DNS record response",
-        )
-        .await?;
+        let response_body: CreateDnsRecordResponse =
+            Self::parse_json_response(response, "Failed to parse create DNS record response")
+                .await?;
 
         if !response_body.success {
             let error_messages: Vec<String> = response_body
@@ -432,6 +446,115 @@ impl CloudflareClient {
         Ok(response_body
             .result
             .context("Cloudflare create DNS response missing result payload")?
+            .id)
+    }
+
+    async fn find_dns_record(
+        &self,
+        zone_id: &str,
+        name: &str,
+        record_type: &str,
+    ) -> Result<Option<String>> {
+        let url = self.endpoint(&format!("zones/{}/dns_records", zone_id));
+
+        let mut headers = HeaderMap::new();
+        headers.insert(
+            AUTHORIZATION,
+            HeaderValue::from_str(&format!("Bearer {}", self.api_token))
+                .context("Invalid API token")?,
+        );
+
+        let response = self
+            .http_client
+            .get(&url)
+            .headers(headers)
+            .query(&[("type", record_type), ("name", name)])
+            .send()
+            .await
+            .context("Failed to send list DNS records request")?;
+
+        let status = response.status();
+        let response_body: ListDnsRecordsResponse =
+            Self::parse_json_response(response, "Failed to parse list DNS records response")
+                .await?;
+
+        if !response_body.success {
+            let error_messages: Vec<String> = response_body
+                .errors
+                .iter()
+                .map(|e| format!("{}: {}", e.code, e.message))
+                .collect();
+            anyhow::bail!(
+                "Failed to list DNS records (status {}): {}",
+                status,
+                error_messages.join(", ")
+            );
+        }
+
+        Ok(response_body
+            .result
+            .into_iter()
+            .next()
+            .map(|record| record.id))
+    }
+
+    async fn update_dns_record(
+        &self,
+        zone_id: &str,
+        record_id: &str,
+        name: &str,
+        content: &str,
+        record_type: &str,
+        proxied: bool,
+    ) -> Result<String> {
+        let url = self.endpoint(&format!("zones/{}/dns_records/{}", zone_id, record_id));
+
+        let mut headers = HeaderMap::new();
+        headers.insert(
+            AUTHORIZATION,
+            HeaderValue::from_str(&format!("Bearer {}", self.api_token))
+                .context("Invalid API token")?,
+        );
+        headers.insert(CONTENT_TYPE, HeaderValue::from_static("application/json"));
+
+        let body = serde_json::json!({
+            "type": record_type,
+            "name": name,
+            "content": content,
+            "proxied": proxied,
+            "ttl": 1,
+        });
+
+        let response = self
+            .http_client
+            .patch(&url)
+            .headers(headers)
+            .json(&body)
+            .send()
+            .await
+            .context("Failed to send update DNS record request")?;
+
+        let status = response.status();
+        let response_body: CreateDnsRecordResponse =
+            Self::parse_json_response(response, "Failed to parse update DNS record response")
+                .await?;
+
+        if !response_body.success {
+            let error_messages: Vec<String> = response_body
+                .errors
+                .iter()
+                .map(|e| format!("{}: {}", e.code, e.message))
+                .collect();
+            anyhow::bail!(
+                "Failed to update DNS record (status {}): {}",
+                status,
+                error_messages.join(", ")
+            );
+        }
+
+        Ok(response_body
+            .result
+            .context("Cloudflare update DNS response missing result payload")?
             .id)
     }
 

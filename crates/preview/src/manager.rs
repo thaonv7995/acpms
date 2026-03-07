@@ -2407,6 +2407,13 @@ fn resolve_preview_dev_image(worktree_path: &Path, dev_command: &str) -> String 
 
     let normalized_command = dev_command.to_ascii_lowercase();
 
+    if normalized_command.contains("bun run")
+        || worktree_path.join("bun.lock").exists()
+        || worktree_path.join("bun.lockb").exists()
+    {
+        return "oven/bun:1-alpine".to_string();
+    }
+
     if normalized_command.contains("python")
         || normalized_command.contains("uvicorn")
         || normalized_command.contains("flask")
@@ -2712,6 +2719,24 @@ fn package_manager_run_command(package_manager: PackageManager, script_name: &st
     }
 }
 
+fn package_manager_install_command(
+    worktree_path: &Path,
+    package_manager: PackageManager,
+) -> String {
+    match package_manager {
+        PackageManager::Npm => {
+            if worktree_path.join("package-lock.json").exists() {
+                "npm ci".to_string()
+            } else {
+                "npm install".to_string()
+            }
+        }
+        PackageManager::Pnpm => "corepack enable && pnpm install".to_string(),
+        PackageManager::Yarn => "corepack enable && yarn install".to_string(),
+        PackageManager::Bun => "bun install".to_string(),
+    }
+}
+
 fn additional_preview_cli_args(script_value: &str, port: u16) -> String {
     let normalized = script_value.to_ascii_lowercase();
     let requires_cli_flags = normalized.contains("vite")
@@ -2775,8 +2800,20 @@ fn build_compose_content(
     exposure_mode: PreviewExposureMode,
 ) -> Result<String> {
     let worktree = yaml_single_quote(&worktree_path.to_string_lossy());
+    let needs_node_dependency_isolation = worktree_path.join("package.json").exists()
+        && (dev_image.starts_with("node:") || dev_image.starts_with("oven/bun:"));
+    let mut volume_lines = vec![format!("      - '{worktree}:/workspace'")];
+    let runtime_command = if needs_node_dependency_isolation {
+        let package_manager = detect_package_manager(worktree_path);
+        let install_command = package_manager_install_command(worktree_path, package_manager);
+        volume_lines.push("      - '/workspace/node_modules'".to_string());
+        format!("{install_command} && {dev_command}")
+    } else {
+        dev_command.to_string()
+    };
     let command_json =
-        serde_json::to_string(dev_command).context("Failed to JSON-encode dev command")?;
+        serde_json::to_string(&runtime_command).context("Failed to JSON-encode dev command")?;
+    let volumes_block = volume_lines.join("\n");
     let dev_server_base = format!(
         r#"services:
   dev-server:
@@ -2784,7 +2821,7 @@ fn build_compose_content(
     working_dir: /workspace
     command: ["sh", "-lc", {command_json}]
     volumes:
-      - '{worktree}:/workspace'
+{volumes_block}
     expose:
       - "{port}"
     restart: unless-stopped
@@ -2864,6 +2901,7 @@ mod tests {
             settings_service,
             db,
             preview_ttl_days: 7,
+            worktrees_path: Arc::new(RwLock::new(create_temp_worktree("worktrees"))),
         };
 
         let attempt_id = Uuid::parse_str("550e8400-e29b-41d4-a716-446655440000").unwrap();
@@ -3002,6 +3040,8 @@ mod tests {
         let worktree = create_temp_worktree("compose-spec");
         let quoted_worktree = worktree.join("repo'with-quote");
         fs::create_dir_all(&quoted_worktree).unwrap();
+        write_package_json(&quoted_worktree, r#"{"dev":"vite"}"#);
+        fs::write(quoted_worktree.join("pnpm-lock.yaml"), "").unwrap();
         let credentials_path = quoted_worktree.join(".acpms/preview/creds'.json");
         fs::create_dir_all(credentials_path.parent().unwrap()).unwrap();
 
@@ -3023,12 +3063,17 @@ mod tests {
         assert!(compose.contains("http://dev-server:3000"));
         assert!(compose.contains("repo''with-quote"));
         assert!(compose.contains("creds''.json"));
+        assert!(compose.contains(
+            "corepack enable && pnpm install && pnpm run dev -- --host 0.0.0.0 --port 3000"
+        ));
+        assert!(compose.contains("'/workspace/node_modules'"));
         let _ = fs::remove_dir_all(worktree);
     }
 
     #[test]
     fn build_compose_content_local_mode_exposes_host_port_without_cloudflared() {
         let worktree = create_temp_worktree("compose-local");
+        write_package_json(&worktree, r#"{"dev":"vite"}"#);
         let compose = build_compose_content(
             &worktree,
             "node:20-alpine",
@@ -3041,6 +3086,8 @@ mod tests {
         assert!(compose.contains("dev-server:"));
         assert!(compose.contains("127.0.0.1:43123:3000"));
         assert!(!compose.contains("cloudflared:"));
+        assert!(compose.contains("npm install && npm run dev"));
+        assert!(compose.contains("'/workspace/node_modules'"));
         let _ = fs::remove_dir_all(worktree);
     }
 
@@ -3108,6 +3155,19 @@ mod tests {
     }
 
     #[test]
+    fn package_manager_install_command_prefers_ci_for_npm_lockfile() {
+        let worktree = create_temp_worktree("npm-install");
+        fs::write(worktree.join("package-lock.json"), "{}").unwrap();
+
+        assert_eq!(
+            package_manager_install_command(&worktree, PackageManager::Npm),
+            "npm ci"
+        );
+
+        let _ = fs::remove_dir_all(worktree);
+    }
+
+    #[test]
     fn additional_preview_cli_args_does_not_duplicate_host_or_port() {
         let already_configured =
             additional_preview_cli_args("next dev --hostname 0.0.0.0 --port 4010", 4010);
@@ -3164,6 +3224,11 @@ mod tests {
         assert_eq!(
             resolve_preview_dev_image(&worktree, "HOST=0.0.0.0 PORT=3000 cargo run"),
             "rust:1.77-alpine"
+        );
+        fs::write(worktree.join("bun.lockb"), "").unwrap();
+        assert_eq!(
+            resolve_preview_dev_image(&worktree, "HOST=0.0.0.0 PORT=3000 bun run dev"),
+            "oven/bun:1-alpine"
         );
 
         let _ = fs::remove_dir_all(worktree);

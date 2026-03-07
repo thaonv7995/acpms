@@ -102,6 +102,7 @@ function getAttemptPreviewUrl(
 ): string | undefined {
   if (!metadata) return undefined;
   if (taskStatus === 'done') return undefined;
+  if (metadata.preview_runtime_state === 'stopped') return undefined;
 
   const previewUrl = metadata.preview_url;
   if (typeof previewUrl === 'string' && previewUrl.trim().length > 0) {

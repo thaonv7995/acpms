@@ -26,6 +26,7 @@ tracing.workspace = true
 serde.workspace = true
 serde_json.workspace = true
 chrono.workspace = true
+url.workspace = true
 
 # Worker Queue
 deadqueue = "0.2"

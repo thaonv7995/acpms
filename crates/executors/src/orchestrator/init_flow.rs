@@ -1633,6 +1633,34 @@ You are tasked with creating a new {} project and initializing it with a basic p
                 bail!(msg);
             }
 
+            match self
+                .maybe_run_agent_driven_deploy_validation(
+                    attempt_id,
+                    task_id,
+                    &worktree_path,
+                    provider,
+                    &agent_env,
+                )
+                .await
+            {
+                Ok(Some(preview_target)) => {
+                    self.log(
+                        attempt_id,
+                        "system",
+                        &format!("🌐 PREVIEW_TARGET: {}", preview_target),
+                    )
+                    .await?;
+                }
+                Ok(None) => {}
+                Err(e) => {
+                    let msg = format!("Deployment validation failed: {}", e);
+                    self.log(attempt_id, "stderr", &msg).await?;
+                    self.fail_attempt(attempt_id, &msg).await?;
+                    self.mark_task_failed(task_id, &msg).await?;
+                    bail!(msg);
+                }
+            }
+
             self.log(
                 attempt_id,
                 "system",

@@ -38,10 +38,15 @@ description: Use when a task needs a live preview URL for Web/API/Microservice a
 4. Start the preview runtime with a stable ACPMS-specific name:
    - container example: `acpms-preview-<attempt-id-short>`
    - compose project example: `acpms-preview-<attempt-id-short>`
-5. Verify the app responds from the host:
+5. Actually start the runtime. Creating only `Dockerfile`, `docker-compose.yml`, or `.acpms/preview-output.json` is not enough.
+   - For Compose: run `docker compose -p <project> up -d --build`
+   - For a single container: run `docker rm -f <old-container>` if needed, then `docker run -d ...`
+6. Verify the app responds from the host before you claim preview is ready:
    - `curl -I http://127.0.0.1:<port>`
-   - or equivalent health/path check for the actual app
-6. Write `.acpms/preview-output.json` before finishing.
+   - or `curl -sf http://127.0.0.1:<port>/health`
+   - or another real HTTP check against the actual app route
+7. Only after the HTTP check succeeds, write `.acpms/preview-output.json`.
+8. Only after the HTTP check succeeds, print `PREVIEW_TARGET` / `PREVIEW_URL`.
 
 ## Stop Workflow
 1. Read `.acpms/preview-output.json` if present.
@@ -104,6 +109,8 @@ For a single container:
   - `PREVIEW_TARGET: http://127.0.0.1:<port>`
 - Always print:
   - `PREVIEW_URL: <url>`
+- `PREVIEW_TARGET` is allowed only after the local runtime is already reachable.
+- If `curl http://127.0.0.1:<port>` fails, do not output `PREVIEW_TARGET`.
 - If a public URL exists, `PREVIEW_URL` should be that public URL.
 - If only a local preview exists, `PREVIEW_URL` should be the same local URL as `PREVIEW_TARGET`.
 
@@ -116,10 +123,12 @@ For a single container:
 | Old preview container exists | Stop/remove it before starting new preview |
 | Port conflict | Pick a new host port, then update `preview-output.json` |
 | Docker build is slow but app can run with bind mount | Prefer bind mount dev/preview mode |
+| Runtime files exist but container is not running | Start it; do not report success from config/build validation alone |
 | Cannot start preview in Docker | Output `DEPLOYMENT_FAILURE_REASON: <root cause>` |
 
 ## Guardrails
 - Never claim preview is ready without a real HTTP check.
+- Never confuse `docker compose config`, `docker build`, or file creation with a running preview.
 - Never output fake or placeholder URLs.
 - Never rely on worktree-local background processes outside Docker.
 - Prefer names that are unique per attempt to avoid collision between follow-ups.

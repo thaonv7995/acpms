@@ -1,10 +1,14 @@
 use crate::middleware::{AuthUser, RbacChecker};
 use crate::routes::agent;
 use crate::{api::ApiResponse, error::ApiError, AppState};
-use acpms_deployment::cloudflare::CloudflareClient;
 use acpms_db::models::{SystemSettingsResponse, UpdateSystemSettingsRequest};
+use acpms_deployment::cloudflare::CloudflareClient;
 use acpms_services::{cloudflare_token_looks_masked_or_corrupted, CloudflareConfigOverrides};
-use axum::{extract::State, routing::{get, post}, Json, Router};
+use axum::{
+    extract::State,
+    routing::{get, post},
+    Json, Router,
+};
 use chrono::Utc;
 use serde::{Deserialize, Serialize};
 use std::path::PathBuf;
@@ -13,7 +17,10 @@ use uuid::Uuid;
 pub fn create_routes() -> Router<AppState> {
     Router::new()
         .route("/settings", get(get_settings).put(update_settings))
-        .route("/settings/cloudflare/check", post(check_cloudflare_settings))
+        .route(
+            "/settings/cloudflare/check",
+            post(check_cloudflare_settings),
+        )
 }
 
 #[derive(Debug, Deserialize)]
@@ -212,9 +219,8 @@ pub async fn check_cloudflare_settings(
         }
     };
 
-    let mut details = vec![
-        "Using temporary tunnel creation as the primary capability check.".to_string(),
-    ];
+    let mut details =
+        vec!["Using temporary tunnel creation as the primary capability check.".to_string()];
 
     let probe_suffix = Uuid::new_v4().simple().to_string();
     let short_suffix = &probe_suffix[..8];
@@ -272,8 +278,8 @@ pub async fn check_cloudflare_settings(
     let dns_record_ok;
     let mut status = "success".to_string();
     let mut ok = true;
-    let mut message = "Cloudflare connection, tunnel creation, and DNS probe succeeded."
-        .to_string();
+    let mut message =
+        "Cloudflare connection, tunnel creation, and DNS probe succeeded.".to_string();
 
     match cloudflare
         .create_dns_record(&zone_id, &probe_subdomain, &dns_target, "CNAME", true)
@@ -291,9 +297,8 @@ pub async fn check_cloudflare_settings(
             dns_record_ok = Some(false);
             status = "warning".to_string();
             ok = false;
-            message =
-                "Cloudflare account and tunnel are valid, but DNS record creation failed."
-                    .to_string();
+            message = "Cloudflare account and tunnel are valid, but DNS record creation failed."
+                .to_string();
             details.push(error.to_string());
         }
     }

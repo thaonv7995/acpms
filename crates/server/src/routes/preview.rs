@@ -91,20 +91,24 @@ async fn create_preview(
     }
 
     if let Some(existing_preview) = get_existing_preview(&state, attempt_id).await? {
-        // Start runtime in background; return preview URL immediately
-        let pm = state.preview_manager.clone();
-        let aid = attempt_id;
-        let pt = attempt_context.project_type;
-        tokio::spawn(async move {
-            if let Err(e) = pm.start_preview_runtime(aid, pt).await {
-                tracing::error!(
-                    "Background preview runtime start failed for attempt {}: {}",
-                    aid,
-                    e
-                );
-            }
-        });
-        return Ok(Json(existing_preview));
+        if existing_preview_is_stale(&attempt_context.metadata, &existing_preview) {
+            cleanup_stale_preview_record(&state, attempt_id).await?;
+        } else {
+            // Start runtime in background; return preview URL immediately
+            let pm = state.preview_manager.clone();
+            let aid = attempt_id;
+            let pt = attempt_context.project_type;
+            tokio::spawn(async move {
+                if let Err(e) = pm.start_preview_runtime(aid, pt).await {
+                    tracing::error!(
+                        "Background preview runtime start failed for attempt {}: {}",
+                        aid,
+                        e
+                    );
+                }
+            });
+            return Ok(Json(existing_preview));
+        }
     }
 
     let lock_key = preview_start_lock_key(attempt_id);
@@ -122,7 +126,21 @@ async fn create_preview(
 
     let preview_creation_result: Result<(PreviewInfo, bool), ApiError> =
         match get_existing_preview(&state, attempt_id).await {
-            Ok(Some(existing_preview)) => Ok((existing_preview, false)),
+            Ok(Some(existing_preview)) => {
+                if existing_preview_is_stale(&attempt_context.metadata, &existing_preview) {
+                    cleanup_stale_preview_record(&state, attempt_id).await?;
+                    match state
+                        .preview_manager
+                        .create_preview(attempt_id, &attempt_context.task_title)
+                        .await
+                    {
+                        Ok(created) => Ok((created, true)),
+                        Err(error) => Err(ApiError::Internal(error.to_string())),
+                    }
+                } else {
+                    Ok((existing_preview, false))
+                }
+            }
             Ok(None) => match state
                 .preview_manager
                 .create_preview(attempt_id, &attempt_context.task_title)
@@ -186,6 +204,11 @@ async fn get_preview_for_attempt(
     .await?;
 
     let preview = get_existing_preview(&state, attempt_id).await?;
+    if let Some(existing_preview) = preview.as_ref() {
+        if existing_preview_is_stale(&attempt_context.metadata, existing_preview) {
+            return Ok(Json(None));
+        }
+    }
     Ok(Json(preview))
 }
 
@@ -204,12 +227,12 @@ async fn get_preview_control_for_attempt(
     )
     .await?;
 
-    let managed_preview_exists = get_existing_preview(&state, attempt_id).await?.is_some();
+    let existing_preview = get_existing_preview(&state, attempt_id).await?;
 
     Ok(Json(build_preview_control_response(
         attempt_id,
         &attempt_context.metadata,
-        managed_preview_exists,
+        existing_preview.as_ref(),
     )))
 }
 
@@ -572,33 +595,26 @@ fn preview_runtime_stopped(metadata: &Value) -> bool {
     )
 }
 
-fn is_local_loopback_preview_url(candidate: &str) -> bool {
-    candidate.starts_with("http://localhost:")
-        || candidate.starts_with("https://localhost:")
-        || candidate.starts_with("http://127.0.0.1:")
-        || candidate.starts_with("https://127.0.0.1:")
-}
-
-fn preview_signal_stale_due_missing_worktree(metadata: &Value) -> bool {
-    if parse_preview_runtime_control(metadata).is_some() {
-        return false;
-    }
-
+fn preview_signal_stale_due_missing_worktree(
+    metadata: &Value,
+    fallback_preview_url: Option<&str>,
+) -> bool {
     let preview_url = metadata
         .get("preview_url_agent")
         .or_else(|| metadata.get("preview_url"))
         .or_else(|| metadata.get("preview_target"))
         .and_then(Value::as_str)
         .map(str::trim)
-        .filter(|value| !value.is_empty());
+        .filter(|value| !value.is_empty())
+        .or_else(|| {
+            fallback_preview_url
+                .map(str::trim)
+                .filter(|value| !value.is_empty())
+        });
 
-    let Some(preview_url) = preview_url else {
+    let Some(_preview_url) = preview_url else {
         return false;
     };
-
-    if !is_local_loopback_preview_url(preview_url) {
-        return false;
-    }
 
     let worktree_path = metadata
         .get("worktree_path")
@@ -612,25 +628,19 @@ fn preview_signal_stale_due_missing_worktree(metadata: &Value) -> bool {
     }
 }
 
+fn existing_preview_is_stale(metadata: &Value, preview: &PreviewInfo) -> bool {
+    if preview_runtime_stopped(metadata) {
+        return true;
+    }
+
+    preview_signal_stale_due_missing_worktree(metadata, Some(preview.preview_url.as_str()))
+}
+
 fn build_preview_control_response(
     attempt_id: Uuid,
     metadata: &Value,
-    managed_preview_exists: bool,
+    existing_preview: Option<&PreviewInfo>,
 ) -> PreviewControlResponse {
-    if managed_preview_exists {
-        return PreviewControlResponse {
-            attempt_id,
-            preview_available: true,
-            controllable: true,
-            dismissible: false,
-            action: "stop".to_string(),
-            runtime_type: Some("managed_preview".to_string()),
-            control_source: Some("preview_manager".to_string()),
-            container_name: None,
-            compose_project_name: None,
-        };
-    }
-
     if preview_runtime_stopped(metadata) {
         return PreviewControlResponse {
             attempt_id,
@@ -645,7 +655,10 @@ fn build_preview_control_response(
         };
     }
 
-    if preview_signal_stale_due_missing_worktree(metadata) {
+    if preview_signal_stale_due_missing_worktree(
+        metadata,
+        existing_preview.map(|preview| preview.preview_url.as_str()),
+    ) {
         return PreviewControlResponse {
             attempt_id,
             preview_available: false,
@@ -658,6 +671,21 @@ fn build_preview_control_response(
                 .or_else(|| metadata.get("preview_url_source"))
                 .and_then(Value::as_str)
                 .map(ToString::to_string),
+            container_name: None,
+            compose_project_name: None,
+        };
+    }
+
+    let managed_preview_exists = existing_preview.is_some();
+    if managed_preview_exists {
+        return PreviewControlResponse {
+            attempt_id,
+            preview_available: true,
+            controllable: true,
+            dismissible: false,
+            action: "stop".to_string(),
+            runtime_type: Some("managed_preview".to_string()),
+            control_source: Some("preview_manager".to_string()),
             container_name: None,
             compose_project_name: None,
         };
@@ -709,6 +737,15 @@ fn build_preview_control_response(
         container_name: None,
         compose_project_name: None,
     }
+}
+
+async fn cleanup_stale_preview_record(state: &AppState, attempt_id: Uuid) -> Result<(), ApiError> {
+    state
+        .preview_manager
+        .cleanup_preview(attempt_id)
+        .await
+        .map_err(|e| ApiError::Internal(e.to_string()))?;
+    mark_attempt_preview_stopped(state, attempt_id).await
 }
 
 async fn mark_attempt_preview_stopped(state: &AppState, attempt_id: Uuid) -> Result<(), ApiError> {
@@ -931,7 +968,21 @@ mod tests {
             "preview_target_source": "agent_output",
         });
 
-        let response = build_preview_control_response(Uuid::nil(), &metadata, false);
+        let response = build_preview_control_response(Uuid::nil(), &metadata, None);
+        assert!(!response.preview_available);
+        assert_eq!(response.action, "none");
+    }
+
+    #[test]
+    fn build_preview_control_response_hides_stale_public_preview_without_worktree() {
+        let metadata = serde_json::json!({
+            "preview_url": "https://task-abcd.preview.example.com",
+            "preview_runtime_state": "active",
+            "worktree_path": "/tmp/definitely-missing-worktree-for-preview-route-test",
+            "preview_url_source": "agent_output",
+        });
+
+        let response = build_preview_control_response(Uuid::nil(), &metadata, None);
         assert!(!response.preview_available);
         assert_eq!(response.action, "none");
     }

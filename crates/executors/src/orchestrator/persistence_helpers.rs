@@ -23,9 +23,9 @@ struct PreviewRuntimeControlContract {
 
 #[derive(Debug, Default, Clone)]
 pub(super) struct ExtractedPreviewContract {
-    preview_target: Option<String>,
-    preview_url: Option<String>,
-    runtime_control: Option<serde_json::Value>,
+    pub(super) preview_target: Option<String>,
+    pub(super) preview_url: Option<String>,
+    pub(super) runtime_control: Option<serde_json::Value>,
 }
 
 fn is_local_preview_signal_url(candidate: &str) -> bool {
@@ -44,7 +44,7 @@ fn canonicalize_preview_signals(
     preview_target: Option<String>,
     preview_url: Option<String>,
 ) -> (Option<String>, Option<String>) {
-    let preview_target = preview_target
+    let mut preview_target = preview_target
         .map(|value| value.trim().to_string())
         .filter(|value| !value.is_empty());
     let mut preview_url = preview_url
@@ -52,14 +52,22 @@ fn canonicalize_preview_signals(
         .filter(|value| !value.is_empty());
 
     if let Some(preview_target_value) = preview_target.as_ref() {
-        let target_is_public = !is_local_preview_signal_url(preview_target_value);
-        let url_missing_or_local = preview_url
-            .as_deref()
-            .map(is_local_preview_signal_url)
-            .unwrap_or(true);
+        if is_local_preview_signal_url(preview_target_value) {
+            if preview_url.is_none() {
+                preview_url = Some(preview_target_value.clone());
+            }
+        } else {
+            let url_missing_or_local = preview_url
+                .as_deref()
+                .map(is_local_preview_signal_url)
+                .unwrap_or(true);
 
-        if target_is_public && url_missing_or_local {
-            preview_url = Some(preview_target_value.clone());
+            if url_missing_or_local {
+                preview_url = Some(preview_target_value.clone());
+            }
+            // PREVIEW_TARGET must always point at the local runtime. If the
+            // agent wrote a public URL here, surface it as PREVIEW_URL only.
+            preview_target = None;
         }
     }
 
@@ -608,7 +616,8 @@ impl ExecutorOrchestrator {
 
     /// Read PREVIEW_TARGET / PREVIEW_URL plus optional runtime control metadata
     /// from `.acpms/preview-output.json` (file-based contract).
-    /// Same pattern as mr-output.json. File values override log extraction. Deletes file after reading.
+    /// Same pattern as mr-output.json. File values override log extraction.
+    /// The preview contract stays on disk so agent follow-ups can reuse it.
     pub(super) async fn extract_preview_from_file_contract(
         &self,
         worktree_path: &std::path::Path,
@@ -630,13 +639,8 @@ impl ExecutorOrchestrator {
 
         let parsed: PreviewOutputContract = match serde_json::from_str(&contents) {
             Ok(p) => p,
-            Err(_) => {
-                let _ = tokio::fs::remove_file(&path).await;
-                return Ok(None);
-            }
+            Err(_) => return Ok(None),
         };
-
-        let _ = tokio::fs::remove_file(&path).await;
 
         let target = parsed
             .preview_target
@@ -1160,10 +1164,7 @@ mod tests {
             None,
         );
 
-        assert_eq!(
-            preview_target.as_deref(),
-            Some("https://alike-demonstration-ace-provides.trycloudflare.com")
-        );
+        assert_eq!(preview_target, None);
         assert_eq!(
             preview_url.as_deref(),
             Some("https://alike-demonstration-ace-provides.trycloudflare.com")
@@ -1181,5 +1182,14 @@ mod tests {
             preview_url.as_deref(),
             Some("https://alike-demonstration-ace-provides.trycloudflare.com")
         );
+    }
+
+    #[test]
+    fn canonicalize_preview_signals_mirrors_local_target_into_preview_url() {
+        let (preview_target, preview_url) =
+            canonicalize_preview_signals(Some("http://127.0.0.1:4174".to_string()), None);
+
+        assert_eq!(preview_target.as_deref(), Some("http://127.0.0.1:4174"));
+        assert_eq!(preview_url.as_deref(), Some("http://127.0.0.1:4174"));
     }
 }

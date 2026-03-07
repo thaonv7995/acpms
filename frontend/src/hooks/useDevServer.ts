@@ -486,9 +486,7 @@ export function useDevServer(
     let cancelled = false;
     setIsLoading(true);
 
-    const logsPromise = fallbackPreviewUrl
-      ? Promise.resolve([] as AgentLog[])
-      : getAttemptLogs(attemptId).catch(() => [] as AgentLog[]);
+    const logsPromise = getAttemptLogs(attemptId).catch(() => [] as AgentLog[]);
 
     Promise.all([
       getPreviewReadiness(attemptId),
@@ -503,13 +501,16 @@ export function useDevServer(
         const readinessReason = readiness.reason || undefined;
         setCloudflareReady(readiness.cloudflare_ready);
         setMissingCloudflareFields(readiness.missing_cloudflare_fields || []);
-        const agentPreviewSignal =
+        const logPreviewSignal = extractPreviewSignalFromAttemptLogs(logs);
+        const fallbackPreviewSignal =
           typeof fallbackPreviewUrl === 'string' && fallbackPreviewUrl.trim().length > 0
             ? {
                 url: fallbackPreviewUrl,
                 signalKey: `fallback:${fallbackPreviewUrl}`,
               }
-            : extractPreviewSignalFromAttemptLogs(logs);
+            : undefined;
+        const agentPreviewSignal = logPreviewSignal || fallbackPreviewSignal;
+        const previewSignalAvailable = control.preview_available || Boolean(preview);
 
         setState((prev) => {
           const baseState: DevServerState = {
@@ -527,6 +528,7 @@ export function useDevServer(
 
           if (
             agentPreviewSignal &&
+            previewSignalAvailable &&
             agentPreviewSignal.signalKey !== prev.dismissedExternalPreviewSignal &&
             (!preview ||
               (preview.preview_url !== agentPreviewSignal.url &&

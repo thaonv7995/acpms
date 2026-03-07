@@ -9,6 +9,7 @@ description: Prepare preview tunnel for Web/API and emit machine-parseable previ
 When this skill is active (auto_deploy enabled), you **MUST**:
 1. Start the preview runtime (e.g. `docker compose up -d` or `npm run dev` in background).
 2. Emit PREVIEW_TARGET before finishing—either Option A or Option B below. Without it, the preview tunnel will be skipped.
+3. Only emit PREVIEW_TARGET after the local runtime is already reachable via a real HTTP check.
 
 ## Objective
 Provide preview routing details that downstream pipeline can use for preview metadata. When tunnel cannot be created, **agent must output a message** for the user in the attempt log.
@@ -37,10 +38,11 @@ Rules:
 - `preview_target` luôn là local runtime URL thật, ví dụ `http://127.0.0.1:3000`
 - nếu có public tunnel URL thì ghi vào `preview_url`
 - nếu chưa có hoặc không tạo được public URL thì vẫn ghi `preview_url` bằng chính local URL trong `preview_target`
+- không ghi contract chỉ dựa trên config/build; local URL phải đang lên thật
 
 - Tạo thư mục `.acpms/` nếu chưa có: `mkdir -p .acpms`
 - Ghi file: `echo '{"preview_target":"http://127.0.0.1:3000"}' > .acpms/preview-output.json`
-- Hệ thống đọc file này, lưu vào metadata, rồi xóa file.
+- File contract được giữ lại để follow-up stop/restart còn dùng được.
 
 ### Option B — Log output (fallback)
 Always print:
@@ -69,5 +71,6 @@ Also print:
 
 ## Guardrails
 - Never output placeholder or fake URL.
+- Never output PREVIEW_TARGET if the local runtime is not listening yet.
 - Keep values parseable (`http://...` or `https://...`, no markdown wrappers).
 - On failure: agent must output Log for User message—do not rely on backend logs.
