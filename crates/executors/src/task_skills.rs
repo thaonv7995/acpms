@@ -1954,7 +1954,11 @@ fn load_skill(skill_id: &str, repo_path: Option<&Path>) -> Option<LoadedSkill> {
         return None;
     }
 
-    for root in candidate_skill_roots(repo_path) {
+    load_skill_from_roots(skill_id, &candidate_skill_roots(repo_path))
+}
+
+fn load_skill_from_roots(skill_id: &str, roots: &[SkillRootCandidate]) -> Option<LoadedSkill> {
+    for root in roots {
         let path = root.path.join(skill_id).join("SKILL.md");
         if !path.exists() {
             continue;
@@ -1968,7 +1972,7 @@ fn load_skill(skill_id: &str, repo_path: Option<&Path>) -> Option<LoadedSkill> {
             id: skill_id.to_string(),
             content,
             source: Some(path),
-            origin: Some(root.origin),
+            origin: Some(root.origin.clone()),
         });
     }
 
@@ -1976,6 +1980,16 @@ fn load_skill(skill_id: &str, repo_path: Option<&Path>) -> Option<LoadedSkill> {
 }
 
 fn candidate_skill_roots(repo_path: Option<&Path>) -> Vec<SkillRootCandidate> {
+    candidate_skill_roots_from_globals(
+        repo_path,
+        crate::knowledge_index::discover_global_skill_roots(),
+    )
+}
+
+fn candidate_skill_roots_from_globals(
+    repo_path: Option<&Path>,
+    global_roots: Vec<crate::knowledge_index::KnowledgeRoot>,
+) -> Vec<SkillRootCandidate> {
     let mut roots: Vec<SkillRootCandidate> = Vec::new();
     let mut seen: HashSet<PathBuf> = HashSet::new();
     let mut push = |path: PathBuf, origin: &str| {
@@ -1994,32 +2008,9 @@ fn candidate_skill_roots(repo_path: Option<&Path>) -> Vec<SkillRootCandidate> {
     if let Some(repo) = repo_path {
         push(repo.join(".acpms").join("skills"), "repo-local");
     }
-    // 2. Platform skills dir (installer sets ACPMS_SKILLS_DIR, e.g. /opt/acpms/.acpms/skills)
-    if let Ok(dir) = std::env::var("ACPMS_SKILLS_DIR") {
-        let skills_path = PathBuf::from(&dir);
-        push(skills_path.clone(), "platform");
 
-        // 2b. Community knowledge bases (community-* under skills dir)
-        if let Ok(entries) = std::fs::read_dir(&skills_path) {
-            for entry in entries.flatten() {
-                let path = entry.path();
-                let file_name = entry.file_name();
-                let file_name = file_name.to_string_lossy();
-                if path.is_dir() && file_name.starts_with("community-") {
-                    push(path, &file_name);
-                }
-            }
-        }
-    }
-    // 3. CWD (dev/local)
-    if let Ok(cwd) = std::env::current_dir() {
-        push(cwd.join(".acpms").join("skills"), "cwd");
-    }
-    // 4. Codex home (user's Codex skills)
-    if let Ok(codex_home) = std::env::var("CODEX_HOME") {
-        push(PathBuf::from(codex_home).join("skills"), "codex-home");
-    } else if let Some(home) = dirs::home_dir() {
-        push(home.join(".codex").join("skills"), "codex-home");
+    for root in global_roots {
+        push(root.path, &root.origin);
     }
 
     roots
@@ -2033,17 +2024,24 @@ fn is_safe_skill_id(skill_id: &str) -> bool {
 }
 
 pub fn detect_skill_file(path: &Path) -> Option<DetectedSkillFile> {
-    if path.file_name().and_then(|value| value.to_str()) != Some("SKILL.md") {
+    let resolved_path = std::fs::canonicalize(path).unwrap_or_else(|_| path.to_path_buf());
+
+    if resolved_path.file_name().and_then(|value| value.to_str()) != Some("SKILL.md") {
         return None;
     }
 
-    let skill_id = path.parent()?.file_name()?.to_str()?.trim().to_string();
+    let skill_id = resolved_path
+        .parent()?
+        .file_name()?
+        .to_str()?
+        .trim()
+        .to_string();
     if !is_safe_skill_id(&skill_id) {
         return None;
     }
 
-    let source_path = path.to_string_lossy().to_string();
-    let origin = detect_skill_origin(path);
+    let source_path = resolved_path.to_string_lossy().to_string();
+    let origin = detect_skill_origin(&resolved_path);
 
     Some(DetectedSkillFile {
         skill_id,
@@ -2108,7 +2106,8 @@ If repo exploration reveals that you need an additional ACPMS skill, and the cur
 After you receive results, you may load one skill by id:
 {"tool":"load_skill","args":{"skill_id":"<skill-id>"}}
 
-Use this only when the currently loaded skills are insufficient. Do not read suggested `SKILL.md` files directly from disk; if you need the full playbook, load it through `load_skill`. After a skill is loaded, follow it for the rest of the attempt where relevant.
+Use this only when the currently loaded skills are insufficient. For ACPMS-managed skills, the source of truth is the repository-managed `.acpms/skills` tree and bundled community skill library. Do not read `$CODEX_HOME/skills` copies directly for a suggested ACPMS skill; if you need the full playbook, load it through `load_skill`. After a skill is loaded, follow it for the rest of the attempt where relevant.
+ACPMS exposes the merged skill mirror for this attempt at `$ACPMS_MANAGED_SKILL_ROOT`. It resolves repo-managed skills first and local fallback skills second.
 "#
 }
 
@@ -3061,5 +3060,108 @@ mod tests {
         assert_eq!(detected.skill_id, "openai-docs");
         assert_eq!(detected.origin, "community-openai");
         assert_eq!(detected.source_path, path.to_string_lossy());
+    }
+
+    #[test]
+    fn detect_skill_file_resolves_symlinked_overlay_paths_to_real_source() {
+        let temp_dir = tempfile::tempdir().unwrap();
+        let platform_dir = temp_dir.path().join("platform-skills");
+        let community_skill_dir = platform_dir.join("community-openai").join("openai-docs");
+        let overlay_dir = temp_dir
+            .path()
+            .join("overlay")
+            .join("skills")
+            .join("openai-docs");
+
+        std::fs::create_dir_all(&community_skill_dir).unwrap();
+        std::fs::create_dir_all(overlay_dir.parent().unwrap()).unwrap();
+        std::fs::write(
+            community_skill_dir.join("SKILL.md"),
+            "---\nname: openai-docs\ndescription: repo managed copy\n---\ncommunity copy",
+        )
+        .unwrap();
+
+        #[cfg(unix)]
+        std::os::unix::fs::symlink(&community_skill_dir, &overlay_dir).unwrap();
+        #[cfg(windows)]
+        std::os::windows::fs::symlink_dir(&community_skill_dir, &overlay_dir).unwrap();
+
+        let original_skills_dir = std::env::var("ACPMS_SKILLS_DIR").ok();
+        std::env::set_var("ACPMS_SKILLS_DIR", &platform_dir);
+
+        let detected =
+            detect_skill_file(&overlay_dir.join("SKILL.md")).expect("skill file should resolve");
+
+        if let Some(original) = original_skills_dir {
+            std::env::set_var("ACPMS_SKILLS_DIR", original);
+        } else {
+            std::env::remove_var("ACPMS_SKILLS_DIR");
+        }
+
+        assert_eq!(detected.skill_id, "openai-docs");
+        assert_eq!(detected.origin, "community-openai");
+        assert_eq!(
+            detected.source_path,
+            std::fs::canonicalize(community_skill_dir)
+                .unwrap()
+                .join("SKILL.md")
+                .to_string_lossy()
+                .to_string()
+        );
+    }
+
+    #[test]
+    fn runtime_skill_attachment_prefers_repo_managed_duplicate_over_codex_home() {
+        let temp_dir = tempfile::tempdir().unwrap();
+        let platform_dir = temp_dir.path().join("platform-skills");
+        let community_dir = platform_dir.join("community-openai");
+        let codex_home_dir = temp_dir.path().join("codex-home").join("skills");
+
+        let community_skill_dir = community_dir.join("openai-docs");
+        let codex_skill_dir = codex_home_dir.join("openai-docs");
+
+        std::fs::create_dir_all(&community_skill_dir).unwrap();
+        std::fs::create_dir_all(&codex_skill_dir).unwrap();
+
+        std::fs::write(
+            community_skill_dir.join("SKILL.md"),
+            "---\nname: openai-docs\ndescription: bundled copy\n---\ncommunity copy",
+        )
+        .unwrap();
+        std::fs::write(
+            codex_skill_dir.join("SKILL.md"),
+            "---\nname: openai-docs\ndescription: user-managed copy\n---\ncodex home copy",
+        )
+        .unwrap();
+
+        let roots = candidate_skill_roots_from_globals(
+            None,
+            vec![
+                crate::knowledge_index::KnowledgeRoot {
+                    path: platform_dir,
+                    origin: "platform".to_string(),
+                },
+                crate::knowledge_index::KnowledgeRoot {
+                    path: community_dir,
+                    origin: "community-openai".to_string(),
+                },
+                crate::knowledge_index::KnowledgeRoot {
+                    path: codex_home_dir,
+                    origin: "codex-home".to_string(),
+                },
+            ],
+        );
+
+        let skill = load_skill_from_roots("openai-docs", &roots).expect("skill should load");
+
+        assert_eq!(skill.origin.as_deref(), Some("community-openai"));
+        assert!(skill.content.contains("community copy"));
+        assert!(skill
+            .source
+            .as_ref()
+            .expect("source path should exist")
+            .ends_with(Path::new(
+                "platform-skills/community-openai/openai-docs/SKILL.md"
+            )));
     }
 }

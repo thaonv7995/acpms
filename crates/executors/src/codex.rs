@@ -4,7 +4,8 @@
 //! - Spawn a non-interactive `codex exec` process in a worktree
 //! - Stream stdout/stderr into the attempt log pipeline
 
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
+use std::fs;
 use std::path::Path;
 use std::process::Stdio;
 
@@ -16,6 +17,7 @@ use std::path::PathBuf;
 use tokio::process::Command;
 use tokio::sync::oneshot;
 use uuid::Uuid;
+use walkdir::WalkDir;
 
 use crate::claude::SpawnedAgent;
 use crate::process::{InterruptReceiver, InterruptSender};
@@ -26,6 +28,20 @@ const EXEC_CODEX_CMD_ENV: &str = "ACPMS_EXEC_CODEX_CMD";
 const EXEC_CODEX_USE_NPX_ENV: &str = "ACPMS_EXEC_CODEX_USE_NPX";
 const OVERRIDE_CODEX_BIN_ENV: &str = "ACPMS_AGENT_CODEX_BIN";
 const OVERRIDE_NPX_BIN_ENV: &str = "ACPMS_AGENT_NPX_BIN";
+pub(crate) const ACPMS_MANAGED_SKILL_HOME_ENV: &str = "ACPMS_MANAGED_SKILL_HOME";
+pub(crate) const ACPMS_MANAGED_SKILL_ROOT_ENV: &str = "ACPMS_MANAGED_SKILL_ROOT";
+
+#[derive(Debug, Clone)]
+struct ManagedSkillRoot {
+    path: PathBuf,
+    origin: String,
+}
+
+#[derive(Debug, Clone)]
+pub(crate) struct ManagedSkillOverlay {
+    pub home_dir: PathBuf,
+    pub skill_root: PathBuf,
+}
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum CodexStreamEvent {
@@ -118,6 +134,201 @@ fn is_truthy(value: Option<&String>) -> bool {
         .map(|v| v.trim().to_ascii_lowercase())
         .map(|v| !matches!(v.as_str(), "0" | "false" | "off" | "no" | ""))
         .unwrap_or(false)
+}
+
+fn current_codex_home() -> Option<PathBuf> {
+    if let Some(value) = read_non_empty_env("CODEX_HOME") {
+        return Some(PathBuf::from(value));
+    }
+
+    dirs::home_dir().map(|home| home.join(".codex"))
+}
+
+fn collect_skill_dirs(root: &ManagedSkillRoot) -> Result<Vec<(PathBuf, PathBuf)>> {
+    let mut found = Vec::new();
+    for entry in WalkDir::new(&root.path).min_depth(1).into_iter() {
+        let entry = entry.with_context(|| format!("Failed to walk skill root {:?}", root.path))?;
+        if !entry.file_type().is_dir() {
+            continue;
+        }
+
+        let dir = entry.path();
+        if !dir.join("SKILL.md").is_file() {
+            continue;
+        }
+
+        let relative = dir
+            .strip_prefix(&root.path)
+            .with_context(|| format!("Failed to compute relative skill path for {:?}", dir))?
+            .to_path_buf();
+        if relative.as_os_str().is_empty() {
+            continue;
+        }
+
+        if root.origin == "platform" {
+            let first_component = relative
+                .components()
+                .next()
+                .and_then(|component| component.as_os_str().to_str());
+            if first_component
+                .map(|component| component.starts_with("community-"))
+                .unwrap_or(false)
+            {
+                continue;
+            }
+        }
+
+        found.push((relative, dir.to_path_buf()));
+    }
+
+    found.sort_by(|a, b| a.0.cmp(&b.0));
+    Ok(found)
+}
+
+#[cfg(unix)]
+fn symlink_path(source: &Path, destination: &Path) -> std::io::Result<()> {
+    std::os::unix::fs::symlink(source, destination)
+}
+
+#[cfg(windows)]
+fn symlink_path(source: &Path, destination: &Path) -> std::io::Result<()> {
+    if source.is_dir() {
+        std::os::windows::fs::symlink_dir(source, destination)
+    } else {
+        std::os::windows::fs::symlink_file(source, destination)
+    }
+}
+
+fn copy_dir_recursive(source: &Path, destination: &Path) -> Result<()> {
+    fs::create_dir_all(destination)
+        .with_context(|| format!("Failed to create directory {:?}", destination))?;
+    for entry in fs::read_dir(source).with_context(|| format!("Failed to read {:?}", source))? {
+        let entry = entry.with_context(|| format!("Failed to read entry under {:?}", source))?;
+        let source_path = entry.path();
+        let destination_path = destination.join(entry.file_name());
+        let file_type = entry
+            .file_type()
+            .with_context(|| format!("Failed to read file type for {:?}", source_path))?;
+        if file_type.is_dir() {
+            copy_dir_recursive(&source_path, &destination_path)?;
+        } else {
+            fs::copy(&source_path, &destination_path).with_context(|| {
+                format!(
+                    "Failed to copy file from {:?} to {:?}",
+                    source_path, destination_path
+                )
+            })?;
+        }
+    }
+    Ok(())
+}
+
+fn link_or_copy_path(source: &Path, destination: &Path) -> Result<()> {
+    if destination.exists() {
+        return Ok(());
+    }
+
+    if let Some(parent) = destination.parent() {
+        fs::create_dir_all(parent)
+            .with_context(|| format!("Failed to create parent directory {:?}", parent))?;
+    }
+
+    match symlink_path(source, destination) {
+        Ok(()) => Ok(()),
+        Err(_) if source.is_dir() => copy_dir_recursive(source, destination),
+        Err(err) => Err(err).with_context(|| {
+            format!(
+                "Failed to link or copy path from {:?} to {:?}",
+                source, destination
+            )
+        }),
+    }
+}
+
+fn materialize_skill_tree(destination: &Path, roots: &[ManagedSkillRoot]) -> Result<()> {
+    fs::create_dir_all(destination)
+        .with_context(|| format!("Failed to create skills directory {:?}", destination))?;
+
+    let mut seen: HashSet<PathBuf> = HashSet::new();
+    for root in roots {
+        if !root.path.exists() {
+            continue;
+        }
+
+        for (relative, source_dir) in collect_skill_dirs(root)? {
+            if !seen.insert(relative.clone()) {
+                continue;
+            }
+
+            link_or_copy_path(&source_dir, &destination.join(relative))?;
+        }
+    }
+
+    Ok(())
+}
+
+fn managed_skill_roots(worktree_path: &Path) -> Vec<ManagedSkillRoot> {
+    let mut roots = Vec::new();
+
+    let repo_local = worktree_path.join(".acpms").join("skills");
+    if repo_local.exists() {
+        roots.push(ManagedSkillRoot {
+            path: repo_local,
+            origin: "repo-local".to_string(),
+        });
+    }
+
+    for root in crate::knowledge_index::discover_global_skill_roots() {
+        roots.push(ManagedSkillRoot {
+            path: root.path,
+            origin: root.origin,
+        });
+    }
+
+    roots
+}
+
+pub(crate) fn prepare_managed_skill_overlay(
+    attempt_id: Uuid,
+    worktree_path: &Path,
+) -> Result<ManagedSkillOverlay> {
+    let managed_home = std::env::temp_dir()
+        .join("acpms-managed-codex-home")
+        .join(attempt_id.to_string());
+    let skills_dir = managed_home.join("skills");
+
+    if managed_home.exists() {
+        fs::remove_dir_all(&managed_home).with_context(|| {
+            format!(
+                "Failed to clean existing managed Codex home {:?}",
+                managed_home
+            )
+        })?;
+    }
+    fs::create_dir_all(&managed_home)
+        .with_context(|| format!("Failed to create managed Codex home {:?}", managed_home))?;
+
+    if let Some(base_home) = current_codex_home() {
+        if base_home.exists() {
+            for entry in fs::read_dir(&base_home)
+                .with_context(|| format!("Failed to read Codex home {:?}", base_home))?
+            {
+                let entry =
+                    entry.with_context(|| format!("Failed to read entry under {:?}", base_home))?;
+                let name = entry.file_name();
+                if name == "skills" {
+                    continue;
+                }
+                link_or_copy_path(&entry.path(), &managed_home.join(name))?;
+            }
+        }
+    }
+
+    materialize_skill_tree(&skills_dir, &managed_skill_roots(worktree_path))?;
+    Ok(ManagedSkillOverlay {
+        home_dir: managed_home,
+        skill_root: skills_dir,
+    })
 }
 
 fn is_executable_file(path: &std::path::Path) -> bool {
@@ -598,7 +809,7 @@ impl CodexClient {
         &self,
         worktree_path: &Path,
         instruction: &str,
-        _attempt_id: Uuid,
+        attempt_id: Uuid,
         env_vars: Option<HashMap<String, String>>,
     ) -> Result<SpawnedAgent> {
         if !worktree_path.exists() {
@@ -636,14 +847,32 @@ impl CodexClient {
         // Best-effort: disable color for cleaner log parsing
         cmd.env("NO_COLOR", "1");
 
+        let skill_overlay = prepare_managed_skill_overlay(attempt_id, worktree_path)
+            .context("Failed to prepare ACPMS-managed skill overlay")?;
+
         if let Some(vars) = env_vars {
             for (k, v) in vars {
-                if k == EXEC_CODEX_CMD_ENV || k == EXEC_CODEX_USE_NPX_ENV {
+                if k == EXEC_CODEX_CMD_ENV
+                    || k == EXEC_CODEX_USE_NPX_ENV
+                    || k == "CODEX_HOME"
+                    || k == ACPMS_MANAGED_SKILL_HOME_ENV
+                    || k == ACPMS_MANAGED_SKILL_ROOT_ENV
+                {
                     continue;
                 }
                 cmd.env(k, v);
             }
         }
+
+        cmd.env("CODEX_HOME", &skill_overlay.home_dir);
+        cmd.env(
+            ACPMS_MANAGED_SKILL_HOME_ENV,
+            skill_overlay.home_dir.to_string_lossy().to_string(),
+        );
+        cmd.env(
+            ACPMS_MANAGED_SKILL_ROOT_ENV,
+            skill_overlay.skill_root.to_string_lossy().to_string(),
+        );
 
         // Ensure the prompt is treated as a positional argument even if it starts with `-`/`--`.
         // (Codex uses clap; without this, a prompt like `--foo` is parsed as an unknown flag.)
@@ -1076,5 +1305,62 @@ mod tests {
         let resolved = resolve_codex_command(Some(&vars)).expect("expected command resolution");
         assert_eq!(resolved.command, "/tmp/custom-npx");
         assert!(resolved.use_npx);
+    }
+
+    #[test]
+    fn materialize_skill_tree_prefers_repo_managed_sources_before_codex_home() {
+        let temp_dir = tempfile::tempdir().expect("temp dir");
+        let merged_dir = temp_dir.path().join("merged");
+        let repo_root = temp_dir.path().join("repo-skills");
+        let codex_root = temp_dir.path().join("codex-home").join("skills");
+
+        let repo_openai = repo_root.join("community-openai").join("openai-docs");
+        let codex_openai = codex_root.join("openai-docs");
+        let codex_system = codex_root.join(".system").join("skill-creator");
+
+        fs::create_dir_all(&repo_openai).expect("repo skill dir");
+        fs::create_dir_all(&codex_openai).expect("codex skill dir");
+        fs::create_dir_all(&codex_system).expect("system skill dir");
+
+        fs::write(repo_openai.join("SKILL.md"), "repo managed copy").expect("write repo skill");
+        fs::write(codex_openai.join("SKILL.md"), "codex fallback copy").expect("write codex skill");
+        fs::write(codex_system.join("SKILL.md"), "system fallback copy")
+            .expect("write system skill");
+
+        let community_root = temp_dir.path().join("repo-skills").join("community-openai");
+        materialize_skill_tree(
+            &merged_dir,
+            &[
+                ManagedSkillRoot {
+                    path: temp_dir.path().join("repo-skills"),
+                    origin: "platform".to_string(),
+                },
+                ManagedSkillRoot {
+                    path: community_root,
+                    origin: "community-openai".to_string(),
+                },
+                ManagedSkillRoot {
+                    path: codex_root,
+                    origin: "codex-home".to_string(),
+                },
+            ],
+        )
+        .expect("materialize tree");
+
+        assert_eq!(
+            fs::read_to_string(merged_dir.join("openai-docs").join("SKILL.md"))
+                .expect("read merged skill"),
+            "repo managed copy"
+        );
+        assert_eq!(
+            fs::read_to_string(
+                merged_dir
+                    .join(".system")
+                    .join("skill-creator")
+                    .join("SKILL.md")
+            )
+            .expect("read merged system skill"),
+            "system fallback copy"
+        );
     }
 }

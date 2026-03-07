@@ -13,6 +13,9 @@ use uuid::Uuid;
 
 use crate::agent_client::ClaudeAgentClient;
 use crate::approval::ApprovalService;
+use crate::codex::{
+    prepare_managed_skill_overlay, ACPMS_MANAGED_SKILL_HOME_ENV, ACPMS_MANAGED_SKILL_ROOT_ENV,
+};
 use crate::follow_up_utils::wrap_trivial_follow_up;
 use crate::log_writer::LogWriter;
 use crate::msg_store::{LogMsg, MsgStore};
@@ -344,9 +347,23 @@ impl ClaudeClient {
         // Inject environment variables
         if let Some(vars) = env_vars {
             for (key, value) in vars {
+                if key == ACPMS_MANAGED_SKILL_HOME_ENV || key == ACPMS_MANAGED_SKILL_ROOT_ENV {
+                    continue;
+                }
                 cmd.env(key, value);
             }
         }
+
+        let skill_overlay = prepare_managed_skill_overlay(attempt_id, worktree_path)
+            .context("Failed to prepare ACPMS-managed skill overlay")?;
+        cmd.env(
+            ACPMS_MANAGED_SKILL_HOME_ENV,
+            skill_overlay.home_dir.to_string_lossy().to_string(),
+        );
+        cmd.env(
+            ACPMS_MANAGED_SKILL_ROOT_ENV,
+            skill_overlay.skill_root.to_string_lossy().to_string(),
+        );
 
         // Router-specific env vars
         if settings.enable_router_service {
@@ -513,9 +530,23 @@ impl ClaudeClient {
         // Inject environment variables
         if let Some(vars) = env_vars {
             for (key, value) in vars {
+                if key == ACPMS_MANAGED_SKILL_HOME_ENV || key == ACPMS_MANAGED_SKILL_ROOT_ENV {
+                    continue;
+                }
                 cmd.env(key, value);
             }
         }
+
+        let skill_overlay = prepare_managed_skill_overlay(attempt_id, worktree_path)
+            .context("Failed to prepare ACPMS-managed skill overlay")?;
+        cmd.env(
+            ACPMS_MANAGED_SKILL_HOME_ENV,
+            skill_overlay.home_dir.to_string_lossy().to_string(),
+        );
+        cmd.env(
+            ACPMS_MANAGED_SKILL_ROOT_ENV,
+            skill_overlay.skill_root.to_string_lossy().to_string(),
+        );
 
         // Router-specific env vars
         if settings.enable_router_service {

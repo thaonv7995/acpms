@@ -19,6 +19,9 @@ use tokio::sync::oneshot;
 use uuid::Uuid;
 
 use crate::claude::SpawnedAgent;
+use crate::codex::{
+    prepare_managed_skill_overlay, ACPMS_MANAGED_SKILL_HOME_ENV, ACPMS_MANAGED_SKILL_ROOT_ENV,
+};
 use crate::process::{InterruptReceiver, InterruptSender};
 
 const EXEC_CURSOR_CMD_ENV: &str = "ACPMS_EXEC_CURSOR_CMD";
@@ -397,7 +400,7 @@ impl CursorClient {
         &self,
         worktree_path: &Path,
         instruction: &str,
-        _attempt_id: Uuid,
+        attempt_id: Uuid,
         env_vars: Option<HashMap<String, String>>,
     ) -> Result<SpawnedAgent> {
         if !worktree_path.exists() {
@@ -425,12 +428,26 @@ impl CursorClient {
         cmd.env("NO_COLOR", "1");
         if let Some(vars) = env_vars {
             for (k, v) in vars {
-                if k == EXEC_CURSOR_CMD_ENV {
+                if k == EXEC_CURSOR_CMD_ENV
+                    || k == ACPMS_MANAGED_SKILL_HOME_ENV
+                    || k == ACPMS_MANAGED_SKILL_ROOT_ENV
+                {
                     continue;
                 }
                 cmd.env(k, v);
             }
         }
+
+        let skill_overlay = prepare_managed_skill_overlay(attempt_id, worktree_path)
+            .context("Failed to prepare ACPMS-managed skill overlay")?;
+        cmd.env(
+            ACPMS_MANAGED_SKILL_HOME_ENV,
+            skill_overlay.home_dir.to_string_lossy().to_string(),
+        );
+        cmd.env(
+            ACPMS_MANAGED_SKILL_ROOT_ENV,
+            skill_overlay.skill_root.to_string_lossy().to_string(),
+        );
 
         let child: AsyncGroupChild = cmd
             .group_spawn()
