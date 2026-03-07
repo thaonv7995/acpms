@@ -170,4 +170,33 @@ describe('parseLogEntries breakdown formatting', () => {
     expect(entries[0].content).toContain('No refs manifest.json - no references to check');
     expect(entries[0].content).toContain('No .acpms refs directory');
   });
+
+  it('rebuilds collapsed summary markdown tables and inline fields', () => {
+    const rawLogs = [
+      {
+        id: 'claude-summary-3',
+        log_type: 'normalized',
+        timestamp: '2026-03-07T09:10:00.000Z',
+        content: JSON.stringify({
+          entry_type: { type: 'assistant_message' },
+          content:
+            "All tasks complete. Here's the summary:## Init Report| Step | Status |||------|--------|| Preflight checks | Passed (no references, env vars present) || GitLab repository | Created at https://gitlab.thaonv.online/thaonv/landing-page-9898989282 || Web scaffold | Vite + vanilla HTML/CSS/JS landing page || Build artifact | dist/ produced successfully (3 files, 47ms) || Git push | 2 commits pushed to main || Cloudflare deploy | Skipped - Cloudflare not configured || init-output.json | Written with REPO_URL |REPO_URL: https://gitlab.thaonv.online/thaonv/landing-page-9898989282What was built: A dark-themed landing page. DEPLOY_PRECHECK: skipped_cloudflare_not_configured Repository access detected automatically: DirectGitOps",
+          timestamp: '2026-03-07T09:10:00.000Z',
+        }),
+      },
+    ];
+
+    const entries = parseLogEntries(rawLogs);
+    expect(entries).toHaveLength(1);
+    expect(entries[0].type).toBe('assistant_message');
+    expect(entries[0].content).toContain("All tasks complete. Here's the summary:");
+    expect(entries[0].content).toContain('## Init Report');
+    expect(entries[0].content).toContain('| Step | Status |');
+    expect(entries[0].content).toContain('| Preflight checks | Passed (no references, env vars present) |');
+    expect(entries[0].content).toContain('| GitLab repository | Created at https://gitlab.thaonv.online/thaonv/landing-page-9898989282 |');
+    expect(entries[0].content).toContain('**REPO_URL:** https://gitlab.thaonv.online/thaonv/landing-page-9898989282');
+    expect(entries[0].content).toContain('**What was built:** A dark-themed landing page.');
+    expect(entries[0].content).toContain('**DEPLOY_PRECHECK:** skipped_cloudflare_not_configured');
+    expect(entries[0].content).toContain('**Repository access detected automatically:** DirectGitOps');
+  });
 });

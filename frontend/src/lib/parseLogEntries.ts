@@ -166,6 +166,55 @@ function applyFragmentReplacements(content: string): string {
   return fixed;
 }
 
+function repairCollapsedSummaryMarkdown(content: string): string {
+  if (!content) {
+    return content;
+  }
+
+  let fixed = content.replace(/\r\n/g, '\n');
+  const looksCollapsedSummary =
+    fixed.includes("Here's the summary:") &&
+    (fixed.includes('| Step | Status |') ||
+      /#{2,6}\s*[A-Z]/.test(fixed) ||
+      /\b(?:REPO_URL:|What was built:|DEPLOY_PRECHECK:)\b/.test(fixed));
+
+  if (!looksCollapsedSummary) {
+    return fixed;
+  }
+
+  fixed = fixed
+    .replace(/(Here's the summary:)(?=##\s)/g, '$1\n\n')
+    .replace(/([^\n#])(#{2,6}\s)/g, '$1\n\n$2')
+    .replace(
+      /([^\n])((?:REPO_URL|What\s*was\s*built|DEPLOY_PRECHECK|Repository\s*access\s*detected\s*automatically):)/gi,
+      '$1\n\n$2'
+    )
+    .replace(/\|\s*((?:REPO_URL|What\s*was\s*built|DEPLOY_PRECHECK|Repository\s*access\s*detected\s*automatically):)/gi, '\n\n$1')
+    .replace(/\n{3,}/g, '\n\n');
+
+  if (fixed.includes('| Step | Status |')) {
+    fixed = fixed
+      .replace(/(#{2,6}[^\n|]+)\| Step \| Status \|/g, '$1\n\n| Step | Status |')
+      .replace(/\|{2,}/g, '|\n|')
+      .replace(/\n\|\s*\n\|/g, '\n|')
+      .replace(/\|\s*((?:REPO_URL|What\s*was\s*built|DEPLOY_PRECHECK|Repository\s*access\s*detected\s*automatically):)/gi, '\n\n$1');
+  }
+
+  fixed = fixed
+    .replace(/Whatwasbuilt:/g, 'What was built:')
+    .replace(/Repositoryaccessdetectedautomatically:/g, 'Repository access detected automatically:')
+    .replace(/(^|\n)(REPO_URL|What\s*was\s*built|DEPLOY_PRECHECK|Repository\s*access\s*detected\s*automatically):/gi, (_match, prefix: string, label: string) => {
+      const normalizedLabel = label
+        .replace(/\s+/g, ' ')
+        .replace(/^what was built$/i, 'What was built')
+        .replace(/^repository access detected automatically$/i, 'Repository access detected automatically');
+      return `${prefix}**${normalizedLabel}:**`;
+    })
+    .replace(/\n{3,}/g, '\n\n');
+
+  return applyFragmentReplacements(fixed);
+}
+
 function rebuildFragmentedMarkdown(rawLines: string[]): string {
   const logicalLines: string[] = [];
   let current = '';
@@ -264,7 +313,7 @@ function rebuildFragmentedMarkdown(rawLines: string[]): string {
 
 export function repairFragmentedAssistantLayout(content: string): string {
   if (!content || !content.includes('\n')) {
-    return content;
+    return repairCollapsedSummaryMarkdown(content);
   }
 
   const normalized = content.replace(/\r\n/g, '\n');
@@ -277,12 +326,12 @@ export function repairFragmentedAssistantLayout(content: string): string {
   const shortLineRatio =
     nonEmpty.filter((line) => line.trim().length <= 18).length / nonEmpty.length;
   if (shortLineRatio < 0.55) {
-    return normalized;
+    return repairCollapsedSummaryMarkdown(normalized);
   }
 
   const hasMarkdownStructure = nonEmpty.some((line) => isFragmentedMarkdownBoundary(line));
   if (hasMarkdownStructure) {
-    return rebuildFragmentedMarkdown(rawLines);
+    return repairCollapsedSummaryMarkdown(rebuildFragmentedMarkdown(rawLines));
   }
 
   const paragraphs: string[] = [];
@@ -323,7 +372,7 @@ export function repairFragmentedAssistantLayout(content: string): string {
     mergedParagraphs.push(paragraph);
   }
 
-  return applyFragmentReplacements(mergedParagraphs.join('\n\n'));
+  return repairCollapsedSummaryMarkdown(applyFragmentReplacements(mergedParagraphs.join('\n\n')));
 }
 
 /**

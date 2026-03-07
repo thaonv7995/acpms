@@ -325,6 +325,30 @@ pub fn build_skill_plan(
                             break;
                         }
 
+                        if !suggested_skill_allowed_for_task(task, &candidate.candidate.skill_id) {
+                            skipped_any = true;
+                            plan.skipped.push(skipped_skill_from_match(
+                                &candidate,
+                                SkillPlanDecision::SkippedUnavailable,
+                                "Candidate skill family is not relevant to this task type or intent.",
+                            ));
+                            plan.trace.push(SkillSelectionTrace {
+                                skill_id: candidate.candidate.skill_id.clone(),
+                                phase: "suggestion_pipeline".to_string(),
+                                proposed_by: candidate
+                                    .supporting_extensions
+                                    .iter()
+                                    .map(|extension| extension.label())
+                                    .collect::<Vec<_>>()
+                                    .join("+"),
+                                decision: SkillPlanDecision::SkippedUnavailable,
+                                score: Some(candidate.candidate.score),
+                                reason: "Candidate skill family is not relevant to this task type or intent."
+                                    .to_string(),
+                            });
+                            continue;
+                        }
+
                         if selected_ids.contains(&candidate.candidate.skill_id) {
                             skipped_any = true;
                             plan.skipped.push(skipped_skill_from_match(
@@ -1324,6 +1348,7 @@ fn summarize_skill_ids_for_log(skill_ids: &[String], max_visible: usize) -> Stri
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum TaskExecutionIntent {
     Delivery,
+    FocusedChange,
     ResearchProbe,
 }
 
@@ -1335,10 +1360,13 @@ fn derive_skill_chain(
     let execution_intent = infer_task_execution_intent(task);
     let mut ids: Vec<String> = vec!["task-preflight-check".to_string()];
     let mut seen: HashSet<String> = ids.iter().cloned().collect();
+    let expects_delivery_flow = matches!(execution_intent, TaskExecutionIntent::Delivery);
+    let preview_flow_required = task_requires_preview_flow(task, settings, execution_intent);
+    let artifact_required = task_requires_artifact_skill(task, execution_intent, preview_flow_required);
+    let git_handoff_required = task_requires_git_handoff(task, execution_intent);
+    let release_summary_required = task_requires_release_summary(task, execution_intent);
 
-    if matches!(execution_intent, TaskExecutionIntent::Delivery)
-        || task_explicitly_requests_env_validation(task)
-    {
+    if expects_delivery_flow || task_explicitly_requests_env_validation(task) {
         push_skill(&mut ids, &mut seen, "env-and-secrets-validate");
     }
 
@@ -1359,21 +1387,11 @@ fn derive_skill_chain(
         .get("execution")
         .and_then(|v| v.get("run_build_and_tests"))
         .and_then(|v| v.as_bool())
-        .unwrap_or(matches!(execution_intent, TaskExecutionIntent::Delivery));
+        .unwrap_or(expects_delivery_flow || task_requires_build_validation(task));
 
     if run_build_and_tests {
         push_skill(&mut ids, &mut seen, "verify-test-build");
     }
-
-    let auto_deploy_enabled = task
-        .metadata
-        .get("execution")
-        .and_then(|v| v.get("auto_deploy"))
-        .and_then(|v| v.as_bool())
-        .or_else(|| task.metadata.get("auto_deploy").and_then(|v| v.as_bool()))
-        .unwrap_or(settings.auto_deploy);
-    let preview_delivery_enabled = auto_deploy_enabled || settings.preview_enabled;
-    let is_standard_task = !matches!(task.task_type, TaskType::Deploy);
 
     if matches!(task.task_type, TaskType::Deploy) {
         push_skill(&mut ids, &mut seen, "build-artifact");
@@ -1422,8 +1440,10 @@ fn derive_skill_chain(
 
     match project_type {
         ProjectType::Web => {
-            push_skill(&mut ids, &mut seen, "build-artifact");
-            if preview_delivery_enabled && is_standard_task {
+            if artifact_required {
+                push_skill(&mut ids, &mut seen, "build-artifact");
+            }
+            if preview_flow_required {
                 push_skill(&mut ids, &mut seen, "cloudflare-config-validate");
                 push_skill(&mut ids, &mut seen, "cloudflare-tunnel-setup-guide");
                 push_skill(&mut ids, &mut seen, "deploy-precheck-cloudflare");
@@ -1431,8 +1451,10 @@ fn derive_skill_chain(
             }
         }
         ProjectType::Api => {
-            push_skill(&mut ids, &mut seen, "build-artifact");
-            if preview_delivery_enabled && is_standard_task {
+            if artifact_required {
+                push_skill(&mut ids, &mut seen, "build-artifact");
+            }
+            if preview_flow_required {
                 push_skill(&mut ids, &mut seen, "cloudflare-config-validate");
                 push_skill(&mut ids, &mut seen, "cloudflare-tunnel-setup-guide");
                 push_skill(&mut ids, &mut seen, "deploy-precheck-cloudflare");
@@ -1440,34 +1462,38 @@ fn derive_skill_chain(
             }
         }
         ProjectType::Desktop => {
-            push_skill(&mut ids, &mut seen, "build-artifact");
-            if preview_delivery_enabled {
+            if artifact_required {
+                push_skill(&mut ids, &mut seen, "build-artifact");
+            }
+            if preview_flow_required {
                 push_skill(&mut ids, &mut seen, "preview-artifact-desktop");
             }
         }
         ProjectType::Mobile => {
-            push_skill(&mut ids, &mut seen, "build-artifact");
-            if preview_delivery_enabled {
+            if artifact_required {
+                push_skill(&mut ids, &mut seen, "build-artifact");
+            }
+            if preview_flow_required {
                 push_skill(&mut ids, &mut seen, "preview-artifact-mobile");
             }
         }
         ProjectType::Extension => {
-            push_skill(&mut ids, &mut seen, "build-artifact");
-            if preview_delivery_enabled {
+            if artifact_required {
+                push_skill(&mut ids, &mut seen, "build-artifact");
+            }
+            if preview_flow_required {
                 push_skill(&mut ids, &mut seen, "preview-artifact-extension");
             }
         }
         ProjectType::Microservice => {
-            push_skill(&mut ids, &mut seen, "build-artifact");
-            if preview_delivery_enabled {
+            if artifact_required {
+                push_skill(&mut ids, &mut seen, "build-artifact");
+            }
+            if preview_flow_required {
                 push_skill(&mut ids, &mut seen, "post-deploy-smoke-and-healthcheck");
                 push_skill(&mut ids, &mut seen, "update-deployment-metadata");
             }
         }
-    }
-
-    if run_build_and_tests {
-        push_skill(&mut ids, &mut seen, "verify-test-build");
     }
 
     if task_mentions_database_changes(task) {
@@ -1481,13 +1507,15 @@ fn derive_skill_chain(
     if require_review {
         push_skill(&mut ids, &mut seen, "review-handoff");
         push_skill(&mut ids, &mut seen, "gitlab-rebase-conflict-resolution");
-    } else if !matches!(task.task_type, TaskType::Init) {
+    } else if !matches!(task.task_type, TaskType::Init) && git_handoff_required {
         push_skill(&mut ids, &mut seen, "gitlab-branch-and-commit");
         push_skill(&mut ids, &mut seen, "gitlab-merge-request");
         push_skill(&mut ids, &mut seen, "gitlab-issue-sync");
     }
 
-    push_skill(&mut ids, &mut seen, "release-note-and-delivery-summary");
+    if release_summary_required {
+        push_skill(&mut ids, &mut seen, "release-note-and-delivery-summary");
+    }
 
     for explicit in extract_explicit_skills(&task.metadata) {
         push_skill(&mut ids, &mut seen, &explicit);
@@ -1498,6 +1526,10 @@ fn derive_skill_chain(
 }
 
 fn infer_task_execution_intent(task: &Task) -> TaskExecutionIntent {
+    if matches!(task.task_type, TaskType::Init | TaskType::Deploy) {
+        return TaskExecutionIntent::Delivery;
+    }
+
     if task
         .metadata
         .get("execution")
@@ -1527,6 +1559,18 @@ fn infer_task_execution_intent(task: &Task) -> TaskExecutionIntent {
         ) {
             return TaskExecutionIntent::ResearchProbe;
         }
+        if matches!(
+            normalized.as_str(),
+            "delivery" | "deploy" | "preview" | "release" | "init" | "bootstrap"
+        ) {
+            return TaskExecutionIntent::Delivery;
+        }
+        if matches!(
+            normalized.as_str(),
+            "focused_change" | "focused" | "implementation" | "small_task" | "small-change"
+        ) {
+            return TaskExecutionIntent::FocusedChange;
+        }
     }
 
     let haystack = task_text(task).to_ascii_lowercase();
@@ -1549,7 +1593,188 @@ fn infer_task_execution_intent(task: &Task) -> TaskExecutionIntent {
         return TaskExecutionIntent::ResearchProbe;
     }
 
+    if matches!(task.task_type, TaskType::SmallTask) || !task_has_delivery_markers(&haystack) {
+        return TaskExecutionIntent::FocusedChange;
+    }
+
     TaskExecutionIntent::Delivery
+}
+
+fn task_requires_build_validation(task: &Task) -> bool {
+    let haystack = task_text(task).to_ascii_lowercase();
+    matches!(task.task_type, TaskType::Test)
+        || [
+            "build",
+            "test",
+            "verify",
+            "validation",
+            "validate",
+            "compile",
+            "lint",
+            "ci",
+            "dist",
+            "bundle",
+        ]
+        .iter()
+        .any(|needle| haystack.contains(needle))
+}
+
+fn task_requires_artifact_skill(
+    task: &Task,
+    execution_intent: TaskExecutionIntent,
+    preview_flow_required: bool,
+) -> bool {
+    if matches!(task.task_type, TaskType::Init | TaskType::Deploy) || preview_flow_required {
+        return true;
+    }
+
+    let haystack = task_text(task).to_ascii_lowercase();
+    matches!(execution_intent, TaskExecutionIntent::Delivery)
+        || [
+            "artifact",
+            "bundle",
+            "package",
+            "dist",
+            "build output",
+            "binary",
+        ]
+        .iter()
+        .any(|needle| haystack.contains(needle))
+}
+
+fn task_requires_preview_flow(
+    task: &Task,
+    settings: &ProjectSettings,
+    execution_intent: TaskExecutionIntent,
+) -> bool {
+    if matches!(task.task_type, TaskType::Init | TaskType::Deploy) {
+        return settings.preview_enabled || settings.auto_deploy || task_requests_auto_deploy(task);
+    }
+
+    let haystack = task_text(task).to_ascii_lowercase();
+    let mentions_preview_or_deploy = [
+        "preview",
+        "deploy",
+        "deployment",
+        "cloudflare",
+        "workers",
+        "pages",
+        "tunnel",
+        "wrangler",
+        "publish",
+        "release",
+        "go live",
+    ]
+    .iter()
+    .any(|needle| haystack.contains(needle));
+
+    task_requests_auto_deploy(task)
+        || (matches!(execution_intent, TaskExecutionIntent::Delivery)
+            && mentions_preview_or_deploy
+            && (settings.preview_enabled || settings.auto_deploy))
+}
+
+fn task_requires_git_handoff(task: &Task, execution_intent: TaskExecutionIntent) -> bool {
+    if matches!(task.task_type, TaskType::Init | TaskType::Deploy)
+        || matches!(execution_intent, TaskExecutionIntent::Delivery)
+    {
+        return true;
+    }
+
+    let haystack = task_text(task).to_ascii_lowercase();
+    [
+        "gitlab",
+        "merge request",
+        "pull request",
+        "commit",
+        "branch",
+        "push",
+        "repo",
+        "repository",
+        "handoff",
+        "review",
+    ]
+    .iter()
+    .any(|needle| haystack.contains(needle))
+}
+
+fn task_requires_release_summary(task: &Task, execution_intent: TaskExecutionIntent) -> bool {
+    if matches!(task.task_type, TaskType::Init | TaskType::Deploy)
+        || matches!(execution_intent, TaskExecutionIntent::Delivery)
+    {
+        return true;
+    }
+
+    let haystack = task_text(task).to_ascii_lowercase();
+    [
+        "release note",
+        "delivery summary",
+        "handoff",
+        "what changed",
+        "release",
+    ]
+    .iter()
+    .any(|needle| haystack.contains(needle))
+}
+
+fn task_requests_auto_deploy(task: &Task) -> bool {
+    task.metadata
+        .get("execution")
+        .and_then(|v| v.get("auto_deploy"))
+        .and_then(|v| v.as_bool())
+        .or_else(|| task.metadata.get("auto_deploy").and_then(|v| v.as_bool()))
+        .unwrap_or(false)
+}
+
+fn task_expects_init_flow(task: &Task) -> bool {
+    if matches!(task.task_type, TaskType::Init) {
+        return true;
+    }
+
+    let haystack = task_text(task).to_ascii_lowercase();
+    [
+        "from scratch",
+        "bootstrap",
+        "scaffold",
+        "initialize",
+        "initialise",
+        "new project",
+        "starter",
+        "kickoff project",
+    ]
+    .iter()
+    .any(|needle| haystack.contains(needle))
+}
+
+fn suggested_skill_allowed_for_task(task: &Task, skill_id: &str) -> bool {
+    if skill_id.starts_with("init-") && !task_expects_init_flow(task) {
+        return false;
+    }
+
+    true
+}
+
+fn task_has_delivery_markers(haystack: &str) -> bool {
+    [
+        "ship",
+        "release",
+        "deliver",
+        "deploy",
+        "deployment",
+        "preview",
+        "publish",
+        "go live",
+        "handoff",
+        "scaffold",
+        "bootstrap",
+        "create repository",
+        "create repo",
+        "gitlab repository",
+        "push to",
+        "merge request",
+    ]
+    .iter()
+    .any(|needle| haystack.contains(needle))
 }
 
 fn task_explicitly_requests_env_validation(task: &Task) -> bool {
