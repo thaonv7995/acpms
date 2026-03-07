@@ -193,11 +193,14 @@ function stripAnsiSequences(text: string): string {
 }
 
 function normalizePreviewUrlCandidate(candidate: string): string | undefined {
-  const normalized = candidate.trim().replace(/[),.;\]]+$/g, '');
+  const normalized = candidate
+    .trim()
+    .replace(/^[<({\["'`]+/g, '')
+    .replace(/[),.;\]}>\"'`]+$/g, '');
   if (!normalized) {
     return undefined;
   }
-  if (/[<{][^>]*port[^>]*[>}]/i.test(normalized)) {
+  if (/<[^>]*port\b|{[^}]*port\b/i.test(normalized)) {
     return undefined;
   }
   return normalized;

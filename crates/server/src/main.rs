@@ -821,6 +821,7 @@ async fn handle_attempt_success_deployment(
     }
 
     let _agent_reported_deploy = attempt.metadata.get("preview_target").is_some()
+        || attempt.metadata.get("preview_url").is_some()
         || attempt.metadata.get("preview_url_agent").is_some()
         || attempt.metadata.get("deployment_report").is_some();
 
@@ -832,12 +833,18 @@ async fn handle_attempt_success_deployment(
                 .metadata
                 .get("preview_target")
                 .and_then(|value| value.as_str());
-            let preview_url_agent = attempt
+            let preview_url = attempt
                 .metadata
-                .get("preview_url_agent")
-                .and_then(|value| value.as_str());
+                .get("preview_url")
+                .and_then(|value| value.as_str())
+                .or_else(|| {
+                    attempt
+                        .metadata
+                        .get("preview_url_agent")
+                        .and_then(|value| value.as_str())
+                });
 
-            if let Some(agent_url) = preview_url_agent {
+            if let Some(agent_url) = preview_url {
                 metadata_patch.insert(
                     "preview_url".to_string(),
                     serde_json::Value::String(agent_url.to_string()),

@@ -99,6 +99,11 @@ function getPrimaryArtifactDownload(
 function getAttemptPreviewUrl(metadata?: Record<string, unknown>): string | undefined {
   if (!metadata) return undefined;
 
+  const previewUrl = metadata.preview_url;
+  if (typeof previewUrl === 'string' && previewUrl.trim().length > 0) {
+    return previewUrl;
+  }
+
   const previewUrlAgent = metadata.preview_url_agent;
   if (typeof previewUrlAgent === 'string' && previewUrlAgent.trim().length > 0) {
     return previewUrlAgent;

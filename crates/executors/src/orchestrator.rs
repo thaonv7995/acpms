@@ -7931,6 +7931,20 @@ REPO_URL: https://gitlab.com/user/repo"#
     }
 
     #[test]
+    fn test_extract_preview_target_strips_trailing_json_artifacts() {
+        let lines = vec![r#"PREVIEW_TARGET: http://127.0.0.1:8080"}"#.to_string()];
+        let target = extract_preview_target(&lines);
+        assert_eq!(target, Some("http://127.0.0.1:8080".to_string()));
+    }
+
+    #[test]
+    fn test_extract_preview_url_strips_trailing_json_artifacts() {
+        let lines = vec![r#"PREVIEW_URL: http://127.0.0.1:8080"}"#.to_string()];
+        let url = extract_preview_url(&lines);
+        assert_eq!(url, Some("http://127.0.0.1:8080".to_string()));
+    }
+
+    #[test]
     fn test_normalize_repo_url_removes_credentials() {
         let url = "https://oauth2:token@gitlab.example.com/group/repo.git";
         let normalized = normalize_repo_url(url);

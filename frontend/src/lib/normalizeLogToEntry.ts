@@ -28,8 +28,31 @@ export interface AgentLogLike {
   [key: string]: unknown;
 }
 
+const INTERNAL_ACPMS_CONTRACT_PATH_REGEX =
+  /(?:^|\/)\.acpms\/(?:[^/]+-output\.json|import-analysis\.json)$/i;
+
 function ts(log: AgentLogLike, fallback?: string): string {
   return log.timestamp || log.created_at || fallback || new Date().toISOString();
+}
+
+function normalizeContractPath(path: string): string {
+  return path.replace(/\\/g, '/').trim();
+}
+
+function isHiddenAcpmsContractPath(path: string | undefined): boolean {
+  if (typeof path !== 'string' || !path.trim()) return false;
+  return INTERNAL_ACPMS_CONTRACT_PATH_REGEX.test(normalizeContractPath(path));
+}
+
+function isHiddenInternalFileAction(action: string | undefined, path: string | undefined): boolean {
+  if (action !== 'file_read' && action !== 'file_edit' && action !== 'file_write') {
+    return false;
+  }
+  return isHiddenAcpmsContractPath(path);
+}
+
+function containsHiddenAcpmsContractPath(text: string): boolean {
+  return INTERNAL_ACPMS_CONTRACT_PATH_REGEX.test(normalizeContractPath(text));
 }
 
 function isNoisyTelemetry(content: string): boolean {
@@ -246,6 +269,9 @@ function handleNormalized(log: AgentLogLike, index: number): TimelineEntry[] | n
       const target = inferToolTarget(action, actionType, toolName);
       const toolStatus = normalizeToolStatus(statusObj);
       const path = actionType.path ?? actionType.file_path ?? target ?? '';
+      if (isHiddenInternalFileAction(action, typeof path === 'string' ? path : undefined)) {
+        return [];
+      }
       const entries: TimelineEntry[] = [{
         id: log.id || `tool-${index}`,
         type: 'tool_call',
@@ -580,6 +606,9 @@ function handleStdout(log: AgentLogLike, index: number): TimelineEntry[] | null 
 
   if (content.match(/^(Read|Edit|Bash|Grep|Glob|Write|Task|TodoWrite|TodoRead)/i)) {
     const toolName = content.split(/\s+/)[0];
+    if (/^(Read|Edit|Write)$/i.test(toolName) && containsHiddenAcpmsContractPath(content)) {
+      return [];
+    }
     return [{
       id: log.id || `tool-${index}`,
       type: 'tool_call',
@@ -615,6 +644,10 @@ function handleLegacy(log: AgentLogLike, index: number): TimelineEntry[] | null 
     const toolName = log.tool_name || actionType.tool_name || 'Unknown';
     const action = inferToolAction(toolName, actionType);
     const target = inferToolTarget(action, actionType, toolName);
+    const path = actionType.file_path || actionType.path || target;
+    if (isHiddenInternalFileAction(action, typeof path === 'string' ? path : undefined)) {
+      return [];
+    }
     const ns = normalizeToolStatus(typeof log.status === 'object' ? log.status : { status: log.status });
     return [{
       id: log.id || `tool-${index}`,
@@ -646,6 +679,9 @@ function handleLegacy(log: AgentLogLike, index: number): TimelineEntry[] | null 
   if (lt === 'file_change') {
     try {
       const parsed = JSON.parse(content);
+      if (isHiddenAcpmsContractPath(parsed.path)) {
+        return [];
+      }
       return [{
         id: log.id || `file-${index}`,
         type: 'file_change',

@@ -372,6 +372,16 @@ impl WorktreeManager {
             .await
             .context("Failed to create worktrees base directory")?;
 
+        // Best-effort prune stale worktree metadata before creating or reattaching.
+        let _ = Command::new("git")
+            .current_dir(repo_path)
+            .arg("worktree")
+            .arg("prune")
+            .stdout(Stdio::piped())
+            .stderr(Stdio::piped())
+            .output()
+            .await;
+
         // Fallback: If repo_path exists but is not a git repo, initialize it
         if repo_path.exists() && !repo_path.join(".git").exists() {
             tracing::info!("Initializing fallback git repository at {:?}", repo_path);
@@ -425,20 +435,87 @@ impl WorktreeManager {
                 .unwrap_or_else(|_| "HEAD".to_string())
         };
 
-        // git worktree add -b <branch> <path> <base-ref>
-        let output = Command::new("git")
-            .current_dir(repo_path)
-            .arg("worktree")
-            .arg("add")
-            .arg("-b")
-            .arg(&branch_name)
-            .arg(&worktree_path)
-            .arg(&default_branch)
-            .stdout(Stdio::piped())
-            .stderr(Stdio::piped())
-            .output()
-            .await
-            .context("Failed to execute git worktree command")?;
+        if tokio::fs::try_exists(&worktree_path).await.unwrap_or(false) {
+            let has_git_dir = tokio::fs::try_exists(&worktree_path.join(".git"))
+                .await
+                .unwrap_or(false);
+            if has_git_dir {
+                self.setup_git_config(&worktree_path).await?;
+                return Ok(WorktreeInfo {
+                    path: worktree_path,
+                    base_branch: default_branch,
+                    feature_branch: branch_name,
+                });
+            }
+
+            tokio::fs::remove_dir_all(&worktree_path)
+                .await
+                .with_context(|| {
+                    format!(
+                        "Failed to remove stale worktree directory before recreation: {:?}",
+                        worktree_path
+                    )
+                })?;
+        }
+
+        let branch_exists = self.branch_exists(repo_path, &branch_name).await?;
+        let mut output = if branch_exists {
+            tracing::info!(
+                "Feature branch {} already exists; reattaching worktree at {:?}",
+                branch_name,
+                worktree_path
+            );
+            Command::new("git")
+                .current_dir(repo_path)
+                .arg("worktree")
+                .arg("add")
+                .arg("--force")
+                .arg(&worktree_path)
+                .arg(&branch_name)
+                .stdout(Stdio::piped())
+                .stderr(Stdio::piped())
+                .output()
+                .await
+                .context("Failed to execute git worktree command")?
+        } else {
+            Command::new("git")
+                .current_dir(repo_path)
+                .arg("worktree")
+                .arg("add")
+                .arg("-b")
+                .arg(&branch_name)
+                .arg(&worktree_path)
+                .arg(&default_branch)
+                .stdout(Stdio::piped())
+                .stderr(Stdio::piped())
+                .output()
+                .await
+                .context("Failed to execute git worktree command")?
+        };
+
+        if !output.status.success() && !branch_exists {
+            let stderr = String::from_utf8_lossy(&output.stderr);
+            if stderr.contains("already exists")
+                && self.branch_exists(repo_path, &branch_name).await.unwrap_or(false)
+            {
+                tracing::info!(
+                    "Feature branch {} appeared during worktree creation; retrying by reusing it",
+                    branch_name
+                );
+                output = Command::new("git")
+                    .current_dir(repo_path)
+                    .arg("worktree")
+                    .arg("add")
+                    .arg("--force")
+                    .arg(&worktree_path)
+                    .arg(&branch_name)
+                    .stdout(Stdio::piped())
+                    .stderr(Stdio::piped())
+                    .output()
+                    .await
+                    .context("Failed to retry git worktree command")?;
+            }
+        }
 
         if !output.status.success() {
             let stderr = String::from_utf8_lossy(&output.stderr);
@@ -1122,8 +1199,28 @@ fn parse_repo_identity(raw: &str) -> Option<(String, String)> {
 mod tests {
     use super::{
         format_repository_clone_log, format_repository_sync_log, inject_pat_into_url,
-        parse_tracking_branch, repo_url_matches, summarize_repository_source,
+        parse_tracking_branch, repo_url_matches, summarize_repository_source, WorktreeManager,
     };
+    use std::path::Path;
+    use std::sync::Arc;
+    use tokio::process::Command;
+    use tokio::sync::RwLock;
+    use uuid::Uuid;
+
+    async fn run_git(repo_path: &Path, args: &[&str]) {
+        let output = Command::new("git")
+            .current_dir(repo_path)
+            .args(args)
+            .output()
+            .await
+            .expect("failed to run git");
+        assert!(
+            output.status.success(),
+            "git {:?} failed: {}",
+            args,
+            String::from_utf8_lossy(&output.stderr)
+        );
+    }
 
     #[test]
     fn inject_pat_into_https_gitlab_url() {
@@ -1232,5 +1329,61 @@ mod tests {
             clone,
             "Preparing a fresh local repository copy from Agentic-Coding."
         );
+    }
+
+    #[tokio::test]
+    async fn create_worktree_reuses_existing_attempt_branch_for_follow_up() {
+        let repo_dir = tempfile::tempdir().expect("repo tempdir");
+        let worktrees_dir = tempfile::tempdir().expect("worktrees tempdir");
+        let repo_path = repo_dir.path();
+
+        run_git(repo_path, &["init", "-b", "main"]).await;
+        run_git(repo_path, &["config", "user.name", "ACPMS Test"]).await;
+        run_git(repo_path, &["config", "user.email", "test@acpms.local"]).await;
+        tokio::fs::write(repo_path.join("README.md"), "seed\n")
+            .await
+            .expect("write seed file");
+        run_git(repo_path, &["add", "."]).await;
+        run_git(repo_path, &["commit", "-m", "seed"]).await;
+
+        let manager = WorktreeManager::new(Arc::new(RwLock::new(
+            worktrees_dir.path().to_path_buf(),
+        )));
+        let attempt_id = Uuid::new_v4();
+
+        let first = manager
+            .create_worktree(repo_path, attempt_id, Some("HEAD"))
+            .await
+            .expect("first worktree");
+        assert!(first.path.exists(), "first worktree should exist");
+
+        tokio::fs::remove_dir_all(&first.path)
+            .await
+            .expect("remove first worktree path");
+
+        let recreated = manager
+            .create_worktree(repo_path, attempt_id, Some("HEAD"))
+            .await
+            .expect("recreate worktree from existing branch");
+
+        assert!(recreated.path.exists(), "recreated worktree should exist");
+        assert_eq!(
+            recreated.feature_branch,
+            format!("feat/attempt-{}", attempt_id)
+        );
+
+        let output = Command::new("git")
+            .current_dir(&recreated.path)
+            .args(["rev-parse", "--abbrev-ref", "HEAD"])
+            .output()
+            .await
+            .expect("read current branch");
+        assert!(
+            output.status.success(),
+            "git rev-parse failed: {}",
+            String::from_utf8_lossy(&output.stderr)
+        );
+        let current_branch = String::from_utf8_lossy(&output.stdout).trim().to_string();
+        assert_eq!(current_branch, recreated.feature_branch);
     }
 }

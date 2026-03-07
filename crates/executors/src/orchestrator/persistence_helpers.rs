@@ -31,23 +31,44 @@ impl ExecutorOrchestrator {
             .fetch_attempt_log_lines(attempt_id, "structured output extraction")
             .await?;
 
-        let (preview_target, preview_url, preview_target_source) = if let Some(wp) = worktree_path {
-            if let Ok(Some((target, url))) = self.extract_preview_from_file_contract(wp).await {
-                (Some(target), url, "file_contract")
+        let (preview_target, preview_url, preview_target_source, preview_url_source) =
+            if let Some(wp) = worktree_path {
+                if let Ok(Some((target, file_url))) =
+                    self.extract_preview_from_file_contract(wp).await
+                {
+                    let file_url_present = file_url.is_some();
+                    let preview_url = file_url.or_else(|| extract_preview_url(&lines));
+                    let preview_url_source = if preview_url.is_some() {
+                        if file_url_present {
+                            "file_contract"
+                        } else {
+                            "agent_output"
+                        }
+                    } else {
+                        "agent_output"
+                    };
+                    (
+                        Some(target),
+                        preview_url,
+                        "file_contract",
+                        preview_url_source,
+                    )
+                } else {
+                    (
+                        extract_preview_target(&lines),
+                        extract_preview_url(&lines),
+                        "agent_output",
+                        "agent_output",
+                    )
+                }
             } else {
                 (
                     extract_preview_target(&lines),
                     extract_preview_url(&lines),
                     "agent_output",
+                    "agent_output",
                 )
-            }
-        } else {
-            (
-                extract_preview_target(&lines),
-                extract_preview_url(&lines),
-                "agent_output",
-            )
-        };
+            };
         let deployment_report = extract_deployment_report(&lines);
 
         // Prefer file contract (.acpms/mr-output.json) over log extraction for MR fields
@@ -97,12 +118,16 @@ impl ExecutorOrchestrator {
         }
         if let Some(url) = &preview_url {
             patch.insert(
+                "preview_url".to_string(),
+                serde_json::Value::String(url.to_string()),
+            );
+            patch.insert(
                 "preview_url_agent".to_string(),
                 serde_json::Value::String(url.to_string()),
             );
             patch.insert(
                 "preview_url_source".to_string(),
-                serde_json::Value::String("agent_output".to_string()),
+                serde_json::Value::String(preview_url_source.to_string()),
             );
         }
         if let Some(report) = &deployment_report {
@@ -472,11 +497,11 @@ impl ExecutorOrchestrator {
 
         let target = parsed
             .preview_target
-            .map(|s| s.trim().to_string())
+            .map(|s| trim_repo_url_candidate(s.trim()))
             .filter(|s| !s.is_empty() && !s.contains("<port>"));
         let url = parsed
             .preview_url
-            .map(|s| s.trim().to_string())
+            .map(|s| trim_repo_url_candidate(s.trim()))
             .filter(|s| !s.is_empty());
 
         if let Some(t) = target {
@@ -492,38 +517,67 @@ impl ExecutorOrchestrator {
         attempt_id: Uuid,
         worktree_path: Option<&std::path::Path>,
     ) -> Result<Option<String>> {
-        let (preview_target, source) = if let Some(wp) = worktree_path {
-            if let Ok(Some((target, _))) = self.extract_preview_from_file_contract(wp).await {
-                (Some(target), "file_contract")
+        let (preview_target, preview_url, source) = if let Some(wp) = worktree_path {
+            if let Ok(Some((target, url))) = self.extract_preview_from_file_contract(wp).await {
+                (Some(target), url, "file_contract")
             } else {
                 let lines = self
                     .fetch_attempt_log_lines(attempt_id, "preview target extraction")
                     .await?;
-                (extract_preview_target(&lines), "agent_output")
+                (
+                    extract_preview_target(&lines),
+                    extract_preview_url(&lines),
+                    "agent_output",
+                )
             }
         } else {
             let lines = self
                 .fetch_attempt_log_lines(attempt_id, "preview target extraction")
                 .await?;
-            (extract_preview_target(&lines), "agent_output")
+            (
+                extract_preview_target(&lines),
+                extract_preview_url(&lines),
+                "agent_output",
+            )
         };
 
         let Some(preview_target) = preview_target else {
             return Ok(None);
         };
 
+        let mut metadata_patch = serde_json::Map::new();
+        metadata_patch.insert(
+            "preview_target".to_string(),
+            serde_json::Value::String(preview_target.clone()),
+        );
+        metadata_patch.insert(
+            "preview_target_source".to_string(),
+            serde_json::Value::String(source.to_string()),
+        );
+        if let Some(url) = preview_url {
+            metadata_patch.insert(
+                "preview_url".to_string(),
+                serde_json::Value::String(url.clone()),
+            );
+            metadata_patch.insert(
+                "preview_url_agent".to_string(),
+                serde_json::Value::String(url),
+            );
+            metadata_patch.insert(
+                "preview_url_source".to_string(),
+                serde_json::Value::String(source.to_string()),
+            );
+        }
+
         sqlx::query(
             r#"
             UPDATE task_attempts
-            SET metadata = COALESCE(metadata, '{}'::jsonb)
-                || jsonb_build_object('preview_target', $2::text)
-                || jsonb_build_object('preview_target_source', $3::text)
+            SET metadata = COALESCE(metadata, '{}'::jsonb) || $2::jsonb
             WHERE id = $1
             "#,
         )
         .bind(attempt_id)
-        .bind(&preview_target)
-        .bind(source)
+        .bind(serde_json::Value::Object(metadata_patch))
         .execute(&self.db_pool)
         .await
         .context("Failed to persist preview target to attempt metadata")?;

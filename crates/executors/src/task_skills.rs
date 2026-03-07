@@ -1362,7 +1362,8 @@ fn derive_skill_chain(
     let mut seen: HashSet<String> = ids.iter().cloned().collect();
     let expects_delivery_flow = matches!(execution_intent, TaskExecutionIntent::Delivery);
     let preview_flow_required = task_requires_preview_flow(task, settings, execution_intent);
-    let artifact_required = task_requires_artifact_skill(task, execution_intent, preview_flow_required);
+    let artifact_required =
+        task_requires_artifact_skill(task, execution_intent, preview_flow_required);
     let git_handoff_required = task_requires_git_handoff(task, execution_intent);
     let release_summary_required = task_requires_release_summary(task, execution_intent);
 
@@ -1602,21 +1603,29 @@ fn infer_task_execution_intent(task: &Task) -> TaskExecutionIntent {
 
 fn task_requires_build_validation(task: &Task) -> bool {
     let haystack = task_text(task).to_ascii_lowercase();
+    let task_terms = extract_query_terms(&haystack)
+        .into_iter()
+        .collect::<HashSet<_>>();
     matches!(task.task_type, TaskType::Test)
-        || [
-            "build",
-            "test",
-            "verify",
-            "validation",
-            "validate",
-            "compile",
-            "lint",
-            "ci",
-            "dist",
-            "bundle",
-        ]
-        .iter()
-        .any(|needle| haystack.contains(needle))
+        || contains_any(
+            &task_terms
+                .iter()
+                .map(String::as_str)
+                .collect::<HashSet<_>>(),
+            &[
+                "build",
+                "test",
+                "verify",
+                "validation",
+                "validate",
+                "compile",
+                "lint",
+                "ci",
+                "dist",
+                "bundle",
+            ],
+        )
+        || haystack.contains("build output")
 }
 
 fn task_requires_artifact_skill(
@@ -1732,6 +1741,21 @@ fn task_expects_init_flow(task: &Task) -> bool {
     }
 
     let haystack = task_text(task).to_ascii_lowercase();
+    if [
+        "without scaffolding",
+        "without scaffold",
+        "no scaffold",
+        "not scaffolding",
+        "without bootstrap",
+        "without initializing",
+        "without initialising",
+    ]
+    .iter()
+    .any(|needle| haystack.contains(needle))
+    {
+        return false;
+    }
+
     [
         "from scratch",
         "bootstrap",
@@ -2532,6 +2556,51 @@ mod tests {
     }
 
     #[test]
+    fn focused_small_tasks_do_not_load_delivery_or_git_handoff_skills_by_default() {
+        let task = Task {
+            id: uuid::Uuid::new_v4(),
+            project_id: uuid::Uuid::new_v4(),
+            requirement_id: None,
+            sprint_id: None,
+            title: "Polish button spacing".to_string(),
+            description: Some("Adjust CSS spacing for the primary CTA button.".to_string()),
+            task_type: TaskType::SmallTask,
+            status: acpms_db::models::TaskStatus::Todo,
+            assigned_to: None,
+            parent_task_id: None,
+            gitlab_issue_id: None,
+            metadata: serde_json::json!({}),
+            created_by: uuid::Uuid::new_v4(),
+            created_at: chrono::Utc::now(),
+            updated_at: chrono::Utc::now(),
+        };
+
+        let settings = ProjectSettings {
+            preview_enabled: true,
+            auto_deploy: false,
+            require_review: false,
+            ..ProjectSettings::default()
+        };
+
+        let skills = resolve_skill_chain(&task, &settings, ProjectType::Web);
+
+        assert_eq!(
+            skills,
+            vec!["task-preflight-check", "code-implement", "final-report"]
+        );
+        assert!(!skills.iter().any(|skill| skill == "build-artifact"));
+        assert!(!skills
+            .iter()
+            .any(|skill| skill == "cloudflare-config-validate"));
+        assert!(!skills
+            .iter()
+            .any(|skill| skill == "gitlab-branch-and-commit"));
+        assert!(!skills
+            .iter()
+            .any(|skill| skill == "release-note-and-delivery-summary"));
+    }
+
+    #[test]
     fn web_preview_skill_chain_skips_production_pages_deploy_for_standard_tasks() {
         let task = Task {
             id: uuid::Uuid::new_v4(),
@@ -2660,11 +2729,11 @@ mod tests {
         let handle = SkillKnowledgeHandle::pending();
         let backend = FakeBackend {
             matches: vec![SkillMatch {
-                skill_id: "env-and-secrets-validate".to_string(),
-                name: "Env Validate".to_string(),
+                skill_id: "task-preflight-check".to_string(),
+                name: "Task Preflight".to_string(),
                 description: "duplicate".to_string(),
                 score: 0.99,
-                source_path: PathBuf::from("/tmp/env/SKILL.md"),
+                source_path: PathBuf::from("/tmp/task-preflight-check/SKILL.md"),
                 origin: "platform".to_string(),
             }],
             contents: HashMap::new(),
@@ -2689,11 +2758,11 @@ mod tests {
         let backend = FakeBackend {
             matches: vec![
                 SkillMatch {
-                    skill_id: "env-and-secrets-validate".to_string(),
-                    name: "Env Validate".to_string(),
+                    skill_id: "task-preflight-check".to_string(),
+                    name: "Task Preflight".to_string(),
                     description: "duplicate".to_string(),
                     score: 0.99,
-                    source_path: PathBuf::from("/tmp/env/SKILL.md"),
+                    source_path: PathBuf::from("/tmp/task-preflight-check/SKILL.md"),
                     origin: "platform".to_string(),
                 },
                 SkillMatch {
@@ -2723,7 +2792,7 @@ mod tests {
         assert!(plan
             .skipped
             .iter()
-            .any(|skill| skill.skill_id == "env-and-secrets-validate"
+            .any(|skill| skill.skill_id == "task-preflight-check"
                 && skill.decision == SkillPlanDecision::SkippedDuplicate));
         assert!(plan.trace.iter().any(|trace| {
             trace.skill_id == "openai-docs"
@@ -2787,6 +2856,57 @@ mod tests {
             trace.skill_id == "openai-docs"
                 && trace.decision == SkillPlanDecision::SelectedSuggested
                 && trace.proposed_by.contains("repo_signal_hints")
+        }));
+    }
+
+    #[test]
+    fn build_skill_plan_filters_init_suggestions_for_non_init_tasks() {
+        let handle = SkillKnowledgeHandle::pending();
+        let backend = FakeBackend {
+            matches: vec![
+                SkillMatch {
+                    skill_id: "init-desktop-scaffold".to_string(),
+                    name: "Init Desktop Scaffold".to_string(),
+                    description: "Scaffold a desktop app".to_string(),
+                    score: 0.91,
+                    source_path: PathBuf::from("/tmp/init-desktop-scaffold/SKILL.md"),
+                    origin: "platform".to_string(),
+                },
+                SkillMatch {
+                    skill_id: "openai-docs".to_string(),
+                    name: "OpenAI Docs".to_string(),
+                    description: "Use official OpenAI docs".to_string(),
+                    score: 0.74,
+                    source_path: PathBuf::from("/tmp/openai-docs/SKILL.md"),
+                    origin: "community-openai".to_string(),
+                },
+            ],
+            contents: HashMap::new(),
+        };
+        handle.set_ready_backend(Arc::new(backend));
+
+        let task = Task {
+            title: "Fix OpenAI doc link styles".to_string(),
+            description: Some(
+                "Update styling in the docs page without scaffolding a new app.".to_string(),
+            ),
+            task_type: TaskType::SmallTask,
+            ..sample_task()
+        };
+
+        let plan = build_skill_plan(
+            &task,
+            &ProjectSettings::default(),
+            ProjectType::Web,
+            None,
+            Some(&handle),
+        );
+
+        assert_eq!(plan.suggested.len(), 1);
+        assert_eq!(plan.suggested[0].skill_id, "openai-docs");
+        assert!(plan.skipped.iter().any(|skill| {
+            skill.skill_id == "init-desktop-scaffold"
+                && skill.decision == SkillPlanDecision::SkippedUnavailable
         }));
     }
 

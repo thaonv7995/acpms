@@ -103,6 +103,16 @@ describe('useDevServer error helpers', () => {
     ).toBeUndefined();
   });
 
+  it('strips trailing JSON artifacts from preview URL candidates', () => {
+    expect(
+      extractPreviewUrlFromText('PREVIEW_TARGET: http://127.0.0.1:8080"}')
+    ).toBe('http://127.0.0.1:8080');
+
+    expect(
+      extractPreviewUrlFromText('PREVIEW_URL: https://preview.example.com"}')
+    ).toBe('https://preview.example.com');
+  });
+
   it('extracts the latest PREVIEW_TARGET from attempt logs', () => {
     expect(
       extractPreviewUrlFromAttemptLogs([
