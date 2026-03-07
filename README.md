@@ -59,6 +59,18 @@ Uninstall (one-liner mode):
 bash -c "$(curl -fsSL https://raw.githubusercontent.com/thaonv7995/acpms/main/install.sh)" -- --uninstall
 ```
 
+**Update** (when ACPMS is already installed):
+
+```bash
+# Update to latest release
+bash -c "$(curl -sSL https://raw.githubusercontent.com/thaonv7995/acpms/main/update.sh)"
+
+# Update to specific version
+bash -c "$(curl -sSL https://raw.githubusercontent.com/thaonv7995/acpms/main/update.sh)" -- --version v1.2.0
+```
+
+From cloned repo: `bash update.sh` or `bash update.sh --version v1.2.0`
+
 **Option B – Clone repo, then install** (alternative):
 
 ```bash
@@ -71,6 +83,13 @@ Uninstall (from cloned repo):
 
 ```bash
 bash install.sh --uninstall
+```
+
+Update (from cloned repo):
+
+```bash
+bash update.sh                    # Latest
+bash update.sh --version v1.2.0    # Specific version
 ```
 
 ---
@@ -205,6 +224,7 @@ acpms/
 ├── .acpms/skills/       # Agent skills
 ├── docker-compose.yml   # Postgres + MinIO (backend runs outside)
 ├── install.sh           # One-liner installer
+├── update.sh            # Update existing installation
 └── Makefile
 ```
 
@@ -256,6 +276,7 @@ make deploy  # Build + migrate
 | `make health`     | Health check                           |
 | `make deploy`     | Build + migrate                        |
 | `make clean`      | Remove build artifacts                 |
+| `bash update.sh`  | Update existing install (latest)      |
 
 
 ---
