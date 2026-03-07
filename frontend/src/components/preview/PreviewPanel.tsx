@@ -34,6 +34,8 @@ interface PreviewPanelProps {
   startActionLabel?: string;
   canStopPreview?: boolean;
   dismissOnly?: boolean;
+  statusBadgeLabel?: string;
+  statusBadgeTitle?: string;
   className?: string;
 }
 
@@ -90,6 +92,8 @@ export function PreviewPanel({
   startActionLabel = 'Start preview',
   canStopPreview = false,
   dismissOnly = false,
+  statusBadgeLabel,
+  statusBadgeTitle,
   className = '',
 }: PreviewPanelProps) {
   const [isFullscreen, setIsFullscreen] = useState(false);
@@ -215,6 +219,15 @@ export function PreviewPanel({
             >
               {statusText}
             </div>
+            {statusBadgeLabel ? (
+              <span
+                className="shrink-0 rounded-full border border-amber-500/30 bg-amber-500/10 px-2 py-0.5 text-[10px] font-medium uppercase tracking-[0.12em] text-amber-300"
+                title={statusBadgeTitle}
+                aria-label={statusBadgeTitle || statusBadgeLabel}
+              >
+                {statusBadgeLabel}
+              </span>
+            ) : null}
           </div>
           <div className="flex items-center gap-1 shrink-0">
             {!canShowPreview && canManageRuntime && (

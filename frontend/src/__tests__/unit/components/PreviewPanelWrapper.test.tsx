@@ -30,10 +30,10 @@ describe('PreviewPanelWrapper', () => {
       status: 'idle',
       url: undefined,
       errorMessage: undefined,
-      startServer: vi.fn().mockResolvedValue(undefined),
-      stopServer: vi.fn().mockResolvedValue(undefined),
+      startServer: vi.fn().mockResolvedValue(false),
+      stopServer: vi.fn().mockResolvedValue(true),
       dismissPreview: vi.fn(),
-      restartServer: vi.fn().mockResolvedValue(undefined),
+      restartServer: vi.fn().mockResolvedValue(false),
       isLoading: false,
       startDisabled: true,
       startDisabledReason: 'Preview unavailable: Docker preview runtime is disabled',
@@ -41,6 +41,8 @@ describe('PreviewPanelWrapper', () => {
       previewRevision: 0,
       canStopPreview: false,
       dismissOnly: false,
+      cloudflareReady: true,
+      missingCloudflareFields: [],
     });
 
     vi.mocked(useExecutionProcessesStream).mockReturnValue({
@@ -62,8 +64,28 @@ describe('PreviewPanelWrapper', () => {
     });
   });
 
-  it('requests an agent preview follow-up when managed docker preview is disabled', async () => {
+  it('falls back to an agent preview follow-up when the hard preview start flow fails', async () => {
     const onFollowUpAttemptCreated = vi.fn();
+    const startServer = vi.fn().mockResolvedValue(false);
+
+    vi.mocked(useDevServer).mockReturnValue({
+      status: 'idle',
+      url: undefined,
+      errorMessage: undefined,
+      startServer,
+      stopServer: vi.fn().mockResolvedValue(true),
+      dismissPreview: vi.fn(),
+      restartServer: vi.fn().mockResolvedValue(false),
+      isLoading: false,
+      startDisabled: true,
+      startDisabledReason: 'Preview unavailable: Docker preview runtime is disabled',
+      externalPreview: false,
+      previewRevision: 0,
+      canStopPreview: false,
+      dismissOnly: false,
+      cloudflareReady: true,
+      missingCloudflareFields: [],
+    });
 
     vi.mocked(followUpExecutionProcess).mockResolvedValue({
       id: 'attempt-2',
@@ -85,9 +107,10 @@ describe('PreviewPanelWrapper', () => {
       />
     );
 
-    fireEvent.click(screen.getByRole('button', { name: /request agent preview/i }));
+    fireEvent.click(screen.getByRole('button', { name: /start preview/i }));
 
     await waitFor(() => {
+      expect(startServer).toHaveBeenCalled();
       expect(followUpExecutionProcess).toHaveBeenCalledWith(
         'process-1',
         expect.stringContaining('Deploy a preview for the latest code in this attempt.')
@@ -103,10 +126,10 @@ describe('PreviewPanelWrapper', () => {
       status: 'running',
       url: 'http://localhost:42574',
       errorMessage: undefined,
-      startServer: vi.fn().mockResolvedValue(undefined),
-      stopServer: vi.fn().mockResolvedValue(undefined),
+      startServer: vi.fn().mockResolvedValue(true),
+      stopServer: vi.fn().mockResolvedValue(false),
       dismissPreview: vi.fn(),
-      restartServer: vi.fn().mockResolvedValue(undefined),
+      restartServer: vi.fn().mockResolvedValue(false),
       isLoading: false,
       startDisabled: false,
       startDisabledReason: undefined,
@@ -114,6 +137,8 @@ describe('PreviewPanelWrapper', () => {
       previewRevision: 0,
       canStopPreview: false,
       dismissOnly: false,
+      cloudflareReady: true,
+      missingCloudflareFields: [],
     });
 
     vi.mocked(sendAttemptInput).mockResolvedValue(undefined as never);
@@ -134,5 +159,116 @@ describe('PreviewPanelWrapper', () => {
         expect.stringContaining('Stop the preview that is currently associated with this attempt.')
       );
     });
+  });
+
+  it('does not create a follow-up when the hard preview start flow succeeds', async () => {
+    const startServer = vi.fn().mockResolvedValue(true);
+
+    vi.mocked(useDevServer).mockReturnValue({
+      status: 'idle',
+      url: undefined,
+      errorMessage: undefined,
+      startServer,
+      stopServer: vi.fn().mockResolvedValue(true),
+      dismissPreview: vi.fn(),
+      restartServer: vi.fn().mockResolvedValue(true),
+      isLoading: false,
+      startDisabled: false,
+      startDisabledReason: undefined,
+      externalPreview: false,
+      previewRevision: 0,
+      canStopPreview: false,
+      dismissOnly: false,
+      cloudflareReady: true,
+      missingCloudflareFields: [],
+    });
+
+    render(
+      <PreviewPanelWrapper
+        taskId="task-1"
+        attemptId="attempt-1"
+        attemptStatus="RUNNING"
+      />
+    );
+
+    fireEvent.click(screen.getByRole('button', { name: /start preview/i }));
+
+    await waitFor(() => {
+      expect(startServer).toHaveBeenCalled();
+    });
+
+    expect(sendAttemptInput).not.toHaveBeenCalled();
+    expect(followUpExecutionProcess).not.toHaveBeenCalled();
+  });
+
+  it('does not send an agent stop follow-up when the hard stop flow succeeds', async () => {
+    const stopServer = vi.fn().mockResolvedValue(true);
+
+    vi.mocked(useDevServer).mockReturnValue({
+      status: 'running',
+      url: 'http://localhost:42574',
+      errorMessage: undefined,
+      startServer: vi.fn().mockResolvedValue(true),
+      stopServer,
+      dismissPreview: vi.fn(),
+      restartServer: vi.fn().mockResolvedValue(true),
+      isLoading: false,
+      startDisabled: false,
+      startDisabledReason: undefined,
+      externalPreview: false,
+      previewRevision: 0,
+      canStopPreview: true,
+      dismissOnly: false,
+      cloudflareReady: true,
+      missingCloudflareFields: [],
+    });
+
+    render(
+      <PreviewPanelWrapper
+        taskId="task-1"
+        attemptId="attempt-1"
+        attemptStatus="RUNNING"
+      />
+    );
+
+    fireEvent.click(screen.getByRole('button', { name: /stop preview/i }));
+
+    await waitFor(() => {
+      expect(stopServer).toHaveBeenCalled();
+    });
+
+    expect(sendAttemptInput).not.toHaveBeenCalled();
+    expect(followUpExecutionProcess).not.toHaveBeenCalled();
+  });
+
+  it('shows a public-url-unavailable badge when preview is local and cloudflare settings are missing', () => {
+    vi.mocked(useDevServer).mockReturnValue({
+      status: 'running',
+      url: 'http://127.0.0.1:4174',
+      errorMessage: undefined,
+      startServer: vi.fn().mockResolvedValue(true),
+      stopServer: vi.fn().mockResolvedValue(true),
+      dismissPreview: vi.fn(),
+      restartServer: vi.fn().mockResolvedValue(true),
+      isLoading: false,
+      startDisabled: false,
+      startDisabledReason: undefined,
+      externalPreview: false,
+      previewRevision: 0,
+      canStopPreview: true,
+      dismissOnly: false,
+      cloudflareReady: false,
+      missingCloudflareFields: ['cloudflare_account_id', 'cloudflare_api_token'],
+    });
+
+    render(
+      <PreviewPanelWrapper
+        taskId="task-1"
+        attemptId="attempt-1"
+        attemptStatus="RUNNING"
+      />
+    );
+
+    expect(screen.getByText('Public URL unavailable')).toBeTruthy();
   });
 });

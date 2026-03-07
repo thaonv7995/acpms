@@ -1689,7 +1689,7 @@ Project type: {}
         self.log(
             attempt_id,
             "system",
-            "Expected output from agent after deployment prep format: PREVIEW_TARGET: <local-preview-url>",
+            "Expected output from agent after deployment prep format: PREVIEW_TARGET: <local-preview-url> and PREVIEW_URL: <public-or-local-preview-url>",
         )
         .await?;
 
@@ -1727,8 +1727,9 @@ Project type: {}
             } else {
                 "Preview delivery is enabled but agent did not output PREVIEW_TARGET. \
                 Deploy preview requires: start the app (e.g. docker compose up -d or npm run dev) \
-                and output PREVIEW_TARGET: http://127.0.0.1:<port> or create .acpms/preview-output.json \
-                with preview_target and runtime_control metadata for stoppable Docker preview. \
+                and output PREVIEW_TARGET: http://127.0.0.1:<port> plus PREVIEW_URL: <public-or-local-url>, \
+                or create .acpms/preview-output.json with preview_target, preview_url, and runtime_control metadata \
+                for stoppable Docker preview. PREVIEW_URL may be the same local URL as PREVIEW_TARGET when no public URL exists. \
                 If you cannot provide PREVIEW_TARGET, you MUST output DEPLOYMENT_FAILURE_REASON: <root cause> \
                 (e.g. app failed to start, port conflict, docker compose error, Cloudflare not configured)."
                     .to_string()

@@ -102,9 +102,10 @@ For a single container:
 ## Output Requirements
 - Also print:
   - `PREVIEW_TARGET: http://127.0.0.1:<port>`
-- If a public URL exists, also print:
-  - `PREVIEW_URL: https://...`
-- If only a local preview exists, `PREVIEW_URL` may match `PREVIEW_TARGET`.
+- Always print:
+  - `PREVIEW_URL: <url>`
+- If a public URL exists, `PREVIEW_URL` should be that public URL.
+- If only a local preview exists, `PREVIEW_URL` should be the same local URL as `PREVIEW_TARGET`.
 
 ## Decision Rules
 | Situation | Action |

@@ -18,6 +18,39 @@ interface PreviewPanelWrapperProps {
   onFollowUpAttemptCreated?: (attemptId: string) => void;
 }
 
+function isLocalPreviewUrl(candidate?: string): boolean {
+  if (!candidate) {
+    return false;
+  }
+
+  const normalized = candidate.trim().toLowerCase();
+  return (
+    normalized.startsWith('http://localhost:') ||
+    normalized.startsWith('https://localhost:') ||
+    normalized.startsWith('http://127.0.0.1:') ||
+    normalized.startsWith('https://127.0.0.1:') ||
+    normalized.startsWith('http://0.0.0.0:') ||
+    normalized.startsWith('https://0.0.0.0:') ||
+    normalized.startsWith('http://[::1]:') ||
+    normalized.startsWith('https://[::1]:')
+  );
+}
+
+function formatMissingCloudflareField(field: string): string {
+  switch (field) {
+    case 'cloudflare_account_id':
+      return 'Account ID';
+    case 'cloudflare_api_token':
+      return 'API Token';
+    case 'cloudflare_zone_id':
+      return 'Zone ID';
+    case 'cloudflare_base_domain':
+      return 'Base Domain';
+    default:
+      return field.replace(/_/g, ' ');
+  }
+}
+
 const PREVIEW_RUNTIME_DISABLED_REASON =
   'preview unavailable: docker preview runtime is disabled';
 
@@ -26,8 +59,8 @@ const AGENT_PREVIEW_FOLLOW_UP_PROMPT = [
   'Use the `preview-docker-runtime` skill.',
   'If a public/tunneled preview is needed, also use `setup-cloudflare-tunnel` after the local Docker preview is reachable.',
   'Run the preview in Docker only, not as a host process.',
-  'Keep `PREVIEW_TARGET` as the local Docker preview URL and write the public Cloudflare tunnel URL to `PREVIEW_URL`.',
-  'Verify the preview serves the latest code, then print `PREVIEW_TARGET: <local-url>` in the logs and `PREVIEW_URL: <public-url>` when a tunnel is available.',
+  'Keep `PREVIEW_TARGET` as the local Docker preview URL. If a public Cloudflare tunnel URL is available, write it to `PREVIEW_URL`; otherwise set `PREVIEW_URL` to the same local URL as `PREVIEW_TARGET`.',
+  'Verify the preview serves the latest code, then print `PREVIEW_TARGET: <local-url>` in the logs and also print `PREVIEW_URL: <url>` where the URL is public when available, or the same local URL when no public URL exists.',
   'Write `.acpms/preview-output.json` with `preview_target`, `preview_url`, and `runtime_control` metadata if the runtime can be stopped by ACPMS.',
 ].join(' ');
 
@@ -43,8 +76,8 @@ const AGENT_PREVIEW_RESTART_PROMPT = [
   'Restart the preview for the latest code in this attempt.',
   'Use the `preview-docker-runtime` skill.',
   'If a public/tunneled preview is needed, also use `setup-cloudflare-tunnel` after the local Docker preview is reachable.',
-  'Stop the old Docker preview runtime if one is still running, start a fresh Docker preview, and keep `PREVIEW_TARGET` as the local Docker URL while `PREVIEW_URL` stores any public tunnel URL.',
-  'Verify the preview serves the latest code, then print `PREVIEW_TARGET: <local-url>` in the logs and `PREVIEW_URL: <public-url>` when a tunnel is available.',
+  'Stop the old Docker preview runtime if one is still running, start a fresh Docker preview, and keep `PREVIEW_TARGET` as the local Docker URL. If a public tunnel URL exists, write it to `PREVIEW_URL`; otherwise keep `PREVIEW_URL` equal to the same local URL.',
+  'Verify the preview serves the latest code, then print `PREVIEW_TARGET: <local-url>` in the logs and also print `PREVIEW_URL: <url>` where the URL is public when available, or the same local URL when no public URL exists.',
   'Write `.acpms/preview-output.json` with the new `preview_target`, `preview_url`, and `runtime_control` metadata if ACPMS can stop it.',
 ].join(' ');
 
@@ -71,6 +104,8 @@ export function PreviewPanelWrapper({
     previewRevision,
     canStopPreview,
     dismissOnly,
+    cloudflareReady,
+    missingCloudflareFields,
   } = useDevServer(taskId, attemptId, fallbackPreviewUrl, autoStartOnMount);
   const { processes } = useExecutionProcessesStream(attemptId);
   const [isRequestingAgentPreview, setIsRequestingAgentPreview] = useState(false);
@@ -84,7 +119,6 @@ export function PreviewPanelWrapper({
   const latestProcessId =
     processes.length > 0 ? processes[processes.length - 1].id : null;
   const hasAgentActionContext = isAttemptRunning || Boolean(latestProcessId);
-  const useAgentManagedPreviewActions = hasAgentActionContext;
   const hasPreviewUrl = Boolean(url);
 
   useEffect(() => {
@@ -132,42 +166,36 @@ export function PreviewPanelWrapper({
   ]);
 
   const handleStart = useCallback(async () => {
-    if (useAgentManagedPreviewActions) {
-      await requestAgentPreviewAction(AGENT_PREVIEW_FOLLOW_UP_PROMPT);
-      return;
-    }
-
     setPreviewActionError(undefined);
-    await startServer();
-  }, [requestAgentPreviewAction, startServer, useAgentManagedPreviewActions]);
+    const started = await startServer();
+    if (!started && hasAgentActionContext) {
+      await requestAgentPreviewAction(AGENT_PREVIEW_FOLLOW_UP_PROMPT);
+    }
+  }, [hasAgentActionContext, requestAgentPreviewAction, startServer]);
 
   const handleStop = useCallback(async () => {
-    if (useAgentManagedPreviewActions && hasPreviewUrl) {
-      await requestAgentPreviewAction(AGENT_PREVIEW_STOP_PROMPT);
-      return;
-    }
-
     setPreviewActionError(undefined);
-    await stopServer();
+    const stopped = await stopServer();
+    if (!stopped && hasAgentActionContext && hasPreviewUrl) {
+      await requestAgentPreviewAction(AGENT_PREVIEW_STOP_PROMPT);
+    }
   }, [
+    hasAgentActionContext,
     hasPreviewUrl,
     requestAgentPreviewAction,
     stopServer,
-    useAgentManagedPreviewActions,
   ]);
 
   const handleRestart = useCallback(async () => {
-    if (useAgentManagedPreviewActions) {
-      await requestAgentPreviewAction(AGENT_PREVIEW_RESTART_PROMPT);
-      return;
-    }
-
     setPreviewActionError(undefined);
-    await restartServer();
+    const restarted = await restartServer();
+    if (!restarted && hasAgentActionContext) {
+      await requestAgentPreviewAction(AGENT_PREVIEW_RESTART_PROMPT);
+    }
   }, [
+    hasAgentActionContext,
     requestAgentPreviewAction,
     restartServer,
-    useAgentManagedPreviewActions,
   ]);
 
   const effectiveStatus = previewActionError
@@ -180,23 +208,32 @@ export function PreviewPanelWrapper({
     isTaskDone &&
     typeof startDisabledReason === 'string' &&
     startDisabledReason.toLowerCase().includes(PREVIEW_RUNTIME_DISABLED_REASON)
-      ? 'Preview runtime is disabled here. Starting preview from a completed task would create a new follow-up attempt, so use the follow-up box if you want that explicitly.'
+      ? 'Preview runtime is disabled here. ACPMS will try the built-in preview flow first, then fall back to an agent follow-up if needed.'
       : undefined;
-  const effectiveStartDisabled = useAgentManagedPreviewActions
-    ? false
-    : startDisabled || Boolean(previewStartWouldCreateAttemptReason);
+  const effectiveStartDisabled =
+    !hasAgentActionContext &&
+    (startDisabled || Boolean(previewStartWouldCreateAttemptReason));
   const effectiveStartDisabledReason =
-    previewStartWouldCreateAttemptReason || startDisabledReason;
-  const startActionTitle = useAgentManagedPreviewActions
-    ? 'Ask the agent to deploy a preview for this attempt'
-    : undefined;
-  const startActionLabel = useAgentManagedPreviewActions
-    ? 'Request agent preview'
+    hasAgentActionContext
+      ? startDisabledReason
+      : previewStartWouldCreateAttemptReason || startDisabledReason;
+  const startActionTitle = hasAgentActionContext
+    ? 'Try ACPMS preview first, then fall back to an agent follow-up if needed'
     : undefined;
   const effectiveCanStopPreview =
-    (useAgentManagedPreviewActions && hasPreviewUrl) || canStopPreview;
+    (hasAgentActionContext && hasPreviewUrl) || canStopPreview;
   const effectiveDismissOnly =
     hasPreviewUrl && !effectiveCanStopPreview ? true : dismissOnly;
+  const showPublicUrlUnavailableBadge =
+    Boolean(url) &&
+    isLocalPreviewUrl(url) &&
+    !cloudflareReady &&
+    missingCloudflareFields.length > 0;
+  const publicUrlUnavailableTitle = showPublicUrlUnavailableBadge
+    ? `Missing Cloudflare settings: ${missingCloudflareFields
+        .map(formatMissingCloudflareField)
+        .join(', ')}.`
+    : undefined;
 
   return (
     <PreviewPanel
@@ -213,9 +250,12 @@ export function PreviewPanelWrapper({
       startDisabled={effectiveStartDisabled}
       startDisabledReason={effectiveStartDisabledReason}
       startActionTitle={startActionTitle}
-      startActionLabel={startActionLabel}
       canStopPreview={effectiveCanStopPreview}
       dismissOnly={effectiveDismissOnly}
+      statusBadgeLabel={
+        showPublicUrlUnavailableBadge ? 'Public URL unavailable' : undefined
+      }
+      statusBadgeTitle={publicUrlUnavailableTitle}
     />
   );
 }

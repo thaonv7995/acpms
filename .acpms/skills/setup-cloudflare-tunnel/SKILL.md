@@ -33,6 +33,11 @@ Ghi file `.acpms/preview-output.json` trước khi hoàn thành:
 {"preview_target": "http://127.0.0.1:3000", "preview_url": "https://task-xxx.example.com"}
 ```
 
+Rules:
+- `preview_target` luôn là local runtime URL thật, ví dụ `http://127.0.0.1:3000`
+- nếu có public tunnel URL thì ghi vào `preview_url`
+- nếu chưa có hoặc không tạo được public URL thì vẫn ghi `preview_url` bằng chính local URL trong `preview_target`
+
 - Tạo thư mục `.acpms/` nếu chưa có: `mkdir -p .acpms`
 - Ghi file: `echo '{"preview_target":"http://127.0.0.1:3000"}' > .acpms/preview-output.json`
 - Hệ thống đọc file này, lưu vào metadata, rồi xóa file.
@@ -40,8 +45,9 @@ Ghi file `.acpms/preview-output.json` trước khi hoàn thành:
 ### Option B — Log output (fallback)
 Always print:
 - `PREVIEW_TARGET: http://127.0.0.1:<port>`
-Optionally print when available:
-- `PREVIEW_URL: https://...`
+Also print:
+- `PREVIEW_URL: https://...` when a public URL exists
+- or `PREVIEW_URL: http://127.0.0.1:<port>` when no public URL exists yet
 
 ## Log for User
 **Agent must output these messages** when they occur—they appear in the attempt log (chat session).
@@ -55,7 +61,7 @@ Optionally print when available:
 ## Decision Rules
 | Situation | Action |
 |---|---|
-| Public URL not available yet | Still output `PREVIEW_TARGET`, note public URL pending. |
+| Public URL not available yet | Still output `PREVIEW_TARGET`, and set `PREVIEW_URL` to the same local URL. |
 | Local runtime not reachable | Output Log for User message; report root cause. **MUST** output `DEPLOYMENT_FAILURE_REASON: <explanation>`. |
 | Cloudflare/tunnel failed | Output Log for User message; **MUST** output `DEPLOYMENT_FAILURE_REASON: <explanation>`. |
 | Cannot provide PREVIEW_TARGET | **MUST** output `DEPLOYMENT_FAILURE_REASON: <root cause>` before finishing (e.g. app failed to start, port conflict, docker compose error, Cloudflare not configured). User needs to know why. |

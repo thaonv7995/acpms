@@ -30,10 +30,10 @@ interface UseDevServerReturn {
   status: DevServerStatus;
   url?: string;
   errorMessage?: string;
-  startServer: () => Promise<void>;
-  stopServer: () => Promise<void>;
+  startServer: () => Promise<boolean>;
+  stopServer: () => Promise<boolean>;
   dismissPreview: () => void;
-  restartServer: () => Promise<void>;
+  restartServer: () => Promise<boolean>;
   isLoading: boolean;
   startDisabled: boolean;
   startDisabledReason?: string;
@@ -41,6 +41,8 @@ interface UseDevServerReturn {
   previewRevision: number;
   canStopPreview: boolean;
   dismissOnly: boolean;
+  cloudflareReady: boolean;
+  missingCloudflareFields: string[];
 }
 
 interface PreviewLogSignal {
@@ -436,10 +438,14 @@ export function useDevServer(
   });
   const [isLoading, setIsLoading] = useState(false);
   const [hasHydrated, setHasHydrated] = useState(false);
+  const [cloudflareReady, setCloudflareReady] = useState(true);
+  const [missingCloudflareFields, setMissingCloudflareFields] = useState<string[]>([]);
 
   // Hydrate preview state from backend when task/attempt changes.
   useEffect(() => {
     setHasHydrated(false);
+    setCloudflareReady(true);
+    setMissingCloudflareFields([]);
     const dismissedExternalPreviewSignal =
       readDismissedExternalPreviewSignal(attemptId);
     setState({
@@ -478,6 +484,8 @@ export function useDevServer(
 
         const readinessBlocked = !readiness.ready;
         const readinessReason = readiness.reason || undefined;
+        setCloudflareReady(readiness.cloudflare_ready);
+        setMissingCloudflareFields(readiness.missing_cloudflare_fields || []);
         const agentPreviewSignal =
           typeof fallbackPreviewUrl === 'string' && fallbackPreviewUrl.trim().length > 0
             ? {
@@ -551,6 +559,8 @@ export function useDevServer(
       })
       .catch((error) => {
         if (cancelled) return;
+        setCloudflareReady(true);
+        setMissingCloudflareFields([]);
         setState((prev) => ({
           ...prev,
           errorMessage: parseApiError(error, 'Failed to load preview status'),
@@ -754,7 +764,7 @@ export function useDevServer(
   }, [attemptId, state.status, state.externalPreview]);
 
   const startServer = useCallback(async () => {
-    if (state.status === 'running' || isLoading) return;
+    if (state.status === 'running' || isLoading) return false;
     if (state.startDisabled) {
       setState((prev) => ({
         ...prev,
@@ -762,7 +772,7 @@ export function useDevServer(
         errorMessage:
           prev.startDisabledReason || 'Preview cannot be started due to readiness checks',
       }));
-      return;
+      return false;
     }
     if (!attemptId) {
       setState({
@@ -780,7 +790,7 @@ export function useDevServer(
         canStopPreview: false,
         dismissOnly: false,
       });
-      return;
+      return false;
     }
 
     setIsLoading(true);
@@ -803,6 +813,7 @@ export function useDevServer(
         dismissOnly: false,
       });
       writeDismissedExternalPreviewSignal(attemptId, undefined);
+      return true;
     } catch (error) {
       const parsedMessage = parseApiError(error, 'Failed to start preview');
       const blockedByReadiness = isPreviewReadinessBlockingMessage(parsedMessage);
@@ -821,23 +832,24 @@ export function useDevServer(
         canStopPreview: false,
         dismissOnly: false,
       });
+      return false;
     } finally {
       setIsLoading(false);
     }
   }, [state.status, state.startDisabled, state.startDisabledReason, isLoading, attemptId]);
 
   const stopServer = useCallback(async () => {
-    if (isLoading) return;
+    if (isLoading) return false;
     if (!attemptId) {
       setState((prev) => ({
         ...prev,
         status: 'error',
         errorMessage: 'Attempt ID is required to stop preview',
       }));
-      return;
+      return false;
     }
 
-    if (state.status !== 'running' && !state.previewId) return;
+    if (state.status !== 'running' && !state.previewId) return true;
 
     setIsLoading(true);
     setState((prev) => ({ ...prev, status: 'stopping' }));
@@ -864,6 +876,7 @@ export function useDevServer(
         canStopPreview: false,
         dismissOnly: false,
       });
+      return true;
     } catch (error) {
       const parsedMessage = parseApiError(error, 'Failed to stop preview');
       if (isPreviewAlreadyStoppedMessage(parsedMessage)) {
@@ -889,7 +902,7 @@ export function useDevServer(
             state.lastExternalPreviewSignal
           );
         }
-        return;
+        return true;
       }
       setState((prev) => ({
         ...prev,
@@ -903,15 +916,21 @@ export function useDevServer(
         canStopPreview: false,
         dismissOnly: false,
       }));
+      return false;
     } finally {
       setIsLoading(false);
     }
   }, [state.status, state.previewId, state.externalPreview, isLoading, attemptId]);
 
   const restartServer = useCallback(async () => {
-    if (state.status !== 'running' || isLoading || state.externalPreview) return;
-    await stopServer();
-    await startServer();
+    if (state.status !== 'running' || isLoading || state.externalPreview) {
+      return false;
+    }
+    const stopped = await stopServer();
+    if (!stopped) {
+      return false;
+    }
+    return startServer();
   }, [state.status, state.externalPreview, isLoading, stopServer, startServer]);
 
   const dismissPreview = useCallback(() => {
@@ -980,5 +999,7 @@ export function useDevServer(
     previewRevision: state.previewRevision,
     canStopPreview: state.canStopPreview,
     dismissOnly: state.dismissOnly,
+    cloudflareReady,
+    missingCloudflareFields,
   };
 }
