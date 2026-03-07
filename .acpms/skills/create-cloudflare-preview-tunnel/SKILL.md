@@ -54,6 +54,7 @@ Also emit machine-parseable lines when applicable:
 | Local runtime not reachable | Output Log for User message; do not blame Cloudflare |
 
 ## Guardrails
-- Never hardcode credentials; read from System Settings only.
+- Never hardcode credentials; read only from the ACPMS-injected env vars.
 - On error: agent must output the Log for User message—do not assume backend will log.
 - Tunnel/deployment errors must not fail the attempt (handled by backend).
+- When Cloudflare config is present, do not silently stop at local preview only. Try to create the public URL first, then fall back only if tunnel creation really fails.

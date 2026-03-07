@@ -814,15 +814,17 @@ Project type: {}
 2. Ensure the app can be deployed for preview/runtime.
 3. Start preview runtime and make sure the reported local port is actually serving traffic before you finish.
    Only output `PREVIEW_TARGET: http://127.0.0.1:<port>` after `curl` or an equivalent probe succeeds against that local URL.
-4. Creating only `Dockerfile`, `docker-compose.yml`, or `.acpms/preview-output.json` is NOT enough. The preview runtime must actually be running.
+4. If `CLOUDFLARE_ACCOUNT_ID`, `CLOUDFLARE_API_TOKEN`, `CLOUDFLARE_ZONE_ID`, and `CLOUDFLARE_BASE_DOMAIN` are present in env, do not stop at local preview only. Also create a public Cloudflare preview URL and set `PREVIEW_URL` to that public URL.
+   Only fall back to `PREVIEW_URL == PREVIEW_TARGET` when Cloudflare tunnel creation truly fails, and then output `CLOUDFLARE_TUNNEL_ERROR: <reason>`.
+5. Creating only `Dockerfile`, `docker-compose.yml`, or `.acpms/preview-output.json` is NOT enough. The preview runtime must actually be running.
    If you launch preview via Docker, also write `.acpms/preview-output.json` with
    `preview_target` and `runtime_control` metadata, for example:
    `{{"preview_target":"http://127.0.0.1:8080","runtime_control":{{"controllable":true,"runtime_type":"docker_container","container_name":"my-preview"}}}}`
    or
    `{{"preview_target":"http://127.0.0.1:8080","runtime_control":{{"controllable":true,"runtime_type":"docker_compose_project","compose_project_name":"my-preview-project"}}}}`
-5. Re-run the failing deployment command(s) before finishing.
-6. Commit and push fixes to the same branch/repository.
-7. Summarize root cause and deployment fixes in final output.
+6. Re-run the failing deployment command(s) before finishing.
+7. Commit and push fixes to the same branch/repository.
+8. Summarize root cause and deployment fixes in final output.
 "#,
             current_round,
             max_rounds,
@@ -869,12 +871,14 @@ Project type: {}
 4. Stop/remove any stale preview container, compose project, or port-conflicting runtime first.
 5. You may create, edit, or delete Docker/compose/supporting files as needed until the preview works.
 6. Verify the local runtime responds successfully before finishing, for example with `curl -sf http://127.0.0.1:<port>` or another real HTTP check.
-7. Only after the runtime is reachable, write `.acpms/preview-output.json` with `preview_target`, `preview_url`, and `runtime_control`.
-8. Only after the runtime is reachable, print:
+7. If `CLOUDFLARE_ACCOUNT_ID`, `CLOUDFLARE_API_TOKEN`, `CLOUDFLARE_ZONE_ID`, and `CLOUDFLARE_BASE_DOMAIN` are present in env, you must also try to create a public Cloudflare preview URL after the local runtime is reachable.
+8. Only after the runtime is reachable, write `.acpms/preview-output.json` with `preview_target`, `preview_url`, and `runtime_control`.
+9. Only after the runtime is reachable, print:
    - `PREVIEW_TARGET: http://127.0.0.1:<port>`
    - `PREVIEW_URL: <public-or-local-url>`
-9. If no public URL exists, `PREVIEW_URL` must equal `PREVIEW_TARGET`.
-10. If you still cannot make preview run, output `DEPLOYMENT_FAILURE_REASON: <root cause>`.
+10. When Cloudflare tunnel creation succeeds, `PREVIEW_URL` must be the public Cloudflare URL.
+11. Only if Cloudflare tunnel creation truly fails may `PREVIEW_URL` equal `PREVIEW_TARGET`; in that case also output `CLOUDFLARE_TUNNEL_ERROR: <reason>`.
+12. If you still cannot make preview run, output `DEPLOYMENT_FAILURE_REASON: <root cause>`.
 "#,
             current_round,
             max_rounds,

@@ -1449,6 +1449,7 @@ fn derive_skill_chain(
                 push_skill(&mut ids, &mut seen, "cloudflare-tunnel-setup-guide");
                 push_skill(&mut ids, &mut seen, "deploy-precheck-cloudflare");
                 push_skill(&mut ids, &mut seen, "setup-cloudflare-tunnel");
+                push_skill(&mut ids, &mut seen, "create-cloudflare-preview-tunnel");
             }
         }
         ProjectType::Api => {
@@ -1460,6 +1461,7 @@ fn derive_skill_chain(
                 push_skill(&mut ids, &mut seen, "cloudflare-tunnel-setup-guide");
                 push_skill(&mut ids, &mut seen, "deploy-precheck-cloudflare");
                 push_skill(&mut ids, &mut seen, "setup-cloudflare-tunnel");
+                push_skill(&mut ids, &mut seen, "create-cloudflare-preview-tunnel");
             }
         }
         ProjectType::Desktop => {
@@ -2247,7 +2249,15 @@ fn builtin_skill_content(skill_id: &str) -> Option<&'static str> {
 - Produce PREVIEW_TARGET for runtime endpoint.
 - If preview runtime is controllable via Docker, emit `.acpms/preview-output.json` with `runtime_control`.
 - Read Cloudflare config from env vars `CLOUDFLARE_ACCOUNT_ID`, `CLOUDFLARE_API_TOKEN`, `CLOUDFLARE_ZONE_ID`, `CLOUDFLARE_BASE_DOMAIN`.
+- If all 4 Cloudflare env vars are present, try to create a public preview URL before falling back to a local PREVIEW_URL.
 - If public URL is available, output PREVIEW_URL."#,
+        ),
+        "create-cloudflare-preview-tunnel" => Some(
+            r#"Create a public Cloudflare preview URL after the local runtime is reachable.
+- Read Cloudflare config from env vars `CLOUDFLARE_ACCOUNT_ID`, `CLOUDFLARE_API_TOKEN`, `CLOUDFLARE_ZONE_ID`, `CLOUDFLARE_BASE_DOMAIN`.
+- Keep PREVIEW_TARGET as the local runtime URL.
+- Set PREVIEW_URL to the public Cloudflare tunnel/domain URL when tunnel creation succeeds.
+- Only fall back to a local PREVIEW_URL when Cloudflare tunnel creation truly fails."#,
         ),
         "deploy-precheck-cloudflare" => Some(
             r#"Before deploy/tunnel, verify Cloudflare settings are configured.
@@ -2312,17 +2322,19 @@ fn builtin_skill_content(skill_id: &str) -> Option<&'static str> {
         ),
         "release-note-and-delivery-summary" => Some(
             r#"Produce release-ready delivery summary.
-- Include code, validation, deploy status, and follow-ups.
-- Keep summary concise and evidence-based."#,
+- Include only user-relevant outcome, verification, deploy status, and follow-up when needed.
+- Keep it short and evidence-based.
+- Do not repeat details that are already obvious from the timeline."#,
         ),
         "final-report" => Some(
-            r#"End with a final report section:
-- Task summary
-- Deployment status
-- Commands executed
-- URLs/endpoints
-- Verification results
-- Remaining risks/issues"#,
+            r#"End with a short final report:
+- Use `## Final Report`
+- Prefer 2-4 bullets total
+- Include only the sections that matter: `Done`, `Verified`, `Deploy`, `Next`
+- Omit empty or irrelevant sections
+- Do not include command transcripts or metadata patch summaries unless the task was about metadata
+- If there is no real risk or follow-up, omit it
+- After the final report, do not repeat the same summary in extra prose"#,
         ),
         "rollback-deploy" => Some(
             r#"If deployment is unsafe or broken, rollback to previous stable deployment reference.
