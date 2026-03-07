@@ -121,26 +121,24 @@ const SETTINGS_GUIDES: Record<
     },
     cloudflare: {
         title: 'Set Up Cloudflare Preview',
-        description:
-            'Fill the 4 required fields, then run Check to verify tunnel and DNS access.',
-        audienceLabel: '4 Required Fields',
+        description: 'Fill the 4 fields, save, then click Check.',
+        audienceLabel: 'Quick Setup',
         prep: [
-            'A domain already active in Cloudflare',
-            'Access to the Cloudflare account that owns that zone',
+            'A Cloudflare zone you control',
         ],
         steps: [
             {
                 label: 'Step 1',
                 title: 'Copy Account ID',
                 detail:
-                    'Open the Cloudflare account that owns your domain and copy the Account ID.',
+                    'Open the Cloudflare account that owns your zone and copy the Account ID.',
                 icon: 'badge',
             },
             {
                 label: 'Step 2',
-                title: 'Copy Zone ID',
+                title: 'Copy Zone ID and choose a base domain',
                 detail:
-                    'Open the target domain, go to Overview, and copy the Zone ID.',
+                    'Open the target zone, go to Overview, copy the Zone ID, then pick a base domain such as `preview.example.com`.',
                 icon: 'dns',
             },
             {
@@ -150,20 +148,19 @@ const SETTINGS_GUIDES: Record<
                     'In My Profile -> API Tokens -> Create Custom Token, add `Account / Cloudflare Tunnel / Edit` and `Zone / DNS / Edit`.',
                 icon: 'api',
                 hint:
-                    'Use the same account and zone as Steps 1-2. Do not use a Global API Key.',
+                    'Use the same account and zone as above. Do not use a Global API Key.',
             },
             {
                 label: 'Step 4',
-                title: 'Paste token + base domain, then Check',
+                title: 'Paste the raw token and click Check',
                 detail:
-                    'Paste the raw API token only, set a base domain such as `preview.example.com`, save, then click Check.',
+                    'Paste the token exactly as Cloudflare shows it, save, then click Check.',
                 icon: 'content_paste',
                 hint:
-                    'Do not paste `Bearer ...`, quotes, or masked bullets like `••••`.',
+                    'Do not paste `Bearer `, quotes, or masked bullets like `••••`.',
             },
         ],
-        note:
-            'Check should end with Connection OK, Tunnel OK, DNS OK, and Cleanup OK.',
+        note: 'A valid setup ends with Connection OK, Tunnel OK, DNS OK, and Cleanup OK.',
     },
 };
 

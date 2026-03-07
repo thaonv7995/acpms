@@ -2,7 +2,7 @@
 # ACPMS Installer - One-shot deployment (A-Z)
 # Docs: docs/open-source/03_installer_script.md
 #
-# Prerequisites: script checks and can install curl, jq, tar, Docker, Docker Compose, Node 18+.
+# Prerequisites: script checks and can install curl, jq, tar, Docker, Docker Compose, cloudflared, Node 18+.
 # Interactive mode: prompts for consent before installing deps or using sudo.
 #
 # Env:
@@ -229,6 +229,89 @@ check_docker_compose() {
       ;;
     *) die "Install Docker Compose manually";;
   esac
+}
+
+# Check cloudflared (recommended for Cloudflare tunnel previews) - auto-install official binary
+check_cloudflared() {
+  if command -v cloudflared >/dev/null 2>&1; then
+    log "cloudflared found: $(command -v cloudflared)"
+    return
+  fi
+
+  log "cloudflared not found."
+  if [ -z "${ACPMS_NONINTERACTIVE:-}" ]; then
+    ask_yes "Install cloudflared now? [Y/n]" "y" || {
+      err "Skipping cloudflared installation. Cloudflare public preview URLs may fall back to local-only preview."
+      return
+    }
+  fi
+
+  local os_name arch_name download_url install_path tmp_file tmp_dir
+  os_name="$(uname -s)"
+  arch_name="$(uname -m)"
+
+  case "$os_name" in
+    Linux)
+      case "$arch_name" in
+        x86_64|amd64) download_url="https://github.com/cloudflare/cloudflared/releases/latest/download/cloudflared-linux-amd64" ;;
+        aarch64|arm64) download_url="https://github.com/cloudflare/cloudflared/releases/latest/download/cloudflared-linux-arm64" ;;
+        *) err "Unsupported architecture for cloudflared auto-install: $arch_name"; return ;;
+      esac
+      install_path="/usr/local/bin/cloudflared"
+      tmp_file="$(mktemp)"
+      log "Downloading cloudflared official binary..."
+      curl -fsSL "$download_url" -o "$tmp_file" || {
+        rm -f "$tmp_file"
+        err "Failed to download cloudflared from $download_url"
+        return
+      }
+      chmod +x "$tmp_file"
+      $USE_SUDO mv "$tmp_file" "$install_path" || {
+        rm -f "$tmp_file"
+        die "Failed to install cloudflared to $install_path"
+      }
+      ;;
+    Darwin)
+      case "$arch_name" in
+        x86_64|amd64) download_url="https://github.com/cloudflare/cloudflared/releases/latest/download/cloudflared-darwin-amd64.tgz" ;;
+        arm64|aarch64) download_url="https://github.com/cloudflare/cloudflared/releases/latest/download/cloudflared-darwin-arm64.tgz" ;;
+        *) err "Unsupported architecture for cloudflared auto-install: $arch_name"; return ;;
+      esac
+      install_path="$HOME/.local/bin/cloudflared"
+      tmp_dir="$(mktemp -d)"
+      mkdir -p "$HOME/.local/bin"
+      log "Downloading cloudflared official archive..."
+      curl -fsSL "$download_url" -o "$tmp_dir/cloudflared.tgz" || {
+        rm -rf "$tmp_dir"
+        err "Failed to download cloudflared from $download_url"
+        return
+      }
+      tar -xzf "$tmp_dir/cloudflared.tgz" -C "$tmp_dir" || {
+        rm -rf "$tmp_dir"
+        die "Failed to extract cloudflared archive"
+      }
+      [ -f "$tmp_dir/cloudflared" ] || {
+        rm -rf "$tmp_dir"
+        die "cloudflared archive did not contain expected binary"
+      }
+      chmod +x "$tmp_dir/cloudflared"
+      mv "$tmp_dir/cloudflared" "$install_path" || {
+        rm -rf "$tmp_dir"
+        die "Failed to install cloudflared to $install_path"
+      }
+      rm -rf "$tmp_dir"
+      export PATH="$HOME/.local/bin:$PATH"
+      ;;
+    *)
+      err "Unsupported OS for cloudflared auto-install: $os_name"
+      return
+      ;;
+  esac
+
+  if ! [ -x "$install_path" ]; then
+    die "cloudflared install completed but binary is missing at $install_path"
+  fi
+  log "cloudflared installed: $install_path"
 }
 
 # Start Postgres + MinIO (auto-start if not running - one-shot deploy)
@@ -1007,7 +1090,7 @@ do_uninstall() {
 main_install() {
   log "ACPMS Installer - $REPO"
   if [ -z "${ACPMS_NONINTERACTIVE:-}" ]; then
-    log "This script will check prerequisites (curl, jq, tar, Docker, Node.js) and may install them if missing."
+    log "This script will check prerequisites (curl, jq, tar, Docker, Docker Compose, cloudflared, Node.js) and may install them if missing."
     log "On Linux you may be prompted for your password (sudo) to install packages and run the server."
     ask_yes "Continue? [Y/n]" "y" || exit 0
   fi
@@ -1015,6 +1098,7 @@ main_install() {
   check_docker
   check_docker_compose
   detect_platform
+  check_cloudflared
   check_services
   check_agent_cli_providers
 
