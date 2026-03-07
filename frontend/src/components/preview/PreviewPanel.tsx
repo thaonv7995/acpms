@@ -5,6 +5,7 @@ import {
   Loader2,
   Maximize2,
   Minimize2,
+  Pencil,
   Play,
   RefreshCw,
   RotateCw,
@@ -29,6 +30,8 @@ interface PreviewPanelProps {
   onRebuild?: () => void;
   startDisabled?: boolean;
   startDisabledReason?: string;
+  startActionTitle?: string;
+  startActionLabel?: string;
   canStopPreview?: boolean;
   dismissOnly?: boolean;
   className?: string;
@@ -83,6 +86,8 @@ export function PreviewPanel({
   onRebuild,
   startDisabled = false,
   startDisabledReason,
+  startActionTitle,
+  startActionLabel = 'Start preview',
   canStopPreview = false,
   dismissOnly = false,
   className = '',
@@ -90,16 +95,19 @@ export function PreviewPanel({
   const [isFullscreen, setIsFullscreen] = useState(false);
   const [iframeKey, setIframeKey] = useState(0);
   const [isIframeLoading, setIsIframeLoading] = useState(false);
+  const [manualUrlOverride, setManualUrlOverride] = useState<string | undefined>();
   const iframeRef = useRef<HTMLIFrameElement>(null);
   const containerRef = useRef<HTMLDivElement>(null);
-  const iframeSrc = buildIframeSrc(devServerUrl, externalPreview, previewRevision);
+  const effectiveUrl = manualUrlOverride?.trim() || devServerUrl;
+  const iframeSrc = buildIframeSrc(effectiveUrl, externalPreview, previewRevision);
 
   const isRunning = status === 'running';
   const isStarting = status === 'starting';
   const isStopping = status === 'stopping';
   const hasError = status === 'error';
-  const hasUrl = Boolean(devServerUrl);
-  const canShowPreview = hasUrl && (isRunning || externalPreview);
+  const hasUrl = Boolean(effectiveUrl);
+  const hasManualOverride = Boolean(manualUrlOverride?.trim());
+  const canShowPreview = hasUrl && (isRunning || externalPreview || hasManualOverride);
   const canManageRuntime = !externalPreview;
   const effectiveRebuild = onRebuild ?? onRestart;
 
@@ -117,8 +125,8 @@ export function PreviewPanel({
   })();
 
   const statusText = (() => {
-    if (devServerUrl) {
-      return devServerUrl;
+    if (effectiveUrl) {
+      return effectiveUrl;
     }
     if (hasError) {
       return errorMessage || 'Preview failed to start';
@@ -149,6 +157,18 @@ export function PreviewPanel({
   const handleOpen = () => {
     if (!iframeSrc) return;
     window.open(iframeSrc, '_blank', 'noopener,noreferrer');
+  };
+
+  const handleEditUrl = () => {
+    const currentValue = manualUrlOverride?.trim() || devServerUrl || '';
+    const nextValue = window.prompt('Edit preview URL', currentValue);
+    if (nextValue === null) {
+      return;
+    }
+    const trimmed = nextValue.trim();
+    setManualUrlOverride(trimmed.length > 0 ? trimmed : undefined);
+    setIframeKey((prev) => prev + 1);
+    setIsIframeLoading(Boolean(trimmed.length > 0 || devServerUrl));
   };
 
   const handleFullscreen = () => {
@@ -204,8 +224,8 @@ export function PreviewPanel({
                 variant="outline"
                 className="h-8 w-8 text-emerald-400 hover:text-emerald-300 hover:bg-emerald-500/10"
                 disabled={isStarting || isStopping || startDisabled}
-                title={startDisabledReason || 'Start preview'}
-                aria-label="Start preview"
+                title={startActionTitle || startDisabledReason || startActionLabel}
+                aria-label={startActionLabel}
               >
                 {isStarting ? (
                   <Loader2 className="w-4 h-4 animate-spin" />
@@ -226,6 +246,16 @@ export function PreviewPanel({
                 <ExternalLink className="w-4 h-4" />
               </Button>
             )}
+            <Button
+              onClick={handleEditUrl}
+              size="icon"
+              variant="ghost"
+              className="h-8 w-8 text-muted-foreground hover:text-foreground hover:bg-muted"
+              title="Edit preview URL"
+              aria-label="Edit preview URL"
+            >
+              <Pencil className="w-4 h-4" />
+            </Button>
             <Button
               onClick={handleRefresh}
               size="icon"
@@ -318,7 +348,7 @@ export function PreviewPanel({
               </h3>
               <p className="text-sm text-muted-foreground">
                 {!isRunning
-                  ? 'Use the action bar above to start a preview runtime for this task.'
+                  ? 'Use the action bar above to start or request a preview for this task.'
                   : 'Waiting for the preview URL...'}
               </p>
             </div>

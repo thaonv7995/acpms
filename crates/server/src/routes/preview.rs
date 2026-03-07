@@ -571,6 +571,46 @@ fn preview_runtime_stopped(metadata: &Value) -> bool {
     )
 }
 
+fn is_local_loopback_preview_url(candidate: &str) -> bool {
+    candidate.starts_with("http://localhost:")
+        || candidate.starts_with("https://localhost:")
+        || candidate.starts_with("http://127.0.0.1:")
+        || candidate.starts_with("https://127.0.0.1:")
+}
+
+fn preview_signal_stale_due_missing_worktree(metadata: &Value) -> bool {
+    if parse_preview_runtime_control(metadata).is_some() {
+        return false;
+    }
+
+    let preview_url = metadata
+        .get("preview_url_agent")
+        .or_else(|| metadata.get("preview_url"))
+        .or_else(|| metadata.get("preview_target"))
+        .and_then(Value::as_str)
+        .map(str::trim)
+        .filter(|value| !value.is_empty());
+
+    let Some(preview_url) = preview_url else {
+        return false;
+    };
+
+    if !is_local_loopback_preview_url(preview_url) {
+        return false;
+    }
+
+    let worktree_path = metadata
+        .get("worktree_path")
+        .and_then(Value::as_str)
+        .map(str::trim)
+        .filter(|value| !value.is_empty());
+
+    match worktree_path {
+        Some(path) => !std::path::Path::new(path).exists(),
+        None => true,
+    }
+}
+
 fn build_preview_control_response(
     attempt_id: Uuid,
     metadata: &Value,
@@ -599,6 +639,24 @@ fn build_preview_control_response(
             action: "none".to_string(),
             runtime_type: None,
             control_source: None,
+            container_name: None,
+            compose_project_name: None,
+        };
+    }
+
+    if preview_signal_stale_due_missing_worktree(metadata) {
+        return PreviewControlResponse {
+            attempt_id,
+            preview_available: false,
+            controllable: false,
+            dismissible: false,
+            action: "none".to_string(),
+            runtime_type: None,
+            control_source: metadata
+                .get("preview_target_source")
+                .or_else(|| metadata.get("preview_url_source"))
+                .and_then(Value::as_str)
+                .map(ToString::to_string),
             container_name: None,
             compose_project_name: None,
         };
@@ -864,5 +922,19 @@ mod tests {
             preview_start_lock_key(attempt_id),
             "preview_start:12345678-1234-5678-9abc-def012345678"
         );
+    }
+
+    #[test]
+    fn build_preview_control_response_hides_stale_local_preview_without_worktree() {
+        let metadata = serde_json::json!({
+            "preview_target": "http://localhost:4174",
+            "preview_runtime_state": "active",
+            "worktree_path": "/tmp/definitely-missing-worktree-for-preview-route-test",
+            "preview_target_source": "agent_output",
+        });
+
+        let response = build_preview_control_response(Uuid::nil(), &metadata, false);
+        assert!(!response.preview_available);
+        assert_eq!(response.action, "none");
     }
 }

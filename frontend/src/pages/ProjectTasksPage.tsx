@@ -831,6 +831,8 @@ export function ProjectTasksPage() {
         attemptId={selectedAttempt.id}
         fallbackPreviewUrl={selectedAttemptPreviewUrl}
         autoStartOnMount={selectedTask.status === 'done' && projectPreviewEnabled}
+        attemptStatus={selectedAttempt.status}
+        onFollowUpAttemptCreated={handleFollowUpAttemptCreated}
       />
     ) : null;
 

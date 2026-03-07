@@ -1780,8 +1780,7 @@ impl ExecutorOrchestrator {
         // Cleanup worktree
         self.log(attempt_id, "system", "Cleaning up...").await?;
         if let Err(e) = self
-            .worktree_manager
-            .cleanup_worktree(&repo_path, attempt_id)
+            .cleanup_attempt_worktree(&repo_path, attempt_id)
             .await
         {
             self.log(
@@ -2004,8 +2003,7 @@ impl ExecutorOrchestrator {
                     )
                     .await?;
                     if let Err(e) = self
-                        .worktree_manager
-                        .cleanup_worktree(&repo_path, attempt_id)
+                        .cleanup_attempt_worktree(&repo_path, attempt_id)
                         .await
                     {
                         self.log(
@@ -2053,8 +2051,7 @@ impl ExecutorOrchestrator {
                         )
                         .await?;
                         if let Err(cleanup_err) = self
-                            .worktree_manager
-                            .cleanup_worktree(&repo_path, attempt_id)
+                            .cleanup_attempt_worktree(&repo_path, attempt_id)
                             .await
                         {
                             self.log(
@@ -2268,8 +2265,7 @@ impl ExecutorOrchestrator {
                         // Cleanup worktree only after merge is confirmed.
                         self.log(attempt_id, "system", "Cleaning up...").await?;
                         if let Err(e) = self
-                            .worktree_manager
-                            .cleanup_worktree(&repo_path, attempt_id)
+                            .cleanup_attempt_worktree(&repo_path, attempt_id)
                             .await
                         {
                             self.log(
@@ -2311,8 +2307,7 @@ impl ExecutorOrchestrator {
                             self.mark_task_completed(task_id).await?;
                             self.log(attempt_id, "system", "Cleaning up...").await?;
                             if let Err(e) = self
-                                .worktree_manager
-                                .cleanup_worktree(&repo_path, attempt_id)
+                                .cleanup_attempt_worktree(&repo_path, attempt_id)
                                 .await
                             {
                                 self.log(
@@ -2360,8 +2355,7 @@ impl ExecutorOrchestrator {
                 )
                 .await?;
                 if let Err(cleanup_err) = self
-                    .worktree_manager
-                    .cleanup_worktree(&repo_path, attempt_id)
+                    .cleanup_attempt_worktree(&repo_path, attempt_id)
                     .await
                 {
                     self.log(
@@ -6220,8 +6214,7 @@ impl ExecutorOrchestrator {
     ) -> Result<()> {
         self.cancel_attempt(attempt_id, reason).await?;
         if let Err(e) = self
-            .worktree_manager
-            .cleanup_worktree(repo_path, attempt_id)
+            .cleanup_attempt_worktree(repo_path, attempt_id)
             .await
         {
             warn!("Cleanup failed for cancelled attempt {}: {}", attempt_id, e);
@@ -6510,8 +6503,7 @@ IMPORTANT: Do not commit unrelated files. Verify changes work before committing.
                 .await?;
                 // Best-effort stale cleanup (branch/worktree metadata) before recreation.
                 let _ = self
-                    .worktree_manager
-                    .cleanup_worktree(repo_path, attempt_id)
+                    .cleanup_attempt_worktree(repo_path, attempt_id)
                     .await;
                 let fresh = self
                     .create_worktree(attempt_id, repo_path)
@@ -6776,8 +6768,7 @@ IMPORTANT: Do not commit unrelated files. Verify changes work before committing.
                 self.fail_attempt_with_retry(attempt_id, task_id, &error_msg)
                     .await?;
                 let _ = self
-                    .worktree_manager
-                    .cleanup_worktree(repo_path, attempt_id)
+                    .cleanup_attempt_worktree(repo_path, attempt_id)
                     .await;
                 return Err(anyhow::anyhow!("Failed to wait for agent: {}", e));
             }
@@ -6797,8 +6788,7 @@ IMPORTANT: Do not commit unrelated files. Verify changes work before committing.
                 self.fail_attempt_with_retry(attempt_id, task_id, "Follow-up execution timed out")
                     .await?;
                 let _ = self
-                    .worktree_manager
-                    .cleanup_worktree(repo_path, attempt_id)
+                    .cleanup_attempt_worktree(repo_path, attempt_id)
                     .await;
                 bail!("Follow-up execution timed out after {:?}", task_timeout);
             }
@@ -6889,8 +6879,7 @@ IMPORTANT: Do not commit unrelated files. Verify changes work before committing.
                         )
                         .await?;
                         if let Err(cleanup_err) = self
-                            .worktree_manager
-                            .cleanup_worktree(repo_path, attempt_id)
+                            .cleanup_attempt_worktree(repo_path, attempt_id)
                             .await
                         {
                             self.log(
@@ -6967,8 +6956,7 @@ IMPORTANT: Do not commit unrelated files. Verify changes work before committing.
                     )
                     .await?;
                     if let Err(cleanup_err) = self
-                        .worktree_manager
-                        .cleanup_worktree(repo_path, attempt_id)
+                        .cleanup_attempt_worktree(repo_path, attempt_id)
                         .await
                     {
                         self.log(
@@ -7001,8 +6989,7 @@ IMPORTANT: Do not commit unrelated files. Verify changes work before committing.
             self.fail_attempt_with_retry(attempt_id, task_id, &error_msg)
                 .await?;
             let _ = self
-                .worktree_manager
-                .cleanup_worktree(repo_path, attempt_id)
+                .cleanup_attempt_worktree(repo_path, attempt_id)
                 .await;
             bail!("{}", error_msg);
         }
@@ -7278,7 +7265,14 @@ fn trim_labeled_value_candidate(value: &str) -> String {
 fn trim_repo_url_candidate(url: &str) -> String {
     let mut candidate = url;
     if let Some(idx) =
-        candidate.find(|c: char| c.is_whitespace() || c == '`' || c == '"' || c == '\'')
+        candidate.find(|c: char| {
+            c.is_whitespace()
+                || c == '`'
+                || c == '"'
+                || c == '\''
+                || c == '*'
+                || c == '|'
+        })
     {
         candidate = &candidate[..idx];
     }
@@ -7942,6 +7936,24 @@ REPO_URL: https://gitlab.com/user/repo"#
         let lines = vec![r#"PREVIEW_URL: http://127.0.0.1:8080"}"#.to_string()];
         let url = extract_preview_url(&lines);
         assert_eq!(url, Some("http://127.0.0.1:8080".to_string()));
+    }
+
+    #[test]
+    fn test_extract_preview_target_strips_trailing_markdown_summary() {
+        let lines = vec![
+            r#"PREVIEW_TARGET: http://localhost:4174**Summary:**- Built successfully"#.to_string(),
+        ];
+        let target = extract_preview_target(&lines);
+        assert_eq!(target, Some("http://localhost:4174".to_string()));
+    }
+
+    #[test]
+    fn test_extract_preview_url_strips_trailing_markdown_summary() {
+        let lines = vec![
+            r#"PREVIEW_URL: http://localhost:4174**Summary:**- Built successfully"#.to_string(),
+        ];
+        let url = extract_preview_url(&lines);
+        assert_eq!(url, Some("http://localhost:4174".to_string()));
     }
 
     #[test]

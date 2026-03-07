@@ -936,11 +936,7 @@ impl ExecutorOrchestrator {
         self.log(attempt_id, "system", "Cleaning up worktree...")
             .await?;
 
-        if let Err(e) = self
-            .worktree_manager
-            .cleanup_worktree(&repo_path, attempt_id)
-            .await
-        {
+        if let Err(e) = self.cleanup_attempt_worktree(&repo_path, attempt_id).await {
             self.log(
                 attempt_id,
                 "system",
@@ -951,6 +947,134 @@ impl ExecutorOrchestrator {
         }
 
         self.log(attempt_id, "system", "Cleanup completed.").await?;
+        Ok(())
+    }
+
+    pub(super) async fn cleanup_attempt_worktree(
+        &self,
+        repo_path: &std::path::Path,
+        attempt_id: Uuid,
+    ) -> Result<()> {
+        let had_preview_signal = self
+            .best_effort_stop_local_preview_for_attempt(attempt_id)
+            .await
+            .unwrap_or_else(|error| {
+                tracing::warn!(
+                    "Failed to stop local preview before worktree cleanup for attempt {}: {}",
+                    attempt_id,
+                    error
+                );
+                false
+            });
+
+        self.worktree_manager
+            .cleanup_worktree(repo_path, attempt_id)
+            .await?;
+
+        if had_preview_signal {
+            if let Err(error) = self
+                .mark_attempt_preview_runtime_stopped(
+                    attempt_id,
+                    "worktree_cleaned",
+                )
+                .await
+            {
+                tracing::warn!(
+                    "Failed to mark preview stopped after worktree cleanup for attempt {}: {}",
+                    attempt_id,
+                    error
+                );
+            }
+        }
+
+        Ok(())
+    }
+
+    async fn best_effort_stop_local_preview_for_attempt(
+        &self,
+        attempt_id: Uuid,
+    ) -> Result<bool> {
+        let metadata: Option<serde_json::Value> = sqlx::query_scalar(
+            "SELECT COALESCE(metadata, '{}'::jsonb) FROM task_attempts WHERE id = $1",
+        )
+        .bind(attempt_id)
+        .fetch_optional(&self.db_pool)
+        .await?;
+
+        let Some(metadata) = metadata else {
+            return Ok(false);
+        };
+
+        let preview_url = metadata
+            .get("preview_url")
+            .or_else(|| metadata.get("preview_url_agent"))
+            .or_else(|| metadata.get("preview_target"))
+            .and_then(serde_json::Value::as_str)
+            .map(str::trim)
+            .filter(|value| !value.is_empty())
+            .map(ToString::to_string);
+
+        let Some(preview_url) = preview_url else {
+            return Ok(false);
+        };
+
+        if let Some(port) = extract_local_preview_port(&preview_url) {
+            let _ = self.stop_processes_listening_on_port(port).await;
+        }
+
+        Ok(true)
+    }
+
+    async fn stop_processes_listening_on_port(&self, port: u16) -> Result<()> {
+        let output = Command::new("lsof")
+            .args(["-ti", &format!("tcp:{}", port)])
+            .stdout(Stdio::piped())
+            .stderr(Stdio::piped())
+            .output()
+            .await
+            .with_context(|| format!("Failed to inspect listeners on port {}", port))?;
+
+        if !output.status.success() && output.stdout.is_empty() {
+            return Ok(());
+        }
+
+        let stdout = String::from_utf8_lossy(&output.stdout);
+        for pid in stdout.lines().map(str::trim).filter(|value| !value.is_empty()) {
+            let _ = Command::new("kill")
+                .args(["-TERM", pid])
+                .stdout(Stdio::null())
+                .stderr(Stdio::null())
+                .output()
+                .await;
+        }
+
+        Ok(())
+    }
+
+    async fn mark_attempt_preview_runtime_stopped(
+        &self,
+        attempt_id: Uuid,
+        reason: &str,
+    ) -> Result<()> {
+        let patch = serde_json::json!({
+            "preview_runtime_state": "stopped",
+            "preview_runtime_stopped_at": chrono::Utc::now().to_rfc3339(),
+            "preview_runtime_stop_reason": reason,
+        });
+
+        sqlx::query(
+            r#"
+            UPDATE task_attempts
+            SET metadata = COALESCE(metadata, '{}'::jsonb) || $2::jsonb
+            WHERE id = $1
+            "#,
+        )
+        .bind(attempt_id)
+        .bind(patch)
+        .execute(&self.db_pool)
+        .await
+        .context("Failed to persist preview stop metadata")?;
+
         Ok(())
     }
 
@@ -976,4 +1100,16 @@ impl ExecutorOrchestrator {
 
         Ok(self.worktree_manager.base_path().await.join(repo_path))
     }
+}
+
+fn extract_local_preview_port(url: &str) -> Option<u16> {
+    let remainder = url
+        .strip_prefix("http://")
+        .or_else(|| url.strip_prefix("https://"))?;
+    let host_and_path = remainder.split('/').next()?;
+    let (host, port) = host_and_path.rsplit_once(':')?;
+    if host.eq_ignore_ascii_case("localhost") || host == "127.0.0.1" {
+        return port.parse::<u16>().ok();
+    }
+    None
 }

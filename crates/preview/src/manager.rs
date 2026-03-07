@@ -154,6 +154,27 @@ impl PreviewManager {
             return self.create_local_preview(attempt_id, task_name).await;
         }
 
+        match self
+            .create_cloudflare_preview(attempt_id, task_name, self.preview_ttl_days)
+            .await
+        {
+            Ok(preview) => Ok(preview),
+            Err(error) => {
+                warn!(
+                    "Cloudflare preview creation failed for attempt {}. Falling back to local preview: {:#}",
+                    attempt_id, error
+                );
+                self.create_local_preview(attempt_id, task_name).await
+            }
+        }
+    }
+
+    async fn create_cloudflare_preview(
+        &self,
+        attempt_id: Uuid,
+        task_name: &str,
+        ttl_days: i64,
+    ) -> Result<PreviewInfo> {
         // Generate tunnel name (sanitized, with timestamp)
         let tunnel_name = self.generate_tunnel_name(task_name, attempt_id);
 
@@ -238,7 +259,7 @@ impl PreviewManager {
         };
 
         // Calculate expiration time
-        let expires_at = Utc::now() + Duration::days(self.preview_ttl_days);
+        let expires_at = Utc::now() + Duration::days(ttl_days);
 
         // Store in database
         let tunnel_result = sqlx::query_as::<_, CloudflareTunnel>(
@@ -634,6 +655,93 @@ impl PreviewManager {
             }));
         }
 
+        match self
+            .create_cloudflare_preview_if_enabled(
+                project,
+                attempt_id,
+                task_name,
+                artifact_id,
+                preview_target,
+                ttl_days,
+            )
+            .await
+        {
+            Ok(preview) => Ok(Some(preview)),
+            Err(error) => {
+                warn!(
+                    "Cloudflare preview creation failed for project {} attempt {}. Falling back to local preview: {:#}",
+                    project.name, attempt_id, error
+                );
+
+                let tunnel = self
+                    .create_local_preview_tunnel(attempt_id, task_name, ttl_days)
+                    .await?;
+                let preview_url = tunnel.preview_url.clone();
+
+                let preview_deployment_result = sqlx::query_as::<_, PreviewDeployment>(
+                    r#"
+                    INSERT INTO preview_deployments (
+                        attempt_id, project_id, artifact_id, url, tunnel_id,
+                        dns_record_id, status, expires_at, metadata
+                    )
+                    VALUES ($1, $2, $3, $4, $5, $6, 'active', $7, $8)
+                    RETURNING *
+                    "#,
+                )
+                .bind(attempt_id)
+                .bind(project.id)
+                .bind(artifact_id)
+                .bind(&preview_url)
+                .bind(&tunnel.tunnel_id)
+                .bind(Option::<String>::None)
+                .bind(tunnel.expires_at)
+                .bind(serde_json::json!({
+                    "preview_target": preview_target,
+                    "target_source": if preview_target.is_some() { "agent_output" } else { "unspecified" },
+                    "delivery_mode": "local_runtime",
+                    "fallback_reason": "cloudflare_preview_creation_failed",
+                }))
+                .fetch_one(&self.db)
+                .await;
+
+                if let Err(error) = preview_deployment_result {
+                    let _ = sqlx::query(
+                        r#"
+                        UPDATE cloudflare_tunnels
+                        SET status = $1, deleted_at = NOW(), stopped_at = COALESCE(stopped_at, NOW())
+                        WHERE id = $2
+                        "#,
+                    )
+                    .bind(TunnelStatus::Deleted)
+                    .bind(tunnel.id)
+                    .execute(&self.db)
+                    .await;
+
+                    return Err(error).context("Failed to insert local preview deployment record");
+                }
+
+                Ok(Some(PreviewInfo {
+                    id: tunnel.id,
+                    attempt_id: tunnel.attempt_id,
+                    preview_url: tunnel.preview_url,
+                    status: tunnel.status,
+                    created_at: tunnel.created_at,
+                    expires_at: tunnel.expires_at,
+                }))
+            }
+        }
+    }
+
+    async fn create_cloudflare_preview_if_enabled(
+        &self,
+        project: &Project,
+        attempt_id: Uuid,
+        task_name: &str,
+        artifact_id: Option<Uuid>,
+        preview_target: Option<&str>,
+        ttl_days: i64,
+    ) -> Result<PreviewInfo> {
+
         // Generate tunnel name
         let tunnel_name = self.generate_tunnel_name(task_name, attempt_id);
 
@@ -808,14 +916,14 @@ impl PreviewManager {
             preview_url, expires_at
         );
 
-        Ok(Some(PreviewInfo {
+        Ok(PreviewInfo {
             id: tunnel.id,
             attempt_id: tunnel.attempt_id,
             preview_url: tunnel.preview_url,
             status: tunnel.status,
             created_at: tunnel.created_at,
             expires_at: tunnel.expires_at,
-        }))
+        })
     }
 
     /// Get preview deployment from the preview_deployments table

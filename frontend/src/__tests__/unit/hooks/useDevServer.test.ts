@@ -114,6 +114,20 @@ describe('useDevServer error helpers', () => {
     ).toBe('https://preview.example.com');
   });
 
+  it('strips trailing markdown summary text from preview URL candidates', () => {
+    expect(
+      extractPreviewUrlFromText(
+        'PREVIEW_TARGET: http://localhost:4174**Summary:**- Built the preview'
+      )
+    ).toBe('http://localhost:4174');
+
+    expect(
+      extractPreviewUrlFromText(
+        'PREVIEW_URL: http://localhost:4174**Summary:**- Built the preview'
+      )
+    ).toBe('http://localhost:4174');
+  });
+
   it('extracts the latest PREVIEW_TARGET from attempt logs', () => {
     expect(
       extractPreviewUrlFromAttemptLogs([
