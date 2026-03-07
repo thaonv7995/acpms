@@ -741,7 +741,6 @@ impl PreviewManager {
         preview_target: Option<&str>,
         ttl_days: i64,
     ) -> Result<PreviewInfo> {
-
         // Generate tunnel name
         let tunnel_name = self.generate_tunnel_name(task_name, attempt_id);
 

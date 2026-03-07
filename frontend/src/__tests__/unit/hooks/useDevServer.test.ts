@@ -128,6 +128,14 @@ describe('useDevServer error helpers', () => {
     ).toBe('http://localhost:4174');
   });
 
+  it('prefers PREVIEW_URL over PREVIEW_TARGET when both are present', () => {
+    expect(
+      extractPreviewUrlFromText(
+        'PREVIEW_TARGET: http://127.0.0.1:4174 PREVIEW_URL: https://alike-demonstration-ace-provides.trycloudflare.com'
+      )
+    ).toBe('https://alike-demonstration-ace-provides.trycloudflare.com');
+  });
+
   it('extracts the latest PREVIEW_TARGET from attempt logs', () => {
     expect(
       extractPreviewUrlFromAttemptLogs([

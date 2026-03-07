@@ -446,9 +446,8 @@ async fn stop_preview_for_attempt(
         return Ok(());
     }
 
-    let control = parse_preview_runtime_control(&attempt_context.metadata).ok_or_else(|| {
-        ApiError::BadRequest("Preview is not controllable via ACPMS".to_string())
-    })?;
+    let control = parse_preview_runtime_control(&attempt_context.metadata)
+        .ok_or_else(|| ApiError::BadRequest("Preview is not controllable via ACPMS".to_string()))?;
 
     if !control.controllable {
         return Err(ApiError::BadRequest(
@@ -566,7 +565,9 @@ fn preview_signal_present(metadata: &Value) -> bool {
 
 fn preview_runtime_stopped(metadata: &Value) -> bool {
     matches!(
-        metadata.get("preview_runtime_state").and_then(Value::as_str),
+        metadata
+            .get("preview_runtime_state")
+            .and_then(Value::as_str),
         Some("stopped")
     )
 }
@@ -710,10 +711,7 @@ fn build_preview_control_response(
     }
 }
 
-async fn mark_attempt_preview_stopped(
-    state: &AppState,
-    attempt_id: Uuid,
-) -> Result<(), ApiError> {
+async fn mark_attempt_preview_stopped(state: &AppState, attempt_id: Uuid) -> Result<(), ApiError> {
     let stopped_at = Utc::now().to_rfc3339();
     let patch = serde_json::json!({
         "preview_runtime_state": "stopped",

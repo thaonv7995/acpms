@@ -28,6 +28,44 @@ pub(super) struct ExtractedPreviewContract {
     runtime_control: Option<serde_json::Value>,
 }
 
+fn is_local_preview_signal_url(candidate: &str) -> bool {
+    let candidate = candidate.trim().to_ascii_lowercase();
+    candidate.starts_with("http://localhost:")
+        || candidate.starts_with("https://localhost:")
+        || candidate.starts_with("http://127.0.0.1:")
+        || candidate.starts_with("https://127.0.0.1:")
+        || candidate.starts_with("http://0.0.0.0:")
+        || candidate.starts_with("https://0.0.0.0:")
+        || candidate.starts_with("http://[::1]:")
+        || candidate.starts_with("https://[::1]:")
+}
+
+fn canonicalize_preview_signals(
+    preview_target: Option<String>,
+    preview_url: Option<String>,
+) -> (Option<String>, Option<String>) {
+    let preview_target = preview_target
+        .map(|value| value.trim().to_string())
+        .filter(|value| !value.is_empty());
+    let mut preview_url = preview_url
+        .map(|value| value.trim().to_string())
+        .filter(|value| !value.is_empty());
+
+    if let Some(preview_target_value) = preview_target.as_ref() {
+        let target_is_public = !is_local_preview_signal_url(preview_target_value);
+        let url_missing_or_local = preview_url
+            .as_deref()
+            .map(is_local_preview_signal_url)
+            .unwrap_or(true);
+
+        if target_is_public && url_missing_or_local {
+            preview_url = Some(preview_target_value.clone());
+        }
+    }
+
+    (preview_target, preview_url)
+}
+
 fn normalize_preview_runtime_control_value(
     raw: PreviewRuntimeControlContract,
 ) -> Option<serde_json::Value> {
@@ -44,11 +82,10 @@ fn normalize_preview_runtime_control_value(
         .map(|value| value.trim().to_string())
         .filter(|value| !value.is_empty());
 
-    let has_docker_container = matches!(runtime_type.as_deref(), Some("docker_container"))
-        && container_name.is_some();
-    let has_compose_project =
-        matches!(runtime_type.as_deref(), Some("docker_compose_project"))
-            && compose_project_name.is_some();
+    let has_docker_container =
+        matches!(runtime_type.as_deref(), Some("docker_container")) && container_name.is_some();
+    let has_compose_project = matches!(runtime_type.as_deref(), Some("docker_compose_project"))
+        && compose_project_name.is_some();
 
     let controllable = raw
         .controllable
@@ -113,38 +150,26 @@ impl ExecutorOrchestrator {
             preview_runtime_control,
             preview_target_source,
             preview_url_source,
-        ) =
-            if let Some(wp) = worktree_path {
-                if let Ok(Some(contract)) =
-                    self.extract_preview_from_file_contract(wp).await
-                {
-                    let file_url_present = contract.preview_url.is_some();
-                    let preview_url = contract.preview_url.or_else(|| extract_preview_url(&lines));
-                    let preview_url_source = if preview_url.is_some() {
-                        if file_url_present {
-                            "file_contract"
-                        } else {
-                            "agent_output"
-                        }
+        ) = if let Some(wp) = worktree_path {
+            if let Ok(Some(contract)) = self.extract_preview_from_file_contract(wp).await {
+                let file_url_present = contract.preview_url.is_some();
+                let preview_url = contract.preview_url.or_else(|| extract_preview_url(&lines));
+                let preview_url_source = if preview_url.is_some() {
+                    if file_url_present {
+                        "file_contract"
                     } else {
                         "agent_output"
-                    };
-                    (
-                        contract.preview_target,
-                        preview_url,
-                        contract.runtime_control,
-                        "file_contract",
-                        preview_url_source,
-                    )
+                    }
                 } else {
-                    (
-                        extract_preview_target(&lines),
-                        extract_preview_url(&lines),
-                        None,
-                        "agent_output",
-                        "agent_output",
-                    )
-                }
+                    "agent_output"
+                };
+                (
+                    contract.preview_target,
+                    preview_url,
+                    contract.runtime_control,
+                    "file_contract",
+                    preview_url_source,
+                )
             } else {
                 (
                     extract_preview_target(&lines),
@@ -153,7 +178,18 @@ impl ExecutorOrchestrator {
                     "agent_output",
                     "agent_output",
                 )
-            };
+            }
+        } else {
+            (
+                extract_preview_target(&lines),
+                extract_preview_url(&lines),
+                None,
+                "agent_output",
+                "agent_output",
+            )
+        };
+        let (preview_target, preview_url) =
+            canonicalize_preview_signals(preview_target, preview_url);
         let deployment_report = extract_deployment_report(&lines);
 
         // Prefer file contract (.acpms/mr-output.json) over log extraction for MR fields
@@ -610,11 +646,11 @@ impl ExecutorOrchestrator {
             .preview_url
             .map(|s| trim_repo_url_candidate(s.trim()))
             .filter(|s| !s.is_empty());
+        let (target, url) = canonicalize_preview_signals(target, url);
 
-        let runtime_control =
-            parsed
-                .runtime_control
-                .and_then(normalize_preview_runtime_control_value);
+        let runtime_control = parsed
+            .runtime_control
+            .and_then(normalize_preview_runtime_control_value);
 
         if target.is_none() && url.is_none() && runtime_control.is_none() {
             return Ok(None);
@@ -633,14 +669,26 @@ impl ExecutorOrchestrator {
         attempt_id: Uuid,
         worktree_path: Option<&std::path::Path>,
     ) -> Result<Option<String>> {
-        let (preview_target, preview_url, preview_runtime_control, source) = if let Some(wp) = worktree_path {
-            if let Ok(Some(contract)) = self.extract_preview_from_file_contract(wp).await {
-                (
-                    contract.preview_target,
-                    contract.preview_url,
-                    contract.runtime_control,
-                    "file_contract",
-                )
+        let (preview_target, preview_url, preview_runtime_control, source) =
+            if let Some(wp) = worktree_path {
+                if let Ok(Some(contract)) = self.extract_preview_from_file_contract(wp).await {
+                    (
+                        contract.preview_target,
+                        contract.preview_url,
+                        contract.runtime_control,
+                        "file_contract",
+                    )
+                } else {
+                    let lines = self
+                        .fetch_attempt_log_lines(attempt_id, "preview target extraction")
+                        .await?;
+                    (
+                        extract_preview_target(&lines),
+                        extract_preview_url(&lines),
+                        None,
+                        "agent_output",
+                    )
+                }
             } else {
                 let lines = self
                     .fetch_attempt_log_lines(attempt_id, "preview target extraction")
@@ -651,18 +699,10 @@ impl ExecutorOrchestrator {
                     None,
                     "agent_output",
                 )
-            }
-        } else {
-            let lines = self
-                .fetch_attempt_log_lines(attempt_id, "preview target extraction")
-                .await?;
-            (
-                extract_preview_target(&lines),
-                extract_preview_url(&lines),
-                None,
-                "agent_output",
-            )
-        };
+            };
+
+        let (preview_target, preview_url) =
+            canonicalize_preview_signals(preview_target, preview_url);
 
         let Some(preview_target) = preview_target else {
             return Ok(None);
@@ -692,10 +732,7 @@ impl ExecutorOrchestrator {
             );
         }
         if let Some(runtime_control) = preview_runtime_control {
-            metadata_patch.insert(
-                "preview_runtime_control".to_string(),
-                runtime_control,
-            );
+            metadata_patch.insert("preview_runtime_control".to_string(), runtime_control);
             metadata_patch.insert(
                 "preview_runtime_control_source".to_string(),
                 serde_json::Value::String(source.to_string()),
@@ -973,10 +1010,7 @@ impl ExecutorOrchestrator {
 
         if had_preview_signal {
             if let Err(error) = self
-                .mark_attempt_preview_runtime_stopped(
-                    attempt_id,
-                    "worktree_cleaned",
-                )
+                .mark_attempt_preview_runtime_stopped(attempt_id, "worktree_cleaned")
                 .await
             {
                 tracing::warn!(
@@ -990,10 +1024,7 @@ impl ExecutorOrchestrator {
         Ok(())
     }
 
-    async fn best_effort_stop_local_preview_for_attempt(
-        &self,
-        attempt_id: Uuid,
-    ) -> Result<bool> {
+    async fn best_effort_stop_local_preview_for_attempt(&self, attempt_id: Uuid) -> Result<bool> {
         let metadata: Option<serde_json::Value> = sqlx::query_scalar(
             "SELECT COALESCE(metadata, '{}'::jsonb) FROM task_attempts WHERE id = $1",
         )
@@ -1039,7 +1070,11 @@ impl ExecutorOrchestrator {
         }
 
         let stdout = String::from_utf8_lossy(&output.stdout);
-        for pid in stdout.lines().map(str::trim).filter(|value| !value.is_empty()) {
+        for pid in stdout
+            .lines()
+            .map(str::trim)
+            .filter(|value| !value.is_empty())
+        {
             let _ = Command::new("kill")
                 .args(["-TERM", pid])
                 .stdout(Stdio::null())
@@ -1112,4 +1147,39 @@ fn extract_local_preview_port(url: &str) -> Option<u16> {
         return port.parse::<u16>().ok();
     }
     None
+}
+
+#[cfg(test)]
+mod tests {
+    use super::canonicalize_preview_signals;
+
+    #[test]
+    fn canonicalize_preview_signals_promotes_public_target_into_preview_url() {
+        let (preview_target, preview_url) = canonicalize_preview_signals(
+            Some("https://alike-demonstration-ace-provides.trycloudflare.com".to_string()),
+            None,
+        );
+
+        assert_eq!(
+            preview_target.as_deref(),
+            Some("https://alike-demonstration-ace-provides.trycloudflare.com")
+        );
+        assert_eq!(
+            preview_url.as_deref(),
+            Some("https://alike-demonstration-ace-provides.trycloudflare.com")
+        );
+    }
+
+    #[test]
+    fn canonicalize_preview_signals_prefers_public_target_over_local_preview_url() {
+        let (_preview_target, preview_url) = canonicalize_preview_signals(
+            Some("https://alike-demonstration-ace-provides.trycloudflare.com".to_string()),
+            Some("http://127.0.0.1:4174".to_string()),
+        );
+
+        assert_eq!(
+            preview_url.as_deref(),
+            Some("https://alike-demonstration-ace-provides.trycloudflare.com")
+        );
+    }
 }

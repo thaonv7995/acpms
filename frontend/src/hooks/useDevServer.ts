@@ -259,10 +259,43 @@ function normalizePreviewUrlCandidate(candidate: string): string | undefined {
   return normalized;
 }
 
+function isLoopbackPreviewUrl(candidate?: string): boolean {
+  if (!candidate) {
+    return false;
+  }
+
+  const normalized = candidate.trim().toLowerCase();
+  return (
+    normalized.startsWith('http://localhost:') ||
+    normalized.startsWith('https://localhost:') ||
+    normalized.startsWith('http://127.0.0.1:') ||
+    normalized.startsWith('https://127.0.0.1:') ||
+    normalized.startsWith('http://0.0.0.0:') ||
+    normalized.startsWith('https://0.0.0.0:') ||
+    normalized.startsWith('http://[::1]:') ||
+    normalized.startsWith('https://[::1]:')
+  );
+}
+
+function shouldPreferExternalPreviewSignal(
+  currentUrl: string | undefined,
+  nextUrl: string
+): boolean {
+  if (!currentUrl) {
+    return true;
+  }
+
+  if (currentUrl === nextUrl) {
+    return true;
+  }
+
+  return isLoopbackPreviewUrl(currentUrl) && !isLoopbackPreviewUrl(nextUrl);
+}
+
 export function extractPreviewUrlFromText(text: string): string | undefined {
   const sanitized = stripAnsiSequences(text);
 
-  for (const regex of [PREVIEW_TARGET_REGEX, PREVIEW_URL_REGEX]) {
+  for (const regex of [PREVIEW_URL_REGEX, PREVIEW_TARGET_REGEX]) {
     const match = sanitized.match(regex);
     const candidate = match?.[1];
     if (!candidate) {
@@ -359,7 +392,7 @@ function buildExternalPreviewState(
     previewId: undefined,
     startDisabled: true,
     startDisabledReason:
-      readinessReason || 'Preview is available via the agent-reported PREVIEW_TARGET.',
+      readinessReason || 'Preview is available via the agent-reported preview URL.',
     externalPreview: true,
     previewRevision: shouldBumpRevision
       ? baseState.previewRevision + 1
@@ -463,7 +496,29 @@ export function useDevServer(
             dismissOnly: control.action === 'dismiss',
           };
 
-          if (!preview || prev.status === 'starting') {
+          if (prev.status === 'starting') {
+            return baseState;
+          }
+
+          if (
+            agentPreviewSignal &&
+            agentPreviewSignal.signalKey !== prev.dismissedExternalPreviewSignal &&
+            (!preview ||
+              (preview.preview_url !== agentPreviewSignal.url &&
+                shouldPreferExternalPreviewSignal(
+                  preview.preview_url,
+                  agentPreviewSignal.url
+                )))
+          ) {
+            return buildExternalPreviewState(
+              baseState,
+              agentPreviewSignal.url,
+              readinessReason,
+              agentPreviewSignal.signalKey
+            );
+          }
+
+          if (!preview) {
             if (!control.preview_available) {
               return {
                 ...baseState,
@@ -474,20 +529,6 @@ export function useDevServer(
                 previewRevision: 0,
                 lastExternalPreviewSignal: undefined,
               };
-            }
-            if (agentPreviewSignal) {
-              if (
-                agentPreviewSignal.signalKey ===
-                prev.dismissedExternalPreviewSignal
-              ) {
-                return baseState;
-              }
-              return buildExternalPreviewState(
-                baseState,
-                agentPreviewSignal.url,
-                readinessReason,
-                agentPreviewSignal.signalKey
-              );
             }
             return baseState;
           }
@@ -535,7 +576,7 @@ export function useDevServer(
   // Poll attempt logs while the agent is still running so PREVIEW_TARGET can
   // surface without requiring a manual page refresh.
   useEffect(() => {
-    if (!attemptId || fallbackPreviewUrl || state.previewId) {
+    if (!attemptId) {
       return;
     }
 
@@ -554,9 +595,6 @@ export function useDevServer(
         }
 
         setState((prev) => {
-          if (prev.previewId) {
-            return prev;
-          }
           if (prev.status === 'starting' || prev.status === 'stopping') {
             return prev;
           }
@@ -564,6 +602,18 @@ export function useDevServer(
             previewSignal.signalKey ===
             prev.dismissedExternalPreviewSignal
           ) {
+            return prev;
+          }
+          if (prev.previewId && previewSignal.url === prev.url) {
+            return prev;
+          }
+
+          const shouldAdoptPreviewSignal =
+            !prev.previewId ||
+            prev.externalPreview ||
+            shouldPreferExternalPreviewSignal(prev.url, previewSignal.url);
+
+          if (!shouldAdoptPreviewSignal) {
             return prev;
           }
 
@@ -594,10 +644,67 @@ export function useDevServer(
     };
   }, [
     attemptId,
-    fallbackPreviewUrl,
     state.previewId,
     state.status,
   ]);
+
+  // Poll preview info while a managed preview is running so the panel updates
+  // when the backend promotes a local URL to a public tunnel URL.
+  useEffect(() => {
+    if (!attemptId || state.status !== 'running' || state.externalPreview) {
+      return;
+    }
+
+    let cancelled = false;
+
+    const syncPreviewInfo = async () => {
+      try {
+        const preview = await getPreview(attemptId);
+        if (cancelled || !preview) {
+          return;
+        }
+
+        setState((prev) => {
+          if (prev.status === 'starting' || prev.status === 'stopping') {
+            return prev;
+          }
+
+          const urlChanged = preview.preview_url !== prev.url;
+          const previewChanged = preview.id !== prev.previewId;
+          if (!urlChanged && !previewChanged) {
+            return prev;
+          }
+
+          return {
+            ...prev,
+            status: 'running',
+            url: preview.preview_url,
+            errorMessage: undefined,
+            previewId: preview.id,
+            externalPreview: false,
+            previewRevision: urlChanged
+              ? prev.previewRevision + 1
+              : prev.previewRevision,
+            lastExternalPreviewSignal: undefined,
+            canStopPreview: true,
+            dismissOnly: false,
+          };
+        });
+      } catch {
+        // Ignore transient preview-info polling errors.
+      }
+    };
+
+    void syncPreviewInfo();
+    const intervalId = window.setInterval(() => {
+      void syncPreviewInfo();
+    }, 5000);
+
+    return () => {
+      cancelled = true;
+      window.clearInterval(intervalId);
+    };
+  }, [attemptId, state.status, state.externalPreview]);
 
   // Poll runtime status while preview is running to detect crashed runtime.
   useEffect(() => {

@@ -97,4 +97,42 @@ describe('PreviewPanelWrapper', () => {
     expect(onFollowUpAttemptCreated).toHaveBeenCalledWith('attempt-2');
     expect(sendAttemptInput).not.toHaveBeenCalled();
   });
+
+  it('shows stop and requests an agent follow-up to stop preview when a preview URL exists', async () => {
+    vi.mocked(useDevServer).mockReturnValue({
+      status: 'running',
+      url: 'http://localhost:42574',
+      errorMessage: undefined,
+      startServer: vi.fn().mockResolvedValue(undefined),
+      stopServer: vi.fn().mockResolvedValue(undefined),
+      dismissPreview: vi.fn(),
+      restartServer: vi.fn().mockResolvedValue(undefined),
+      isLoading: false,
+      startDisabled: false,
+      startDisabledReason: undefined,
+      externalPreview: false,
+      previewRevision: 0,
+      canStopPreview: false,
+      dismissOnly: false,
+    });
+
+    vi.mocked(sendAttemptInput).mockResolvedValue(undefined as never);
+
+    render(
+      <PreviewPanelWrapper
+        taskId="task-1"
+        attemptId="attempt-1"
+        attemptStatus="RUNNING"
+      />
+    );
+
+    fireEvent.click(screen.getByRole('button', { name: /stop preview/i }));
+
+    await waitFor(() => {
+      expect(sendAttemptInput).toHaveBeenCalledWith(
+        'attempt-1',
+        expect.stringContaining('Stop the preview that is currently associated with this attempt.')
+      );
+    });
+  });
 });
