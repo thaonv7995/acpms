@@ -1,6 +1,6 @@
 use crate::encryption_service::EncryptionService;
 use acpms_db::models::{SystemSettings, SystemSettingsResponse, UpdateSystemSettingsRequest};
-use anyhow::{Context, Result};
+use anyhow::{bail, Context, Result};
 use sqlx::PgPool;
 
 #[derive(Debug, Clone, Default)]
@@ -97,7 +97,7 @@ impl SystemSettingsService {
                 overrides.account_id,
                 settings.cloudflare_account_id,
             ),
-            api_token: normalize_cloudflare_input(overrides.api_token, stored_api_token),
+            api_token: normalize_cloudflare_token_input(overrides.api_token, stored_api_token),
             zone_id: normalize_cloudflare_input(overrides.zone_id, settings.cloudflare_zone_id),
             base_domain: normalize_cloudflare_input(
                 overrides.base_domain,
@@ -178,13 +178,21 @@ impl SystemSettingsService {
         }
 
         if let Some(token) = req.cloudflare_api_token {
-            if token.is_empty() {
+            let normalized_token = normalize_cloudflare_token_input(Some(token), None);
+            if normalized_token.is_none() {
                 updates.push(format!("cloudflare_api_token_encrypted = ${}", param_idx));
                 cloudflare_api_token_encrypted_val = Some(None);
             } else {
+                if cloudflare_token_looks_masked_or_corrupted(
+                    normalized_token.as_deref().unwrap_or_default(),
+                ) {
+                    bail!(
+                        "Cloudflare API token appears masked or corrupted. Paste the raw token again."
+                    );
+                }
                 let encrypted = self
                     .encryption
-                    .encrypt(&token)
+                    .encrypt(normalized_token.as_deref().unwrap_or_default())
                     .context("Failed to encrypt Cloudflare API token")?;
                 updates.push(format!("cloudflare_api_token_encrypted = ${}", param_idx));
                 cloudflare_api_token_encrypted_val = Some(Some(encrypted));
@@ -498,6 +506,32 @@ fn normalize_cloudflare_input(
             .map(|value| value.trim().trim_matches('/').to_string())
             .filter(|value| !value.is_empty()),
     }
+}
+
+fn normalize_cloudflare_token_input(
+    override_value: Option<String>,
+    stored_value: Option<String>,
+) -> Option<String> {
+    let normalized = normalize_cloudflare_input(override_value, stored_value)?;
+    let without_bearer = normalized
+        .strip_prefix("Bearer ")
+        .or_else(|| normalized.strip_prefix("bearer "))
+        .unwrap_or(&normalized);
+    let collapsed = without_bearer
+        .lines()
+        .map(str::trim)
+        .collect::<String>()
+        .trim()
+        .to_string();
+    if collapsed.is_empty() {
+        None
+    } else {
+        Some(collapsed)
+    }
+}
+
+pub fn cloudflare_token_looks_masked_or_corrupted(token: &str) -> bool {
+    token.contains('•')
 }
 
 fn parse_repo_host(repo_url: &str) -> Option<String> {

@@ -3,7 +3,7 @@ use crate::routes::agent;
 use crate::{api::ApiResponse, error::ApiError, AppState};
 use acpms_deployment::cloudflare::CloudflareClient;
 use acpms_db::models::{SystemSettingsResponse, UpdateSystemSettingsRequest};
-use acpms_services::CloudflareConfigOverrides;
+use acpms_services::{cloudflare_token_looks_masked_or_corrupted, CloudflareConfigOverrides};
 use axum::{extract::State, routing::{get, post}, Json, Router};
 use chrono::Utc;
 use serde::{Deserialize, Serialize};
@@ -166,6 +166,29 @@ pub async fn check_cloudflare_settings(
     let zone_id = resolved.zone_id.unwrap_or_default();
     let base_domain = resolved.base_domain.unwrap_or_default();
 
+    if cloudflare_token_looks_masked_or_corrupted(&api_token) {
+        return Ok(Json(ApiResponse::success(
+            CloudflareConnectionCheckResponse {
+                status: "error".to_string(),
+                ok: false,
+                config_complete: true,
+                connection_ok: false,
+                tunnel_create_ok: false,
+                dns_record_ok: None,
+                cleanup_ok: true,
+                missing_fields: Vec::new(),
+                message: "Stored Cloudflare API token is corrupted.".to_string(),
+                details: vec![
+                    "The saved token contains masked bullet characters (`••••`). Re-enter and save the raw Cloudflare API token in Settings."
+                        .to_string(),
+                ],
+                checked_at: Utc::now().to_rfc3339(),
+                preview_url_example: None,
+            },
+            "Cloudflare check completed",
+        )));
+    }
+
     let cloudflare = match CloudflareClient::new(api_token, account_id) {
         Ok(client) => client,
         Err(error) => {
@@ -189,27 +212,9 @@ pub async fn check_cloudflare_settings(
         }
     };
 
-    let mut details = Vec::new();
-    if let Err(error) = cloudflare.verify_account_access().await {
-        return Ok(Json(ApiResponse::success(
-            CloudflareConnectionCheckResponse {
-                status: "error".to_string(),
-                ok: false,
-                config_complete: true,
-                connection_ok: false,
-                tunnel_create_ok: false,
-                dns_record_ok: None,
-                cleanup_ok: true,
-                missing_fields: Vec::new(),
-                message: "Cloudflare connection failed.".to_string(),
-                details: vec![error.to_string()],
-                checked_at: Utc::now().to_rfc3339(),
-                preview_url_example: None,
-            },
-            "Cloudflare check completed",
-        )));
-    }
-    details.push("Connected to Cloudflare account successfully.".to_string());
+    let mut details = vec![
+        "Using temporary tunnel creation as the primary capability check.".to_string(),
+    ];
 
     let probe_suffix = Uuid::new_v4().simple().to_string();
     let short_suffix = &probe_suffix[..8];
@@ -218,18 +223,35 @@ pub async fn check_cloudflare_settings(
     let credentials = match cloudflare.create_tunnel(&tunnel_name).await {
         Ok(credentials) => credentials,
         Err(error) => {
+            let error_text = error.to_string();
+            let normalized = error_text.to_ascii_lowercase();
+            let mut error_details = vec![error_text];
+            if normalized.contains("invalid request headers") {
+                error_details.push(
+                    "Hint: paste the raw Cloudflare API token only. Do not include `Bearer ` or extra whitespace/newlines."
+                        .to_string(),
+                );
+            }
+            if normalized.contains("status 403") || normalized.contains("9109") {
+                error_details.push(
+                    "The token was accepted by Cloudflare but is not authorized for this resource. Grant Account > Cloudflare Tunnel > Edit and Zone > DNS > Edit, and scope the token to the same account and zone used in Settings."
+                        .to_string(),
+                );
+            }
             return Ok(Json(ApiResponse::success(
                 CloudflareConnectionCheckResponse {
                     status: "error".to_string(),
                     ok: false,
                     config_complete: true,
-                    connection_ok: true,
+                    connection_ok: normalized.contains("status 400")
+                        || normalized.contains("status 401")
+                        || normalized.contains("status 403"),
                     tunnel_create_ok: false,
                     dns_record_ok: None,
                     cleanup_ok: true,
                     missing_fields: Vec::new(),
                     message: "Cloudflare tunnel creation failed.".to_string(),
-                    details: vec![error.to_string()],
+                    details: error_details,
                     checked_at: Utc::now().to_rfc3339(),
                     preview_url_example: None,
                 },
@@ -237,6 +259,7 @@ pub async fn check_cloudflare_settings(
             )));
         }
     };
+    details.push("Cloudflare API token can create a tunnel successfully.".to_string());
     details.push(format!(
         "Temporary tunnel `{}` was created successfully.",
         tunnel_name

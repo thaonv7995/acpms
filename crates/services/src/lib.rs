@@ -92,7 +92,8 @@ pub use repository_access::RepositoryAccessService;
 pub use requirement::RequirementService;
 pub use sprint::SprintService;
 pub use system_settings_service::{
-    CloudflareConfigOverrides, ResolvedCloudflareConfig, SystemSettingsService,
+    cloudflare_token_looks_masked_or_corrupted, CloudflareConfigOverrides,
+    ResolvedCloudflareConfig, SystemSettingsService,
 };
 pub use task::{TaskService, TaskWithLatestAttempt};
 pub use task_attempt::*;

@@ -43,7 +43,7 @@ pub struct TunnelConnection {
 /// Response from Cloudflare API when creating a tunnel
 #[derive(Debug, Deserialize)]
 struct CreateTunnelResponse {
-    result: CreateTunnelResult,
+    result: Option<CreateTunnelResult>,
     success: bool,
     errors: Vec<CloudflareError>,
     #[allow(dead_code)]
@@ -54,16 +54,31 @@ struct CreateTunnelResponse {
 struct CreateTunnelResult {
     id: String,
     #[allow(dead_code)]
-    name: String,
-    secret: String,
+    name: Option<String>,
     #[allow(dead_code)]
-    created_at: String,
+    created_at: Option<String>,
+    #[allow(dead_code)]
+    account_tag: Option<String>,
+    credentials_file: CreateTunnelCredentialsFile,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+struct CreateTunnelCredentialsFile {
+    #[serde(rename = "AccountTag")]
+    account_tag: String,
+    #[serde(rename = "TunnelSecret")]
+    tunnel_secret: String,
+    #[serde(rename = "TunnelID")]
+    tunnel_id: String,
+    #[serde(rename = "TunnelName")]
+    #[allow(dead_code)]
+    tunnel_name: Option<String>,
 }
 
 /// Response from Cloudflare API when getting tunnel status
 #[derive(Debug, Deserialize)]
 struct GetTunnelResponse {
-    result: TunnelStatus,
+    result: Option<TunnelStatus>,
     success: bool,
     errors: Vec<CloudflareError>,
 }
@@ -72,7 +87,7 @@ struct GetTunnelResponse {
 #[derive(Debug, Deserialize)]
 struct GetAccountResponse {
     #[allow(dead_code)]
-    result: serde_json::Value,
+    result: Option<serde_json::Value>,
     success: bool,
     errors: Vec<CloudflareError>,
 }
@@ -80,7 +95,7 @@ struct GetAccountResponse {
 /// Response from Cloudflare API when creating a DNS record
 #[derive(Debug, Deserialize)]
 struct CreateDnsRecordResponse {
-    result: CreateDnsRecordResult,
+    result: Option<CreateDnsRecordResult>,
     success: bool,
     errors: Vec<CloudflareError>,
 }
@@ -134,6 +149,26 @@ impl CloudflareClient {
         format!("{}/{}", self.api_base_url, path.trim_start_matches('/'))
     }
 
+    async fn parse_json_response<T: serde::de::DeserializeOwned>(
+        response: reqwest::Response,
+        context_message: &str,
+    ) -> Result<T> {
+        let status = response.status();
+        let body = response
+            .text()
+            .await
+            .with_context(|| format!("{} (failed to read response body)", context_message))?;
+
+        serde_json::from_str::<T>(&body).with_context(|| {
+            format!(
+                "{} (status {}): {}",
+                context_message,
+                status,
+                body.chars().take(500).collect::<String>()
+            )
+        })
+    }
+
     /// Create a new Cloudflare tunnel
     pub async fn create_tunnel(&self, name: &str) -> Result<TunnelCredentials> {
         let url = self.endpoint(&format!("accounts/{}/cfd_tunnel", self.account_id));
@@ -161,10 +196,11 @@ impl CloudflareClient {
             .context("Failed to send create tunnel request")?;
 
         let status = response.status();
-        let response_body: CreateTunnelResponse = response
-            .json()
-            .await
-            .context("Failed to parse create tunnel response")?;
+        let response_body: CreateTunnelResponse = Self::parse_json_response(
+            response,
+            "Failed to parse create tunnel response",
+        )
+        .await?;
 
         if !response_body.success {
             let error_messages: Vec<String> = response_body
@@ -179,19 +215,30 @@ impl CloudflareClient {
             );
         }
 
-        let result = response_body.result;
+        let result = response_body
+            .result
+            .context("Cloudflare create tunnel response missing result payload")?;
 
         // Generate credentials file content
+        let tunnel_id = if result.credentials_file.tunnel_id.is_empty() {
+            result.id.clone()
+        } else {
+            result.credentials_file.tunnel_id.clone()
+        };
+        let account_tag = if result.credentials_file.account_tag.is_empty() {
+            result
+                .account_tag
+                .clone()
+                .unwrap_or_else(|| self.account_id.clone())
+        } else {
+            result.credentials_file.account_tag.clone()
+        };
         let credentials = TunnelCredentials {
-            tunnel_id: result.id.clone(),
-            account_tag: self.account_id.clone(),
-            secret: result.secret.clone(),
-            credentials_file: serde_json::to_string(&serde_json::json!({
-                "AccountTag": self.account_id,
-                "TunnelSecret": result.secret,
-                "TunnelID": result.id,
-            }))
-            .context("Failed to serialize credentials")?,
+            tunnel_id,
+            account_tag,
+            secret: result.credentials_file.tunnel_secret.clone(),
+            credentials_file: serde_json::to_string(&result.credentials_file)
+                .context("Failed to serialize credentials")?,
         };
 
         Ok(credentials)
@@ -254,10 +301,11 @@ impl CloudflareClient {
             .context("Failed to send get tunnel request")?;
 
         let status = response.status();
-        let response_body: GetTunnelResponse = response
-            .json()
-            .await
-            .context("Failed to parse get tunnel response")?;
+        let response_body: GetTunnelResponse = Self::parse_json_response(
+            response,
+            "Failed to parse get tunnel response",
+        )
+        .await?;
 
         if !response_body.success {
             let error_messages: Vec<String> = response_body
@@ -272,7 +320,9 @@ impl CloudflareClient {
             );
         }
 
-        Ok(response_body.result)
+        response_body
+            .result
+            .context("Cloudflare get tunnel response missing result payload")
     }
 
     /// Verify the API token can access the configured Cloudflare account.
@@ -295,10 +345,11 @@ impl CloudflareClient {
             .context("Failed to send account verification request")?;
 
         let status = response.status();
-        let response_body: GetAccountResponse = response
-            .json()
-            .await
-            .context("Failed to parse account verification response")?;
+        let response_body: GetAccountResponse = Self::parse_json_response(
+            response,
+            "Failed to parse account verification response",
+        )
+        .await?;
 
         if !response_body.success {
             let error_messages: Vec<String> = response_body
@@ -359,10 +410,11 @@ impl CloudflareClient {
             .context("Failed to send create DNS record request")?;
 
         let status = response.status();
-        let response_body: CreateDnsRecordResponse = response
-            .json()
-            .await
-            .context("Failed to parse create DNS record response")?;
+        let response_body: CreateDnsRecordResponse = Self::parse_json_response(
+            response,
+            "Failed to parse create DNS record response",
+        )
+        .await?;
 
         if !response_body.success {
             let error_messages: Vec<String> = response_body
@@ -377,7 +429,10 @@ impl CloudflareClient {
             );
         }
 
-        Ok(response_body.result.id)
+        Ok(response_body
+            .result
+            .context("Cloudflare create DNS response missing result payload")?
+            .id)
     }
 
     /// Delete a DNS record
@@ -439,5 +494,35 @@ mod tests {
             endpoint,
             "http://127.0.0.1:5000/client/v4/accounts/test-account/cfd_tunnel"
         );
+    }
+
+    #[test]
+    fn test_parse_create_tunnel_response_with_credentials_file_shape() {
+        let raw = r#"{
+            "success": true,
+            "errors": [],
+            "messages": [],
+            "result": {
+                "id": "935949eb-eebc-458f-86cc-de0502e91208",
+                "account_tag": "7e0b8efef44f34f5ab894aeb40f60d16",
+                "created_at": "2026-03-07T15:20:09.839552Z",
+                "name": "acpms-probe-1772896809",
+                "credentials_file": {
+                    "AccountTag": "7e0b8efef44f34f5ab894aeb40f60d16",
+                    "TunnelID": "935949eb-eebc-458f-86cc-de0502e91208",
+                    "TunnelName": "acpms-probe-1772896809",
+                    "TunnelSecret": "secret-value"
+                }
+            }
+        }"#;
+
+        let parsed: CreateTunnelResponse = serde_json::from_str(raw).unwrap();
+        let result = parsed.result.unwrap();
+        assert_eq!(result.id, "935949eb-eebc-458f-86cc-de0502e91208");
+        assert_eq!(
+            result.credentials_file.tunnel_id,
+            "935949eb-eebc-458f-86cc-de0502e91208"
+        );
+        assert_eq!(result.credentials_file.tunnel_secret, "secret-value");
     }
 }
