@@ -1,13 +1,15 @@
 use crate::assistant_log_buffer::AgentTextBuffer;
-use crate::claude::SpawnedAgent;
+use crate::claude::{ClaudeRuntimeSkillConfig, SpawnedAgent};
 use crate::process::{kill_process_group, terminate_process, InterruptSender};
 use crate::retry_handler::{RetryHandler, RetryScheduleResult};
 use crate::session::ClaudeSessionManager;
 use crate::worktree::repo_url_matches;
 use crate::{
-    append_assistant_log, build_skill_instruction_block, resolve_skill_chain, AgentEvent,
-    AssistantLogMessage, AttemptSuccessHook, ClaudeClient, CodexClient, CursorClient,
-    DeployContextPreparer, GeminiClient, GitOpsHandler, StatusManager, WorktreeManager,
+    append_assistant_log, build_skill_instruction_context, format_loaded_skills_log_line,
+    AgentEvent, AssistantLogMessage, AttemptSuccessHook, ClaudeClient, CodexClient, CursorClient,
+    DeployContextPreparer, GeminiClient, GitOpsHandler, RuntimeSkillLoadResult,
+    RuntimeSkillSearchResult, SkillInstructionContext, SkillKnowledgeHandle, SkillKnowledgeStatus,
+    SkillRuntime, StatusManager, WorktreeManager,
 };
 use acpms_db::models::{
     project_repo_relative_path, AttemptStatus, InitSource, InitTaskMetadata, Project,
@@ -71,6 +73,7 @@ const OVERRIDE_CODEX_BIN_ENV: &str = "ACPMS_AGENT_CODEX_BIN";
 const OVERRIDE_GEMINI_BIN_ENV: &str = "ACPMS_AGENT_GEMINI_BIN";
 const OVERRIDE_CURSOR_BIN_ENV: &str = "ACPMS_AGENT_CURSOR_BIN";
 const OVERRIDE_NPX_BIN_ENV: &str = "ACPMS_AGENT_NPX_BIN";
+const MAX_RUNTIME_SKILL_CONTENT_CHARS: usize = 12_000;
 mod init_flow;
 mod persistence_helpers;
 mod post_init;
@@ -526,6 +529,149 @@ fn detect_provider_auth_blocker(provider: AgentCliProvider, line: &str) -> Optio
     }
 }
 
+fn flatten_runtime_detail(detail: Option<&str>) -> String {
+    detail
+        .unwrap_or("No detail available.")
+        .split_whitespace()
+        .collect::<Vec<_>>()
+        .join(" ")
+}
+
+fn runtime_status_label(status: &SkillKnowledgeStatus) -> &'static str {
+    match status {
+        SkillKnowledgeStatus::Disabled => "disabled",
+        SkillKnowledgeStatus::Pending => "pending",
+        SkillKnowledgeStatus::Ready => "ready",
+        SkillKnowledgeStatus::Failed => "failed",
+        SkillKnowledgeStatus::NoMatches => "no_matches",
+    }
+}
+
+fn truncate_runtime_skill_content(content: &str, max_chars: usize) -> (String, bool) {
+    if content.chars().count() <= max_chars {
+        return (content.to_string(), false);
+    }
+
+    let truncated = content.chars().take(max_chars).collect::<String>();
+    (format!("{truncated}\n... (truncated)"), true)
+}
+
+fn format_runtime_skill_search_summary(query: &str, result: &RuntimeSkillSearchResult) -> String {
+    match result.status {
+        SkillKnowledgeStatus::Ready if !result.matches.is_empty() => {
+            let items = result
+                .matches
+                .iter()
+                .map(|skill| {
+                    format!(
+                        "{}@{} ({}%)",
+                        skill.skill_id,
+                        skill.origin,
+                        (skill.score * 100.0).round() as i32
+                    )
+                })
+                .collect::<Vec<_>>()
+                .join(", ");
+            format!(
+                "Runtime skill search: query=\"{}\" -> [{}]",
+                query.trim(),
+                items
+            )
+        }
+        _ => format!(
+            "Runtime skill search: query=\"{}\" -> {} ({})",
+            query.trim(),
+            runtime_status_label(&result.status),
+            flatten_runtime_detail(result.detail.as_deref())
+        ),
+    }
+}
+
+fn format_runtime_skill_search_follow_up(query: &str, result: &RuntimeSkillSearchResult) -> String {
+    let mut lines = vec![format!(
+        "ACPMS runtime skill search results for query: \"{}\"",
+        query.trim()
+    )];
+
+    match result.status {
+        SkillKnowledgeStatus::Ready if !result.matches.is_empty() => {
+            lines.push(
+                "If one is useful, load it by printing exactly one JSON object on its own line with no markdown fences:".to_string(),
+            );
+            lines.push(r#"{"tool":"load_skill","args":{"skill_id":"<skill-id>"}}"#.to_string());
+            for (idx, skill) in result.matches.iter().enumerate() {
+                lines.push(format!(
+                    "{}. {} | origin={} | relevance={}% | source={}",
+                    idx + 1,
+                    skill.skill_id,
+                    skill.origin,
+                    (skill.score * 100.0).round() as i32,
+                    skill.source_path
+                ));
+                if !skill.description.trim().is_empty() {
+                    lines.push(format!("   {}", skill.description.trim()));
+                }
+            }
+        }
+        _ => {
+            lines.push(flatten_runtime_detail(result.detail.as_deref()));
+            lines.push(
+                "Continue with the currently loaded skills unless you want to retry later."
+                    .to_string(),
+            );
+        }
+    }
+
+    lines.join("\n")
+}
+
+fn format_runtime_skill_load_summary(skill_id: &str, result: &RuntimeSkillLoadResult) -> String {
+    match (&result.status, &result.skill) {
+        (SkillKnowledgeStatus::Ready, Some(skill)) => format!(
+            "Runtime skill loaded: {}@{}",
+            skill.skill_id,
+            skill.origin.as_deref().unwrap_or("unknown")
+        ),
+        _ => format!(
+            "Runtime skill load: skill_id=\"{}\" -> {} ({})",
+            skill_id.trim(),
+            runtime_status_label(&result.status),
+            flatten_runtime_detail(result.detail.as_deref())
+        ),
+    }
+}
+
+fn format_runtime_skill_load_follow_up(skill_id: &str, result: &RuntimeSkillLoadResult) -> String {
+    match &result.skill {
+        Some(skill) if result.status == SkillKnowledgeStatus::Ready => {
+            let (content, was_truncated) =
+                truncate_runtime_skill_content(&skill.content, MAX_RUNTIME_SKILL_CONTENT_CHARS);
+            let mut lines = vec![
+                "ACPMS runtime skill loaded.".to_string(),
+                format!("skill_id: {}", skill.skill_id),
+                format!("origin: {}", skill.origin.as_deref().unwrap_or("unknown")),
+            ];
+            if let Some(source_path) = &skill.source_path {
+                lines.push(format!("source: {}", source_path));
+            }
+            if was_truncated {
+                lines.push(
+                    "The skill body was truncated to fit runtime context. Follow the visible guidance first.".to_string(),
+                );
+            }
+            lines.push("Apply this skill where relevant for the rest of the attempt.".to_string());
+            lines.push(String::new());
+            lines.push(content);
+            lines.join("\n")
+        }
+        _ => format!(
+            "ACPMS runtime skill load failed for `{}`.\n{}",
+            skill_id.trim(),
+            flatten_runtime_detail(result.detail.as_deref())
+        ),
+    }
+}
+
 pub struct ExecutorOrchestrator {
     db_pool: PgPool,
     worktree_manager: WorktreeManager,
@@ -551,6 +697,8 @@ pub struct ExecutorOrchestrator {
     deploy_context_preparer: Option<Arc<dyn DeployContextPreparer>>,
     /// Active Project Assistant sessions (session_id -> session).
     active_assistant_sessions: Arc<Mutex<HashMap<Uuid, AssistantActiveSession>>>,
+    /// Shared global skill knowledge handle for RAG suggestions.
+    skill_knowledge: SkillKnowledgeHandle,
 }
 
 impl ExecutorOrchestrator {
@@ -598,6 +746,7 @@ impl ExecutorOrchestrator {
             attempt_success_hook: None,
             deploy_context_preparer: None,
             active_assistant_sessions: Arc::new(Mutex::new(HashMap::new())),
+            skill_knowledge: SkillKnowledgeHandle::disabled(),
         })
     }
 
@@ -612,6 +761,202 @@ impl ExecutorOrchestrator {
     ) -> Self {
         self.deploy_context_preparer = Some(preparer);
         self
+    }
+
+    pub fn with_skill_knowledge(mut self, handle: SkillKnowledgeHandle) -> Self {
+        self.skill_knowledge = handle;
+        self
+    }
+
+    pub fn skill_knowledge(&self) -> SkillKnowledgeHandle {
+        self.skill_knowledge.clone()
+    }
+
+    fn build_skill_instruction_context(
+        &self,
+        task: &Task,
+        settings: &ProjectSettings,
+        project_type: ProjectType,
+        repo_path: Option<&Path>,
+    ) -> SkillInstructionContext {
+        build_skill_instruction_context(
+            task,
+            settings,
+            project_type,
+            repo_path,
+            Some(&self.skill_knowledge),
+        )
+    }
+
+    async fn log_loaded_skills(
+        &self,
+        attempt_id: Uuid,
+        context: &SkillInstructionContext,
+    ) -> Result<()> {
+        let message = format_loaded_skills_log_line(context);
+        self.log(attempt_id, "system", &message).await
+    }
+
+    async fn emit_runtime_capable_assistant_chunk(
+        &self,
+        attempt_id: Uuid,
+        repo_path: &Path,
+        buffer: &mut AgentTextBuffer,
+        text: &str,
+    ) -> Result<()> {
+        buffer.push(text);
+
+        let mut emitted_any = false;
+        while let Some((content, metadata)) = buffer.pop_next() {
+            emitted_any = true;
+            self.handle_runtime_capable_agent_output(
+                attempt_id,
+                repo_path,
+                &content,
+                metadata.as_ref(),
+            )
+            .await?;
+        }
+
+        if !emitted_any {
+            if let Some((content, metadata)) = buffer.pop_partial_text_for_display() {
+                self.handle_runtime_capable_agent_output(
+                    attempt_id,
+                    repo_path,
+                    &content,
+                    metadata.as_ref(),
+                )
+                .await?;
+            }
+        }
+
+        Ok(())
+    }
+
+    async fn flush_runtime_capable_assistant_buffer(
+        &self,
+        attempt_id: Uuid,
+        repo_path: &Path,
+        buffer: &mut AgentTextBuffer,
+    ) -> Result<()> {
+        if let Some((content, metadata)) = buffer.flush() {
+            self.handle_runtime_capable_agent_output(
+                attempt_id,
+                repo_path,
+                &content,
+                metadata.as_ref(),
+            )
+            .await?;
+        }
+
+        Ok(())
+    }
+
+    async fn handle_runtime_capable_agent_output(
+        &self,
+        attempt_id: Uuid,
+        repo_path: &Path,
+        content: &str,
+        metadata: Option<&serde_json::Value>,
+    ) -> Result<()> {
+        if !content.trim().is_empty() {
+            StatusManager::log_assistant_delta(
+                &self.db_pool,
+                &self.broadcast_tx,
+                attempt_id,
+                content,
+            )
+            .await?;
+        }
+
+        if let Some(metadata) = metadata {
+            self.handle_runtime_skill_tool_calls(attempt_id, repo_path, metadata)
+                .await?;
+        }
+
+        Ok(())
+    }
+
+    async fn handle_runtime_skill_tool_calls(
+        &self,
+        attempt_id: Uuid,
+        repo_path: &Path,
+        metadata: &serde_json::Value,
+    ) -> Result<()> {
+        let Some(tool_calls) = metadata
+            .get("tool_calls")
+            .and_then(|value| value.as_array())
+        else {
+            return Ok(());
+        };
+
+        let runtime = SkillRuntime::new(Some(&self.skill_knowledge));
+        for tool_call in tool_calls {
+            let Some(name) = tool_call.get("name").and_then(|value| value.as_str()) else {
+                continue;
+            };
+            let Some(args) = tool_call.get("args").and_then(|value| value.as_object()) else {
+                continue;
+            };
+
+            match name {
+                "search_skills" => {
+                    let Some(query) = args.get("query").and_then(|value| value.as_str()) else {
+                        continue;
+                    };
+                    let top_k = args
+                        .get("top_k")
+                        .and_then(|value| value.as_u64())
+                        .map(|value| value as usize)
+                        .unwrap_or(5);
+                    let result = runtime.search_runtime(query, top_k);
+                    let summary = format_runtime_skill_search_summary(query, &result);
+                    self.log(attempt_id, "system", &summary).await?;
+
+                    let follow_up = format_runtime_skill_search_follow_up(query, &result);
+                    if let Err(error) = self.send_input(attempt_id, &follow_up).await {
+                        warn!(
+                            attempt_id = %attempt_id,
+                            error = %error,
+                            query = %query,
+                            "Failed to deliver runtime skill search response"
+                        );
+                        let message = format!(
+                            "Failed to deliver runtime skill search response to agent: {}",
+                            error
+                        );
+                        let _ = self.log(attempt_id, "stderr", &message).await;
+                    }
+                }
+                "load_skill" => {
+                    let Some(skill_id) = args.get("skill_id").and_then(|value| value.as_str())
+                    else {
+                        continue;
+                    };
+                    let result = runtime.load_runtime(skill_id, Some(repo_path));
+                    let summary = format_runtime_skill_load_summary(skill_id, &result);
+                    self.log(attempt_id, "system", &summary).await?;
+
+                    let follow_up = format_runtime_skill_load_follow_up(skill_id, &result);
+                    if let Err(error) = self.send_input(attempt_id, &follow_up).await {
+                        warn!(
+                            attempt_id = %attempt_id,
+                            error = %error,
+                            skill_id = %skill_id,
+                            "Failed to deliver runtime skill load response"
+                        );
+                        let message = format!(
+                            "Failed to deliver runtime skill load response to agent: {}",
+                            error
+                        );
+                        let _ = self.log(attempt_id, "stderr", &message).await;
+                    }
+                }
+                _ => {}
+            }
+        }
+
+        Ok(())
     }
 
     /// Verify Claude session exists before execution.
@@ -2018,6 +2363,10 @@ impl ExecutorOrchestrator {
                             Some(self.broadcast_tx.clone()),
                             Some(&agent_settings),
                             claude_input_rx,
+                            Some(ClaudeRuntimeSkillConfig {
+                                repo_path: worktree_path.to_path_buf(),
+                                skill_knowledge: self.skill_knowledge.clone(),
+                            }),
                         )
                         .await
                 }
@@ -2282,6 +2631,7 @@ impl ExecutorOrchestrator {
         let mut stdout_done = false;
         let mut stderr_done = false;
         let mut assistant_snapshots: HashMap<String, String> = HashMap::new();
+        let mut agent_buffer = AgentTextBuffer::new();
 
         loop {
             tokio::select! {
@@ -2339,10 +2689,10 @@ impl ExecutorOrchestrator {
                                         assistant_snapshots.insert(key.clone(), text);
 
                                         if let Some(fragment) = fragment_to_emit {
-                                            StatusManager::log_assistant_delta(
-                                                &self.db_pool,
-                                                &self.broadcast_tx,
+                                            self.emit_runtime_capable_assistant_chunk(
                                                 attempt_id,
+                                                worktree_path,
+                                                &mut agent_buffer,
                                                 &fragment,
                                             )
                                             .await?;
@@ -2573,6 +2923,9 @@ impl ExecutorOrchestrator {
             }
         }
 
+        self.flush_runtime_capable_assistant_buffer(attempt_id, worktree_path, &mut agent_buffer)
+            .await?;
+
         Ok(())
     }
 
@@ -2614,6 +2967,7 @@ impl ExecutorOrchestrator {
 
         let mut stdout_done = false;
         let mut stderr_done = false;
+        let mut agent_buffer = AgentTextBuffer::new();
 
         loop {
             tokio::select! {
@@ -2651,10 +3005,10 @@ impl ExecutorOrchestrator {
                                         if text.trim().is_empty() {
                                             continue;
                                         }
-                                        StatusManager::log_assistant_delta(
-                                            &self.db_pool,
-                                            &self.broadcast_tx,
+                                        self.emit_runtime_capable_assistant_chunk(
                                             attempt_id,
+                                            worktree_path,
+                                            &mut agent_buffer,
                                             &text,
                                         )
                                         .await?;
@@ -2882,6 +3236,9 @@ impl ExecutorOrchestrator {
             }
         }
 
+        self.flush_runtime_capable_assistant_buffer(attempt_id, worktree_path, &mut agent_buffer)
+            .await?;
+
         Ok(())
     }
 
@@ -2907,6 +3264,7 @@ impl ExecutorOrchestrator {
 
         let mut stdout_done = false;
         let mut stderr_done = false;
+        let mut agent_buffer = AgentTextBuffer::new();
 
         loop {
             tokio::select! {
@@ -2944,10 +3302,10 @@ impl ExecutorOrchestrator {
                                         if text.trim().is_empty() {
                                             continue;
                                         }
-                                        StatusManager::log_assistant_delta(
-                                            &self.db_pool,
-                                            &self.broadcast_tx,
+                                        self.emit_runtime_capable_assistant_chunk(
                                             attempt_id,
+                                            worktree_path,
+                                            &mut agent_buffer,
                                             &text,
                                         )
                                         .await?;
@@ -2993,10 +3351,10 @@ impl ExecutorOrchestrator {
                                     } => {
                                         StatusManager::reset_assistant_accumulator(attempt_id).await;
                                         if !result.trim().is_empty() {
-                                            StatusManager::log_assistant_delta(
-                                                &self.db_pool,
-                                                &self.broadcast_tx,
+                                            self.emit_runtime_capable_assistant_chunk(
                                                 attempt_id,
+                                                worktree_path,
+                                                &mut agent_buffer,
                                                 &result,
                                             )
                                             .await?;
@@ -3099,6 +3457,9 @@ impl ExecutorOrchestrator {
                 break;
             }
         }
+
+        self.flush_runtime_capable_assistant_buffer(attempt_id, worktree_path, &mut agent_buffer)
+            .await?;
 
         Ok(())
     }
@@ -5968,12 +6329,16 @@ impl ExecutorOrchestrator {
                 };
 
                 let task_desc = task.description.as_deref().unwrap_or(&task.title);
-                let resolved_skill_chain =
-                    resolve_skill_chain(&task, &settings, project.project_type);
+                let skill_context = self.build_skill_instruction_context(
+                    &task,
+                    &settings,
+                    project.project_type,
+                    Some(repo_path.as_path()),
+                );
                 if let Err(error) = self
-                    .persist_resolved_skill_chain(
+                    .persist_skill_instruction_context(
                         attempt_id,
-                        &resolved_skill_chain,
+                        &skill_context,
                         "orchestrator_execute_task",
                     )
                     .await
@@ -5981,15 +6346,17 @@ impl ExecutorOrchestrator {
                     warn!(
                         attempt_id = %attempt_id,
                         error = %error,
-                        "Failed to persist resolved skill chain metadata from orchestrator"
+                        "Failed to persist skill instruction metadata from orchestrator"
                     );
                 }
-                let skill_block = build_skill_instruction_block(
-                    &task,
-                    &settings,
-                    project.project_type,
-                    Some(repo_path.as_path()),
-                );
+                if let Err(error) = self.log_loaded_skills(attempt_id, &skill_context).await {
+                    warn!(
+                        attempt_id = %attempt_id,
+                        error = %error,
+                        "Failed to append skill timeline log from orchestrator"
+                    );
+                }
+                let skill_block = skill_context.block.clone();
                 let verification_rule = if run_build_and_tests {
                     "2. Run verification (build, lint, tests as appropriate)."
                 } else {
@@ -6163,6 +6530,10 @@ IMPORTANT: Do not commit unrelated files. Verify changes work before committing.
                         Some(self.broadcast_tx.clone()),
                         Some(&agent_settings),
                         claude_input_rx,
+                        Some(ClaudeRuntimeSkillConfig {
+                            repo_path: effective_path.clone(),
+                            skill_knowledge: self.skill_knowledge.clone(),
+                        }),
                     )
                     .await
                     .context("Failed to spawn Claude agent for resume")?

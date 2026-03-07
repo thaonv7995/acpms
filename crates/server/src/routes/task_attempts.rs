@@ -1,12 +1,13 @@
 use acpms_db::models::{
     project_repo_relative_path, AttemptStatus, ExecutionProcess as DbExecutionProcess,
-    FileDiff as DbFileDiff, Project, ProjectSettings, ProjectType, RepositoryAccessMode,
-    RepositoryContext, RepositoryVerificationStatus, SendInputRequest, Task, TaskStatus, TaskType,
+    FileDiff as DbFileDiff, Project, ProjectSettings, RepositoryAccessMode, RepositoryContext,
+    RepositoryVerificationStatus, SendInputRequest, Task, TaskStatus, TaskType,
     UpdateProjectRequest,
 };
 use acpms_executors::{
-    build_skill_instruction_block, resolve_skill_chain, AgentEvent, JobPriority, RetryInfo,
-    StatusManager, StatusMessage,
+    build_skill_instruction_context, build_skill_metadata_patch, format_loaded_skills_log_line,
+    AgentEvent, JobPriority, RetryInfo, SkillInstructionContext, SkillKnowledgeStatus,
+    StatusManager, StatusMessage, SuggestedSkill,
 };
 use acpms_services::{
     NormalizedLogService, ProjectService, RepositoryAccessService, SubagentService,
@@ -18,6 +19,7 @@ use axum::Json;
 use chrono::Utc;
 use serde::{Deserialize, Serialize};
 use std::collections::HashSet;
+use std::path::PathBuf;
 use uuid::Uuid;
 
 use crate::api::{AgentLogDto, ApiResponse, RetryInfoDto, RetryResponseDto, TaskAttemptDto};
@@ -502,14 +504,11 @@ fn prepend_language_instruction(instruction: String, preferred_language: Option<
 
 fn build_attempt_instruction(
     task: &Task,
-    settings: &ProjectSettings,
-    project_type: ProjectType,
-    repo_path: Option<&std::path::Path>,
+    skill_context: &SkillInstructionContext,
     require_review: bool,
 ) -> String {
     let run_build_and_tests = task_run_build_and_tests(task);
     let description = task.description.as_deref().unwrap_or_default();
-    let skill_block = build_skill_instruction_block(task, settings, project_type, repo_path);
     let architecture_rule_block = build_architecture_change_instruction_block(task);
 
     let verification_rule = if run_build_and_tests {
@@ -541,7 +540,7 @@ fn build_attempt_instruction(
         verification_rule,
         finalize_rule,
         architecture_rule_block,
-        skill_block
+        skill_context.block
     )
 }
 
@@ -551,6 +550,20 @@ fn parse_job_priority(priority: &str) -> JobPriority {
         "low" => JobPriority::Low,
         _ => JobPriority::Normal,
     }
+}
+
+fn resolve_project_repo_path(project: &Project) -> PathBuf {
+    let worktrees_base = std::env::var("WORKTREES_PATH").unwrap_or_else(|_| {
+        std::env::var("HOME")
+            .ok()
+            .map(|h| format!("{}/Projects", h.trim_end_matches('/')))
+            .unwrap_or_else(|| "./worktrees".to_string())
+    });
+    PathBuf::from(worktrees_base).join(project_repo_relative_path(
+        project.id,
+        &project.metadata,
+        &project.name,
+    ))
 }
 
 fn task_status_to_metadata_value(status: TaskStatus) -> &'static str {
@@ -764,30 +777,93 @@ fn extract_resolved_skill_chain(metadata: &serde_json::Value) -> Option<Vec<Stri
     }
 }
 
-async fn persist_resolved_skill_chain_metadata(
+#[derive(Debug, Clone, Serialize, Deserialize)]
+struct StoredKnowledgeSuggestions {
+    status: SkillKnowledgeStatus,
+    detail: Option<String>,
+    items: Vec<SuggestedSkill>,
+}
+
+fn extract_knowledge_suggestions(
+    metadata: &serde_json::Value,
+) -> Option<StoredKnowledgeSuggestions> {
+    metadata
+        .get("knowledge_suggestions")
+        .cloned()
+        .and_then(|value| serde_json::from_value(value).ok())
+}
+
+async fn persist_skill_instruction_context_metadata(
     pool: &sqlx::PgPool,
     attempt_id: Uuid,
-    skill_chain: &[String],
+    context: &SkillInstructionContext,
     source: &str,
 ) -> Result<(), sqlx::Error> {
+    let patch = build_skill_metadata_patch(context, source);
     sqlx::query(
         r#"
         UPDATE task_attempts
-        SET metadata = COALESCE(metadata, '{}'::jsonb)
-            || jsonb_build_object(
-                'resolved_skill_chain', $2::jsonb,
-                'resolved_skill_chain_source', $3::text
-            )
+        SET metadata = COALESCE(metadata, '{}'::jsonb) || $2::jsonb
         WHERE id = $1
         "#,
     )
     .bind(attempt_id)
-    .bind(serde_json::json!(skill_chain))
-    .bind(source)
+    .bind(patch)
     .execute(pool)
     .await?;
 
     Ok(())
+}
+
+async fn append_skill_timeline_log(
+    pool: &sqlx::PgPool,
+    broadcast_tx: &tokio::sync::broadcast::Sender<AgentEvent>,
+    attempt_id: Uuid,
+    context: &SkillInstructionContext,
+) -> anyhow::Result<()> {
+    let message = format_loaded_skills_log_line(context);
+    StatusManager::log(pool, broadcast_tx, attempt_id, "system", &message).await
+}
+
+fn skill_knowledge_status_label(status: &SkillKnowledgeStatus) -> &'static str {
+    match status {
+        SkillKnowledgeStatus::Disabled => "disabled",
+        SkillKnowledgeStatus::Pending => "pending",
+        SkillKnowledgeStatus::Ready => "ready",
+        SkillKnowledgeStatus::Failed => "failed",
+        SkillKnowledgeStatus::NoMatches => "no_matches",
+    }
+}
+
+#[derive(Debug, Serialize, ToSchema)]
+pub struct AttemptKnowledgeSuggestionDto {
+    pub skill_id: String,
+    pub name: String,
+    pub description: String,
+    pub score: f32,
+    pub source_path: String,
+    pub origin: String,
+}
+
+impl From<SuggestedSkill> for AttemptKnowledgeSuggestionDto {
+    fn from(value: SuggestedSkill) -> Self {
+        Self {
+            skill_id: value.skill_id,
+            name: value.name,
+            description: value.description,
+            score: value.score,
+            source_path: value.source_path,
+            origin: value.origin,
+        }
+    }
+}
+
+#[derive(Debug, Serialize, ToSchema)]
+pub struct AttemptKnowledgeSuggestionsDto {
+    pub status: String,
+    #[schema(nullable = true)]
+    pub detail: Option<String>,
+    pub items: Vec<AttemptKnowledgeSuggestionDto>,
 }
 
 #[derive(Debug, Serialize, ToSchema)]
@@ -797,6 +873,7 @@ pub struct AttemptSkillsDto {
     #[schema(value_type = Vec<String>)]
     pub resolved_skill_chain: Vec<String>,
     pub source: String,
+    pub knowledge_suggestions: AttemptKnowledgeSuggestionsDto,
 }
 
 #[utoipa::path(
@@ -915,24 +992,21 @@ pub async fn create_task_attempt(
         .await
         .map_err(|e| ApiError::Internal(e.to_string()))?;
 
-    let worktrees_base = std::env::var("WORKTREES_PATH").unwrap_or_else(|_| {
-        std::env::var("HOME")
-            .ok()
-            .map(|h| format!("{}/Projects", h.trim_end_matches('/')))
-            .unwrap_or_else(|| "./worktrees".to_string())
-    });
-    let repo_path = std::path::PathBuf::from(worktrees_base).join(project_repo_relative_path(
-        project.id,
-        &project.metadata,
-        &project.name,
-    ));
+    let repo_path = resolve_project_repo_path(&project);
 
     let attempt_id = attempt.id;
-    let resolved_skill_chain = resolve_skill_chain(&task, &settings, project.project_type);
-    if let Err(error) = persist_resolved_skill_chain_metadata(
+    let skill_knowledge = state.orchestrator.skill_knowledge();
+    let skill_context = build_skill_instruction_context(
+        &task,
+        &settings,
+        project.project_type,
+        Some(repo_path.as_path()),
+        Some(&skill_knowledge),
+    );
+    if let Err(error) = persist_skill_instruction_context_metadata(
         &pool,
         attempt_id,
-        &resolved_skill_chain,
+        &skill_context,
         "attempt_create",
     )
     .await
@@ -940,18 +1014,23 @@ pub async fn create_task_attempt(
         tracing::warn!(
             attempt_id = %attempt_id,
             error = %error,
-            "Failed to persist resolved skill chain metadata during attempt creation"
+            "Failed to persist skill instruction metadata during attempt creation"
         );
+    }
+    if task.task_type != TaskType::Init {
+        if let Err(error) =
+            append_skill_timeline_log(&pool, &state.broadcast_tx, attempt_id, &skill_context).await
+        {
+            tracing::warn!(
+                attempt_id = %attempt_id,
+                error = %error,
+                "Failed to append skill timeline log during attempt creation"
+            );
+        }
     }
 
     let require_review = task_require_review(&task, &settings);
-    let mut instruction = build_attempt_instruction(
-        &task,
-        &settings,
-        project.project_type,
-        Some(repo_path.as_path()),
-        require_review,
-    );
+    let mut instruction = build_attempt_instruction(&task, &skill_context, require_review);
     let preferred_settings = state.settings_service.get().await.ok();
     let preferred_lang = preferred_settings
         .as_ref()
@@ -1332,32 +1411,68 @@ pub async fn get_attempt_skills(
         .await
         .map_err(|e| ApiError::Internal(e.to_string()))?;
 
-    let (resolved_skill_chain, source) =
-        if let Some(skills) = extract_resolved_skill_chain(&attempt.metadata) {
-            let source = attempt
-                .metadata
-                .get("resolved_skill_chain_source")
-                .and_then(|value| value.as_str())
-                .unwrap_or("attempt_metadata")
-                .to_string();
-            (skills, source)
+    let persisted_source = attempt
+        .metadata
+        .get("resolved_skill_chain_source")
+        .and_then(|value| value.as_str())
+        .map(ToString::to_string);
+    let existing_chain = extract_resolved_skill_chain(&attempt.metadata);
+    let existing_knowledge = extract_knowledge_suggestions(&attempt.metadata);
+
+    let (resolved_skill_chain, source, knowledge_suggestions) =
+        if let (Some(skills), Some(knowledge)) = (existing_chain, existing_knowledge) {
+            (
+                skills,
+                persisted_source.unwrap_or_else(|| "attempt_metadata".to_string()),
+                AttemptKnowledgeSuggestionsDto {
+                    status: skill_knowledge_status_label(&knowledge.status).to_string(),
+                    detail: knowledge.detail,
+                    items: knowledge.items.into_iter().map(Into::into).collect(),
+                },
+            )
         } else {
-            let skills = resolve_skill_chain(&task, &settings, project.project_type);
-            if let Err(error) = persist_resolved_skill_chain_metadata(
+            let repo_path = project
+                .repository_url
+                .as_ref()
+                .map(|_| resolve_project_repo_path(&project));
+            let skill_knowledge = state.orchestrator.skill_knowledge();
+            let context = build_skill_instruction_context(
+                &task,
+                &settings,
+                project.project_type,
+                repo_path.as_deref(),
+                Some(&skill_knowledge),
+            );
+            let fallback_source = persisted_source
+                .clone()
+                .unwrap_or_else(|| "attempt_skills_read_fallback".to_string());
+            if let Err(error) = persist_skill_instruction_context_metadata(
                 &pool,
                 attempt_id,
-                &skills,
-                "attempt_skills_read_fallback",
+                &context,
+                &fallback_source,
             )
             .await
             {
                 tracing::warn!(
                     attempt_id = %attempt_id,
                     error = %error,
-                    "Failed to persist fallback resolved skill chain metadata"
+                    "Failed to persist fallback skill instruction metadata"
                 );
             }
-            (skills, "derived_runtime".to_string())
+            (
+                context.resolved_skill_chain,
+                fallback_source,
+                AttemptKnowledgeSuggestionsDto {
+                    status: skill_knowledge_status_label(&context.knowledge_status).to_string(),
+                    detail: context.knowledge_detail,
+                    items: context
+                        .suggested_skills
+                        .into_iter()
+                        .map(Into::into)
+                        .collect(),
+                },
+            )
         };
 
     let dto = AttemptSkillsDto {
@@ -1365,6 +1480,7 @@ pub async fn get_attempt_skills(
         task_id: task.id,
         resolved_skill_chain,
         source,
+        knowledge_suggestions,
     };
     let response = ApiResponse::success(dto, "Attempt skills retrieved successfully");
     Ok(Json(response))
@@ -4031,23 +4147,20 @@ pub async fn retry_attempt(
         .map_err(|e| ApiError::Internal(e.to_string()))?
         .ok_or_else(|| ApiError::NotFound("Project not found".to_string()))?;
 
-    let worktrees_base = std::env::var("WORKTREES_PATH").unwrap_or_else(|_| {
-        std::env::var("HOME")
-            .ok()
-            .map(|h| format!("{}/Projects", h.trim_end_matches('/')))
-            .unwrap_or_else(|| "./worktrees".to_string())
-    });
-    let repo_path = std::path::PathBuf::from(worktrees_base).join(project_repo_relative_path(
-        project.id,
-        &project.metadata,
-        &project.name,
-    ));
+    let repo_path = resolve_project_repo_path(&project);
 
-    let resolved_skill_chain = resolve_skill_chain(&task, &settings, project.project_type);
-    if let Err(error) = persist_resolved_skill_chain_metadata(
+    let skill_knowledge = state.orchestrator.skill_knowledge();
+    let skill_context = build_skill_instruction_context(
+        &task,
+        &settings,
+        project.project_type,
+        Some(repo_path.as_path()),
+        Some(&skill_knowledge),
+    );
+    if let Err(error) = persist_skill_instruction_context_metadata(
         &pool,
         new_attempt.id,
-        &resolved_skill_chain,
+        &skill_context,
         "attempt_retry_create",
     )
     .await
@@ -4055,18 +4168,21 @@ pub async fn retry_attempt(
         tracing::warn!(
             attempt_id = %new_attempt.id,
             error = %error,
-            "Failed to persist resolved skill chain metadata during retry creation"
+            "Failed to persist skill instruction metadata during retry creation"
+        );
+    }
+    if let Err(error) =
+        append_skill_timeline_log(&pool, &state.broadcast_tx, new_attempt.id, &skill_context).await
+    {
+        tracing::warn!(
+            attempt_id = %new_attempt.id,
+            error = %error,
+            "Failed to append skill timeline log during retry creation"
         );
     }
 
     let require_review = task_require_review(&task, &settings);
-    let mut instruction = build_attempt_instruction(
-        &task,
-        &settings,
-        project.project_type,
-        Some(repo_path.as_path()),
-        require_review,
-    );
+    let mut instruction = build_attempt_instruction(&task, &skill_context, require_review);
     let preferred_settings = state.settings_service.get().await.ok();
     let preferred_lang = preferred_settings
         .as_ref()

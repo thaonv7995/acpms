@@ -77,18 +77,6 @@ impl ExecutorOrchestrator {
             .fetch_project_settings(task.project_id)
             .await
             .unwrap_or_default();
-        let resolved_skill_chain =
-            resolve_skill_chain(task, &project_settings, project.project_type);
-        if let Err(error) = self
-            .persist_resolved_skill_chain(attempt_id, &resolved_skill_chain, "init_gitlab_import")
-            .await
-        {
-            warn!(
-                attempt_id = %attempt_id,
-                error = %error,
-                "Failed to persist resolved skill chain metadata for GitLab import init attempt"
-            );
-        }
         let repo_url = metadata
             .repository_url
             .as_ref()
@@ -109,6 +97,30 @@ impl ExecutorOrchestrator {
                 Some(repo_url),
             )
             .await?;
+
+        let skill_context = self.build_skill_instruction_context(
+            task,
+            &project_settings,
+            project.project_type,
+            Some(repo_path.as_path()),
+        );
+        if let Err(error) = self
+            .persist_skill_instruction_context(attempt_id, &skill_context, "init_gitlab_import")
+            .await
+        {
+            warn!(
+                attempt_id = %attempt_id,
+                error = %error,
+                "Failed to persist skill instruction metadata for GitLab import init attempt"
+            );
+        }
+        if let Err(error) = self.log_loaded_skills(attempt_id, &skill_context).await {
+            warn!(
+                attempt_id = %attempt_id,
+                error = %error,
+                "Failed to append skill timeline log for GitLab import init attempt"
+            );
+        }
 
         // Create execution_process when orchestrator created the attempt (no server-created record)
         if existing_attempt_id.is_none() {
@@ -853,25 +865,31 @@ Create `.acpms/import-analysis.json` with valid JSON. Do not modify any source c
         }
         // --- End Native Git Init ---
 
-        let resolved_skill_chain =
-            resolve_skill_chain(task, &project_settings, project.project_type);
-        if let Err(error) = self
-            .persist_resolved_skill_chain(attempt_id, &resolved_skill_chain, "init_from_scratch")
-            .await
-        {
-            warn!(
-                attempt_id = %attempt_id,
-                error = %error,
-                "Failed to persist resolved skill chain metadata for from-scratch init attempt"
-            );
-        }
-
-        let skill_block = build_skill_instruction_block(
+        let skill_context = self.build_skill_instruction_context(
             task,
             &project_settings,
             project.project_type,
             Some(worktree_path.as_path()),
         );
+        if let Err(error) = self
+            .persist_skill_instruction_context(attempt_id, &skill_context, "init_from_scratch")
+            .await
+        {
+            warn!(
+                attempt_id = %attempt_id,
+                error = %error,
+                "Failed to persist skill instruction metadata for from-scratch init attempt"
+            );
+        }
+        if let Err(error) = self.log_loaded_skills(attempt_id, &skill_context).await {
+            warn!(
+                attempt_id = %attempt_id,
+                error = %error,
+                "Failed to append skill timeline log for from-scratch init attempt"
+            );
+        }
+
+        let skill_block = skill_context.block.clone();
 
         // Store worktree path in attempt metadata for later use (resume/review)
         self.store_worktree_path(attempt_id, &worktree_path).await?;
@@ -1072,6 +1090,10 @@ You are tasked with creating a new {} project and initializing it with a basic p
                         Some(self.broadcast_tx.clone()),
                         Some(&agent_settings),
                         Some(claude_input_rx),
+                        Some(crate::claude::ClaudeRuntimeSkillConfig {
+                            repo_path: worktree_path.clone(),
+                            skill_knowledge: self.skill_knowledge.clone(),
+                        }),
                     )
                     .await
                 {

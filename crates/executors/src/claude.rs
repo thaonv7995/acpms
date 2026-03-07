@@ -3,7 +3,7 @@
 use anyhow::{Context, Result};
 use command_group::{AsyncCommandGroup, AsyncGroupChild};
 use std::collections::HashMap;
-use std::path::Path;
+use std::path::{Path, PathBuf};
 use std::process::Stdio;
 use std::sync::Arc;
 use tokio::io::{AsyncBufReadExt, BufReader};
@@ -21,6 +21,12 @@ use crate::orchestrator_status::StatusManager;
 use crate::process::{InterruptReceiver, InterruptSender};
 use crate::protocol::{PermissionMode, ProtocolPeer};
 use crate::stdout_dup::create_stdout_pipe_writer;
+use crate::{
+    RuntimeSkillLoadResult, RuntimeSkillSearchResult, SkillKnowledgeHandle, SkillKnowledgeStatus,
+    SkillRuntime,
+};
+
+const MAX_RUNTIME_SKILL_CONTENT_CHARS: usize = 12_000;
 
 /// Result of spawning a Claude agent process.
 pub struct SpawnedAgent {
@@ -32,6 +38,230 @@ pub struct SpawnedAgent {
     pub interrupt_receiver: Option<InterruptReceiver>,
     /// Message store for log buffering and streaming (SDK mode).
     pub msg_store: Option<Arc<MsgStore>>,
+}
+
+#[derive(Clone)]
+pub struct ClaudeRuntimeSkillConfig {
+    pub repo_path: PathBuf,
+    pub skill_knowledge: SkillKnowledgeHandle,
+}
+
+fn flatten_runtime_detail(detail: Option<&str>) -> String {
+    detail
+        .unwrap_or("No detail available.")
+        .split_whitespace()
+        .collect::<Vec<_>>()
+        .join(" ")
+}
+
+fn runtime_status_label(status: &SkillKnowledgeStatus) -> &'static str {
+    match status {
+        SkillKnowledgeStatus::Disabled => "disabled",
+        SkillKnowledgeStatus::Pending => "pending",
+        SkillKnowledgeStatus::Ready => "ready",
+        SkillKnowledgeStatus::Failed => "failed",
+        SkillKnowledgeStatus::NoMatches => "no_matches",
+    }
+}
+
+fn truncate_runtime_skill_content(content: &str, max_chars: usize) -> (String, bool) {
+    if content.chars().count() <= max_chars {
+        return (content.to_string(), false);
+    }
+
+    let truncated = content.chars().take(max_chars).collect::<String>();
+    (format!("{truncated}\n... (truncated)"), true)
+}
+
+fn format_runtime_skill_search_summary(query: &str, result: &RuntimeSkillSearchResult) -> String {
+    match result.status {
+        SkillKnowledgeStatus::Ready if !result.matches.is_empty() => {
+            let items = result
+                .matches
+                .iter()
+                .map(|skill| {
+                    format!(
+                        "{}@{} ({}%)",
+                        skill.skill_id,
+                        skill.origin,
+                        (skill.score * 100.0).round() as i32
+                    )
+                })
+                .collect::<Vec<_>>()
+                .join(", ");
+            format!(
+                "Runtime skill search: query=\"{}\" -> [{}]",
+                query.trim(),
+                items
+            )
+        }
+        _ => format!(
+            "Runtime skill search: query=\"{}\" -> {} ({})",
+            query.trim(),
+            runtime_status_label(&result.status),
+            flatten_runtime_detail(result.detail.as_deref())
+        ),
+    }
+}
+
+fn format_runtime_skill_search_follow_up(query: &str, result: &RuntimeSkillSearchResult) -> String {
+    let mut lines = vec![format!(
+        "ACPMS runtime skill search results for query: \"{}\"",
+        query.trim()
+    )];
+
+    match result.status {
+        SkillKnowledgeStatus::Ready if !result.matches.is_empty() => {
+            lines.push(
+                "If one is useful, load it by printing exactly one JSON object on its own line with no markdown fences:".to_string(),
+            );
+            lines.push(r#"{"tool":"load_skill","args":{"skill_id":"<skill-id>"}}"#.to_string());
+            for (idx, skill) in result.matches.iter().enumerate() {
+                lines.push(format!(
+                    "{}. {} | origin={} | relevance={}% | source={}",
+                    idx + 1,
+                    skill.skill_id,
+                    skill.origin,
+                    (skill.score * 100.0).round() as i32,
+                    skill.source_path
+                ));
+                if !skill.description.trim().is_empty() {
+                    lines.push(format!("   {}", skill.description.trim()));
+                }
+            }
+        }
+        _ => {
+            lines.push(flatten_runtime_detail(result.detail.as_deref()));
+            lines.push(
+                "Continue with the currently loaded skills unless you want to retry later."
+                    .to_string(),
+            );
+        }
+    }
+
+    lines.join("\n")
+}
+
+fn format_runtime_skill_load_summary(skill_id: &str, result: &RuntimeSkillLoadResult) -> String {
+    match (&result.status, &result.skill) {
+        (SkillKnowledgeStatus::Ready, Some(skill)) => format!(
+            "Runtime skill loaded: {}@{}",
+            skill.skill_id,
+            skill.origin.as_deref().unwrap_or("unknown")
+        ),
+        _ => format!(
+            "Runtime skill load: skill_id=\"{}\" -> {} ({})",
+            skill_id.trim(),
+            runtime_status_label(&result.status),
+            flatten_runtime_detail(result.detail.as_deref())
+        ),
+    }
+}
+
+fn format_runtime_skill_load_follow_up(skill_id: &str, result: &RuntimeSkillLoadResult) -> String {
+    match &result.skill {
+        Some(skill) if result.status == SkillKnowledgeStatus::Ready => {
+            let (content, was_truncated) =
+                truncate_runtime_skill_content(&skill.content, MAX_RUNTIME_SKILL_CONTENT_CHARS);
+            let mut lines = vec![
+                "ACPMS runtime skill loaded.".to_string(),
+                format!("skill_id: {}", skill.skill_id),
+                format!("origin: {}", skill.origin.as_deref().unwrap_or("unknown")),
+            ];
+            if let Some(source_path) = &skill.source_path {
+                lines.push(format!("source: {}", source_path));
+            }
+            if was_truncated {
+                lines.push(
+                    "The skill body was truncated to fit runtime context. Follow the visible guidance first.".to_string(),
+                );
+            }
+            lines.push("Apply this skill where relevant for the rest of the attempt.".to_string());
+            lines.push(String::new());
+            lines.push(content);
+            lines.join("\n")
+        }
+        _ => format!(
+            "ACPMS runtime skill load failed for `{}`.\n{}",
+            skill_id.trim(),
+            flatten_runtime_detail(result.detail.as_deref())
+        ),
+    }
+}
+
+async fn handle_runtime_skill_tool_calls_for_sdk(
+    attempt_id: Uuid,
+    metadata: serde_json::Value,
+    runtime_config: &ClaudeRuntimeSkillConfig,
+    db_pool: Option<&sqlx::PgPool>,
+    broadcast_tx: Option<&tokio::sync::broadcast::Sender<crate::AgentEvent>>,
+    protocol_peer: &ProtocolPeer,
+) {
+    let Some(tool_calls) = metadata
+        .get("tool_calls")
+        .and_then(|value| value.as_array())
+    else {
+        return;
+    };
+
+    let runtime = SkillRuntime::new(Some(&runtime_config.skill_knowledge));
+    for tool_call in tool_calls {
+        let Some(name) = tool_call.get("name").and_then(|value| value.as_str()) else {
+            continue;
+        };
+        let Some(args) = tool_call.get("args").and_then(|value| value.as_object()) else {
+            continue;
+        };
+
+        match name {
+            "search_skills" => {
+                let Some(query) = args.get("query").and_then(|value| value.as_str()) else {
+                    continue;
+                };
+                let top_k = args
+                    .get("top_k")
+                    .and_then(|value| value.as_u64())
+                    .map(|value| value as usize)
+                    .unwrap_or(5);
+                let result = runtime.search_runtime(query, top_k);
+                let summary = format_runtime_skill_search_summary(query, &result);
+                if let (Some(pool), Some(tx)) = (db_pool, broadcast_tx) {
+                    let _ = StatusManager::log(pool, tx, attempt_id, "system", &summary).await;
+                }
+
+                let follow_up = format_runtime_skill_search_follow_up(query, &result);
+                if let Err(error) = protocol_peer.send_user_message(follow_up).await {
+                    tracing::warn!(
+                        attempt_id = %attempt_id,
+                        error = %error,
+                        query = %query,
+                        "Failed to deliver runtime skill search response in SDK session"
+                    );
+                }
+            }
+            "load_skill" => {
+                let Some(skill_id) = args.get("skill_id").and_then(|value| value.as_str()) else {
+                    continue;
+                };
+                let result = runtime.load_runtime(skill_id, Some(&runtime_config.repo_path));
+                let summary = format_runtime_skill_load_summary(skill_id, &result);
+                if let (Some(pool), Some(tx)) = (db_pool, broadcast_tx) {
+                    let _ = StatusManager::log(pool, tx, attempt_id, "system", &summary).await;
+                }
+
+                let follow_up = format_runtime_skill_load_follow_up(skill_id, &result);
+                if let Err(error) = protocol_peer.send_user_message(follow_up).await {
+                    tracing::warn!(
+                        attempt_id = %attempt_id,
+                        error = %error,
+                        skill_id = %skill_id,
+                        "Failed to deliver runtime skill load response in SDK session"
+                    );
+                }
+            }
+            _ => {}
+        }
+    }
 }
 
 pub struct ClaudeClient;
@@ -239,6 +469,7 @@ impl ClaudeClient {
         broadcast_tx: Option<tokio::sync::broadcast::Sender<crate::AgentEvent>>,
         agent_settings: Option<&crate::AgentSettings>,
         input_rx: Option<mpsc::UnboundedReceiver<String>>,
+        runtime_skill_config: Option<ClaudeRuntimeSkillConfig>,
     ) -> Result<SpawnedAgent> {
         // Check if worktree path exists
         if !worktree_path.exists() {
@@ -326,6 +557,16 @@ impl ClaudeClient {
         // Clone for stderr consumer (before protocol handler consumes them)
         let stderr_db_pool = db_pool.clone();
         let stderr_broadcast_tx = broadcast_tx.clone();
+        let runtime_db_pool = db_pool.clone();
+        let runtime_broadcast_tx = broadcast_tx.clone();
+        let runtime_skill_config = runtime_skill_config.clone();
+
+        let (runtime_tool_tx, mut runtime_tool_rx) = if runtime_skill_config.is_some() {
+            let (tx, rx) = mpsc::unbounded_channel::<serde_json::Value>();
+            (Some(tx), Some(rx))
+        } else {
+            (None, None)
+        };
 
         // Clone instruction for 'static lifetime in spawn
         let instruction_owned = instruction.to_string();
@@ -351,9 +592,15 @@ impl ClaudeClient {
                     approval_service,
                     pool,
                     tx,
+                    runtime_tool_tx.clone(),
                 )
             } else {
-                ClaudeAgentClient::new(attempt_id, LogWriter::new(new_stdout), approval_service)
+                ClaudeAgentClient::new(
+                    attempt_id,
+                    LogWriter::new(new_stdout),
+                    approval_service,
+                    runtime_tool_tx.clone(),
+                )
             };
 
             let protocol_peer =
@@ -380,6 +627,25 @@ impl ClaudeClient {
                 return;
             }
             tracing::info!(attempt_id = %attempt_id, "User message sent successfully");
+
+            if let (Some(config), Some(mut rx)) = (runtime_skill_config, runtime_tool_rx.take()) {
+                let runtime_peer = protocol_peer.clone();
+                let runtime_pool = runtime_db_pool.clone();
+                let runtime_tx = runtime_broadcast_tx.clone();
+                tokio::spawn(async move {
+                    while let Some(metadata) = rx.recv().await {
+                        handle_runtime_skill_tool_calls_for_sdk(
+                            attempt_id,
+                            metadata,
+                            &config,
+                            runtime_pool.as_ref(),
+                            runtime_tx.as_ref(),
+                            &runtime_peer,
+                        )
+                        .await;
+                    }
+                });
+            }
 
             // Forward realtime user input messages (if provided) to the same SDK session.
             // Queue behavior: messages are delivered when agent reaches next turn boundary.

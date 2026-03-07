@@ -125,7 +125,8 @@ pub async fn create_test_app_state(pool: PgPool) -> AppState {
             broadcast_tx.clone(),
             storage_service.clone() as Arc<dyn acpms_executors::DiffStorageUploader>,
         )
-        .expect("Failed to create orchestrator"),
+        .expect("Failed to create orchestrator")
+        .with_skill_knowledge(acpms_executors::SkillKnowledgeHandle::disabled()),
     );
 
     // Initialize Services (GitLabService returns Result)

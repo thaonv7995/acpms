@@ -132,28 +132,13 @@ impl RetryHandler {
     ) -> serde_json::Value {
         let retry_count = self.get_retry_count(previous_attempt) + 1;
 
-        let mut metadata = serde_json::json!({
+        let metadata = serde_json::json!({
             "retry_count": retry_count,
             "previous_attempt_id": previous_attempt.id,
             "previous_error": error,
             "retry_scheduled_at": Utc::now().to_rfc3339(),
             "backoff_seconds": self.get_backoff(retry_count).as_secs(),
         });
-
-        if let Some(chain) = previous_attempt
-            .metadata
-            .get("resolved_skill_chain")
-            .filter(|value| value.is_array())
-            .cloned()
-        {
-            if let Some(obj) = metadata.as_object_mut() {
-                obj.insert("resolved_skill_chain".to_string(), chain);
-                obj.insert(
-                    "resolved_skill_chain_source".to_string(),
-                    serde_json::Value::String("retry_inherit_previous_attempt".to_string()),
-                );
-            }
-        }
 
         metadata
     }
@@ -480,7 +465,7 @@ mod tests {
     }
 
     #[test]
-    fn test_create_retry_metadata_carries_resolved_skill_chain() {
+    fn test_create_retry_metadata_does_not_inherit_resolved_skill_chain() {
         let settings = create_test_settings();
         let handler = RetryHandler::new(&settings);
         let mut attempt = create_test_attempt(0, AttemptStatus::Failed);
@@ -491,14 +476,8 @@ mod tests {
 
         let metadata = handler.create_retry_metadata(&attempt, "Transient network error");
 
-        assert_eq!(
-            metadata["resolved_skill_chain"],
-            serde_json::json!(["env-and-secrets-validate", "code-implement"])
-        );
-        assert_eq!(
-            metadata["resolved_skill_chain_source"],
-            "retry_inherit_previous_attempt"
-        );
+        assert!(metadata.get("resolved_skill_chain").is_none());
+        assert!(metadata.get("resolved_skill_chain_source").is_none());
     }
 
     #[test]

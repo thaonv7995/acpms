@@ -1956,6 +1956,39 @@ async fn main() -> anyhow::Result<()> {
         ),
     );
 
+    let skill_roots = acpms_executors::discover_global_skill_roots();
+    let skill_knowledge = if skill_roots.iter().any(|root| root.path.is_dir()) {
+        let handle = acpms_executors::SkillKnowledgeHandle::pending();
+        let build_handle = handle.clone();
+        tokio::spawn(async move {
+            match tokio::task::spawn_blocking(move || {
+                acpms_executors::KnowledgeIndex::build(skill_roots)
+            })
+            .await
+            {
+                Ok(Ok(index)) => {
+                    let count = build_handle.set_ready_index(index);
+                    tracing::info!(skills = count, "Knowledge index built");
+                }
+                Ok(Err(error)) => {
+                    tracing::warn!(
+                        "Failed to build knowledge index in background (non-fatal): {}",
+                        error
+                    );
+                    build_handle.set_failed(error.to_string());
+                }
+                Err(error) => {
+                    tracing::warn!("Knowledge index build task panicked (non-fatal): {}", error);
+                    build_handle.set_failed(error.to_string());
+                }
+            }
+        });
+        handle
+    } else {
+        tracing::info!("No global skill roots found, skill knowledge disabled");
+        acpms_executors::SkillKnowledgeHandle::disabled()
+    };
+
     let orchestrator = Arc::new(
         ExecutorOrchestrator::new(
             pool.clone(),
@@ -1964,7 +1997,8 @@ async fn main() -> anyhow::Result<()> {
             storage_service.clone() as Arc<dyn acpms_executors::DiffStorageUploader>,
         )?
         .with_attempt_success_hook(attempt_success_hook)
-        .with_deploy_context_preparer(deploy_context_preparer),
+        .with_deploy_context_preparer(deploy_context_preparer)
+        .with_skill_knowledge(skill_knowledge),
     );
 
     // Initialize Worker Pool
@@ -2023,47 +2057,7 @@ async fn main() -> anyhow::Result<()> {
         patch_store,
         stream_service,
         auth_session_store: Arc::new(crate::services::agent_auth::AuthSessionStore::new()),
-        knowledge_index: None,
     };
-
-    // Build Knowledge Index (RAG) in background
-    let knowledge_index = {
-        let mut skill_roots = Vec::new();
-        if let Ok(dir) = std::env::var("ACPMS_SKILLS_DIR") {
-            let skills_path = std::path::PathBuf::from(&dir);
-            skill_roots.push(skills_path.clone());
-            for prefix in &["community-anthropic", "community-openai"] {
-                let community_dir = skills_path.join(prefix);
-                if community_dir.is_dir() {
-                    skill_roots.push(community_dir);
-                }
-            }
-        }
-        if !skill_roots.is_empty() {
-            match tokio::task::spawn_blocking(move || {
-                acpms_executors::KnowledgeIndex::build(skill_roots)
-            })
-            .await
-            {
-                Ok(Ok(index)) => {
-                    tracing::info!(skills = index.skill_count(), "Knowledge index built");
-                    Some(Arc::new(index))
-                }
-                Ok(Err(e)) => {
-                    tracing::warn!("Failed to build knowledge index (non-fatal): {}", e);
-                    None
-                }
-                Err(e) => {
-                    tracing::warn!("Knowledge index task panicked (non-fatal): {}", e);
-                    None
-                }
-            }
-        } else {
-            tracing::info!("ACPMS_SKILLS_DIR not set, skipping knowledge index");
-            None
-        }
-    };
-    state.knowledge_index = knowledge_index;
 
     let deployment_handler_state = state.clone();
     let deployment_handler = Arc::new(move |job: DeploymentJob| {

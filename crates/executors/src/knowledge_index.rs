@@ -1,19 +1,22 @@
-use anyhow::{Context, Result};
-use rusqlite::Connection;
-use serde::Deserialize;
-use std::path::{Path, PathBuf};
-use tracing;
+use anyhow::Result;
+use serde::{Deserialize, Serialize};
+use std::collections::{HashMap, HashSet};
+use std::path::PathBuf;
+use std::sync::{Arc, RwLock};
 use walkdir::WalkDir;
 
 /// Maximum number of skills to index (safety limit).
 const MAX_SKILLS_TO_INDEX: usize = 5_000;
+const SEARCH_TEXT_BODY_LIMIT: usize = 4_000;
 
-/// Default embedding model — small, fast, good quality.
-const DEFAULT_MODEL: fastembed::EmbeddingModel = fastembed::EmbeddingModel::AllMiniLML6V2;
+/// A global skill root that can be indexed for skill search.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct KnowledgeRoot {
+    pub path: PathBuf,
+    pub origin: String,
+}
 
-// ─── Public types ────────────────────────────────────────────────────────────
-
-/// A matched skill from semantic search.
+/// A matched skill from search.
 #[derive(Debug, Clone)]
 pub struct SkillMatch {
     pub skill_id: String,
@@ -21,6 +24,18 @@ pub struct SkillMatch {
     pub description: String,
     pub score: f32,
     pub source_path: PathBuf,
+    pub origin: String,
+}
+
+/// High-level status for suggested knowledge.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub enum SkillKnowledgeStatus {
+    Disabled,
+    Pending,
+    Ready,
+    Failed,
+    NoMatches,
 }
 
 /// Parsed SKILL.md frontmatter.
@@ -32,236 +47,289 @@ struct SkillFrontmatter {
     description: String,
 }
 
-/// Discovered skill on disk before embedding.
+/// Discovered skill on disk before indexing.
 #[derive(Debug)]
 struct DiscoveredSkill {
     skill_id: String,
     name: String,
     description: String,
     source_path: PathBuf,
+    origin: String,
+    search_terms: HashSet<String>,
 }
 
-// ─── KnowledgeIndex ──────────────────────────────────────────────────────────
+#[derive(Debug)]
+struct IndexedSkill {
+    skill_id: String,
+    name: String,
+    description: String,
+    source_path: PathBuf,
+    origin: String,
+    normalized_skill_id: String,
+    normalized_name: String,
+    normalized_description: String,
+    normalized_origin: String,
+    skill_id_terms: HashSet<String>,
+    name_terms: HashSet<String>,
+    search_terms: HashSet<String>,
+}
 
-/// RAG engine for semantic skill search.
-///
-/// Uses `fastembed` for local ONNX embeddings and `sqlite-vec` for vector KNN search.
-/// The index is built once on startup and lives in memory (`:memory:` SQLite).
+impl From<DiscoveredSkill> for IndexedSkill {
+    fn from(value: DiscoveredSkill) -> Self {
+        Self {
+            normalized_skill_id: normalize_for_match(&value.skill_id),
+            normalized_name: normalize_for_match(&value.name),
+            normalized_description: normalize_for_match(&value.description),
+            normalized_origin: normalize_for_match(&value.origin),
+            skill_id_terms: tokenize(&value.skill_id),
+            name_terms: tokenize(&value.name),
+            skill_id: value.skill_id,
+            name: value.name,
+            description: value.description,
+            source_path: value.source_path,
+            origin: value.origin,
+            search_terms: value.search_terms,
+        }
+    }
+}
+
+/// Trait abstraction for skill lookup backends.
+pub trait SkillKnowledgeBackend: Send + Sync {
+    fn search(&self, query: &str, top_k: usize) -> Result<Vec<SkillMatch>>;
+    fn read_skill(&self, skill_id: &str) -> Result<Option<String>>;
+    fn skill_count(&self) -> usize;
+}
+
+/// Backend backed by an in-memory [`KnowledgeIndex`].
+pub struct IndexedKnowledgeBackend {
+    index: KnowledgeIndex,
+}
+
+impl IndexedKnowledgeBackend {
+    pub fn new(index: KnowledgeIndex) -> Self {
+        Self { index }
+    }
+}
+
+impl SkillKnowledgeBackend for IndexedKnowledgeBackend {
+    fn search(&self, query: &str, top_k: usize) -> Result<Vec<SkillMatch>> {
+        self.index.search(query, top_k)
+    }
+
+    fn read_skill(&self, skill_id: &str) -> Result<Option<String>> {
+        self.index.read_skill(skill_id)
+    }
+
+    fn skill_count(&self) -> usize {
+        self.index.skill_count()
+    }
+}
+
+#[derive(Clone)]
+pub enum SkillKnowledgeSnapshot {
+    Disabled,
+    Pending,
+    Ready(Arc<dyn SkillKnowledgeBackend>),
+    Failed(String),
+}
+
+enum SkillKnowledgeState {
+    Disabled,
+    Pending,
+    Ready(Arc<dyn SkillKnowledgeBackend>),
+    Failed(String),
+}
+
+/// Thread-safe handle for the global skill knowledge subsystem.
+#[derive(Clone)]
+pub struct SkillKnowledgeHandle {
+    state: Arc<RwLock<SkillKnowledgeState>>,
+}
+
+impl SkillKnowledgeHandle {
+    pub fn disabled() -> Self {
+        Self {
+            state: Arc::new(RwLock::new(SkillKnowledgeState::Disabled)),
+        }
+    }
+
+    pub fn pending() -> Self {
+        Self {
+            state: Arc::new(RwLock::new(SkillKnowledgeState::Pending)),
+        }
+    }
+
+    pub fn set_failed(&self, detail: impl Into<String>) {
+        let mut state = self.state.write().expect("skill knowledge state poisoned");
+        *state = SkillKnowledgeState::Failed(detail.into());
+    }
+
+    pub fn set_ready_index(&self, index: KnowledgeIndex) -> usize {
+        self.set_ready_backend(Arc::new(IndexedKnowledgeBackend::new(index)))
+    }
+
+    pub fn set_ready_backend(&self, backend: Arc<dyn SkillKnowledgeBackend>) -> usize {
+        let skill_count = backend.skill_count();
+        let mut state = self.state.write().expect("skill knowledge state poisoned");
+        *state = SkillKnowledgeState::Ready(backend);
+        skill_count
+    }
+
+    pub fn snapshot(&self) -> SkillKnowledgeSnapshot {
+        let state = self.state.read().expect("skill knowledge state poisoned");
+        match &*state {
+            SkillKnowledgeState::Disabled => SkillKnowledgeSnapshot::Disabled,
+            SkillKnowledgeState::Pending => SkillKnowledgeSnapshot::Pending,
+            SkillKnowledgeState::Ready(backend) => SkillKnowledgeSnapshot::Ready(backend.clone()),
+            SkillKnowledgeState::Failed(detail) => SkillKnowledgeSnapshot::Failed(detail.clone()),
+        }
+    }
+
+    pub fn status(&self) -> SkillKnowledgeStatus {
+        match self.snapshot() {
+            SkillKnowledgeSnapshot::Disabled => SkillKnowledgeStatus::Disabled,
+            SkillKnowledgeSnapshot::Pending => SkillKnowledgeStatus::Pending,
+            SkillKnowledgeSnapshot::Ready(_) => SkillKnowledgeStatus::Ready,
+            SkillKnowledgeSnapshot::Failed(_) => SkillKnowledgeStatus::Failed,
+        }
+    }
+}
+
+/// Discover all global skill roots that should be part of the shared knowledge base.
+pub fn discover_global_skill_roots() -> Vec<KnowledgeRoot> {
+    let mut roots = Vec::new();
+    let mut seen = HashSet::new();
+    let mut push = |path: PathBuf, origin: &str| {
+        if path.as_os_str().is_empty() || !seen.insert(path.clone()) {
+            return;
+        }
+        roots.push(KnowledgeRoot {
+            path,
+            origin: origin.to_string(),
+        });
+    };
+
+    if let Ok(dir) = std::env::var("ACPMS_SKILLS_DIR") {
+        let skills_path = PathBuf::from(dir);
+        push(skills_path.clone(), "platform");
+
+        if let Ok(entries) = std::fs::read_dir(&skills_path) {
+            for entry in entries.flatten() {
+                let path = entry.path();
+                let file_name = entry.file_name();
+                let file_name = file_name.to_string_lossy();
+                if path.is_dir() && file_name.starts_with("community-") {
+                    push(path, &file_name);
+                }
+            }
+        }
+    }
+
+    if let Ok(cwd) = std::env::current_dir() {
+        push(cwd.join(".acpms").join("skills"), "cwd");
+    }
+
+    if let Ok(codex_home) = std::env::var("CODEX_HOME") {
+        push(PathBuf::from(codex_home).join("skills"), "codex-home");
+    } else if let Some(home) = dirs::home_dir() {
+        push(home.join(".codex").join("skills"), "codex-home");
+    }
+
+    roots
+}
+
+/// In-memory knowledge index for lexical skill search.
 pub struct KnowledgeIndex {
-    db: Connection,
-    model: fastembed::TextEmbedding,
-    embedding_dim: usize,
+    skills: Vec<IndexedSkill>,
+    paths_by_skill_id: HashMap<String, PathBuf>,
 }
 
 impl KnowledgeIndex {
-    /// Build the knowledge index by scanning skill directories, embedding their
-    /// frontmatter, and storing vectors in an in-memory SQLite database.
-    pub fn build(skill_roots: Vec<PathBuf>) -> Result<Self> {
+    /// Build the knowledge index by scanning skill directories and indexing
+    /// frontmatter plus a trimmed body excerpt for lightweight matching.
+    pub fn build(skill_roots: Vec<KnowledgeRoot>) -> Result<Self> {
         tracing::info!(
             roots = ?skill_roots,
             "Building knowledge index from skill roots"
         );
 
-        // 1. Initialize embedding model
-        let model = fastembed::TextEmbedding::try_new(
-            fastembed::InitOptions::new(DEFAULT_MODEL).with_show_download_progress(false),
-        )
-        .context("Failed to initialize fastembed embedding model")?;
+        let discovered = discover_skills(&skill_roots);
+        tracing::info!(count = discovered.len(), "Discovered skills to index");
 
-        // Determine embedding dimension from a probe
-        let probe = model
-            .embed(vec!["probe"], None)
-            .context("Failed to probe embedding dimension")?;
-        let embedding_dim = probe.first().map(|v| v.len()).unwrap_or(384);
-
-        // 2. Initialize in-memory SQLite with sqlite-vec
-        let db = Connection::open_in_memory().context("Failed to open in-memory SQLite")?;
-
-        // Load sqlite-vec extension
-        unsafe {
-            sqlite_vec::sqlite3_vec_init();
-        }
-
-        // Create metadata table
-        db.execute_batch(
-            "CREATE TABLE IF NOT EXISTS skills (
-                skill_id   TEXT PRIMARY KEY,
-                name       TEXT NOT NULL,
-                description TEXT NOT NULL DEFAULT '',
-                source_path TEXT NOT NULL
-            );",
-        )
-        .context("Failed to create skills table")?;
-
-        // Create virtual vec0 table for vector search
-        db.execute(
-            &format!(
-                "CREATE VIRTUAL TABLE IF NOT EXISTS skill_vectors USING vec0(
-                    skill_id TEXT PRIMARY KEY,
-                    embedding float[{embedding_dim}]
-                );"
-            ),
-            [],
-        )
-        .context("Failed to create skill_vectors table")?;
-
-        let mut index = Self {
-            db,
-            model,
-            embedding_dim,
-        };
-
-        // 3. Discover and index skills
-        let skills = discover_skills(&skill_roots);
-        tracing::info!(count = skills.len(), "Discovered skills to index");
-
-        if !skills.is_empty() {
-            index.index_skills(&skills)?;
-        }
-
-        Ok(index)
-    }
-
-    /// Index a batch of discovered skills.
-    fn index_skills(&mut self, skills: &[DiscoveredSkill]) -> Result<()> {
-        // Build texts to embed: "name: description"
-        let texts: Vec<String> = skills
+        let skills = discovered
+            .into_iter()
+            .map(IndexedSkill::from)
+            .collect::<Vec<_>>();
+        let paths_by_skill_id = skills
             .iter()
-            .map(|s| {
-                if s.description.is_empty() {
-                    s.name.clone()
-                } else {
-                    format!("{}: {}", s.name, s.description)
-                }
-            })
-            .collect();
-
-        // Batch embed
-        let embeddings = self
-            .model
-            .embed(texts.clone(), None)
-            .context("Failed to embed skill texts")?;
-
-        // Insert into SQLite
-        let tx = self.db.transaction()?;
-        for (skill, embedding) in skills.iter().zip(embeddings.iter()) {
-            // Insert metadata
-            tx.execute(
-                "INSERT OR REPLACE INTO skills (skill_id, name, description, source_path) VALUES (?1, ?2, ?3, ?4)",
-                rusqlite::params![
-                    skill.skill_id,
-                    skill.name,
-                    skill.description,
-                    skill.source_path.to_string_lossy().to_string(),
-                ],
-            )?;
-
-            // Insert vector (serialize as blob)
-            let blob = vec_to_blob(embedding);
-            tx.execute(
-                "INSERT OR REPLACE INTO skill_vectors (skill_id, embedding) VALUES (?1, ?2)",
-                rusqlite::params![skill.skill_id, blob],
-            )?;
-        }
-        tx.commit()?;
+            .map(|skill| (skill.skill_id.clone(), skill.source_path.clone()))
+            .collect::<HashMap<_, _>>();
 
         tracing::info!(indexed = skills.len(), "Knowledge index built successfully");
-        Ok(())
+        Ok(Self {
+            skills,
+            paths_by_skill_id,
+        })
     }
 
-    /// Semantic search: embed the query and find top-k similar skills.
-    pub fn search(&self, query: &str, top_k: usize) -> Vec<SkillMatch> {
-        let embeddings = match self.model.embed(vec![query.to_string()], None) {
-            Ok(e) => e,
-            Err(err) => {
-                tracing::warn!(%err, "Failed to embed search query");
-                return Vec::new();
-            }
-        };
+    /// Lexical search over skill ids, frontmatter, and a body excerpt.
+    pub fn search(&self, query: &str, top_k: usize) -> Result<Vec<SkillMatch>> {
+        let query_terms = tokenize(query);
+        if query_terms.is_empty() || top_k == 0 {
+            return Ok(Vec::new());
+        }
 
-        let query_vec = match embeddings.first() {
-            Some(v) => v,
-            None => return Vec::new(),
-        };
-
-        let blob = vec_to_blob(query_vec);
-
-        let mut stmt = match self.db.prepare(
-            "SELECT sv.skill_id, sv.distance, s.name, s.description, s.source_path
-             FROM skill_vectors sv
-             JOIN skills s ON s.skill_id = sv.skill_id
-             WHERE sv.embedding MATCH ?1
-             ORDER BY sv.distance
-             LIMIT ?2",
-        ) {
-            Ok(s) => s,
-            Err(err) => {
-                tracing::warn!(%err, "Failed to prepare search query");
-                return Vec::new();
-            }
-        };
-
-        let results = stmt
-            .query_map(rusqlite::params![blob, top_k as i64], |row| {
-                Ok(SkillMatch {
-                    skill_id: row.get(0)?,
-                    score: {
-                        let distance: f64 = row.get(1)?;
-                        // Convert distance to similarity (1 - distance for cosine)
-                        (1.0 - distance as f32).max(0.0)
-                    },
-                    name: row.get(2)?,
-                    description: row.get(3)?,
-                    source_path: {
-                        let p: String = row.get(4)?;
-                        PathBuf::from(p)
-                    },
+        let normalized_query = normalize_for_match(query);
+        let mut results = self
+            .skills
+            .iter()
+            .filter_map(|skill| {
+                lexical_score(skill, &normalized_query, &query_terms).map(|score| SkillMatch {
+                    skill_id: skill.skill_id.clone(),
+                    name: skill.name.clone(),
+                    description: skill.description.clone(),
+                    score,
+                    source_path: skill.source_path.clone(),
+                    origin: skill.origin.clone(),
                 })
             })
-            .ok()
-            .map(|rows| rows.filter_map(|r| r.ok()).collect::<Vec<_>>())
-            .unwrap_or_default();
+            .collect::<Vec<_>>();
 
-        results
+        results.sort_by(|a, b| {
+            b.score
+                .partial_cmp(&a.score)
+                .unwrap_or(std::cmp::Ordering::Equal)
+                .then_with(|| a.skill_id.cmp(&b.skill_id))
+        });
+        results.truncate(top_k);
+        Ok(results)
     }
 
     /// Read a specific skill's full SKILL.md content.
-    pub fn read_skill(&self, skill_id: &str) -> Option<String> {
-        let path: String = self
-            .db
-            .query_row(
-                "SELECT source_path FROM skills WHERE skill_id = ?1",
-                rusqlite::params![skill_id],
-                |row| row.get(0),
-            )
-            .ok()?;
+    pub fn read_skill(&self, skill_id: &str) -> Result<Option<String>> {
+        let Some(path) = self.paths_by_skill_id.get(skill_id) else {
+            return Ok(None);
+        };
 
-        std::fs::read_to_string(&path).ok()
+        let content = std::fs::read_to_string(path)?;
+        Ok(Some(content))
     }
 
-    /// Return the number of indexed skills.
     pub fn skill_count(&self) -> usize {
-        self.db
-            .query_row("SELECT COUNT(*) FROM skills", [], |row| {
-                row.get::<_, i64>(0)
-            })
-            .unwrap_or(0) as usize
+        self.skills.len()
     }
 }
 
-// ─── Helpers ─────────────────────────────────────────────────────────────────
-
-/// Walk skill root directories and discover all SKILL.md files.
-fn discover_skills(roots: &[PathBuf]) -> Vec<DiscoveredSkill> {
+fn discover_skills(roots: &[KnowledgeRoot]) -> Vec<DiscoveredSkill> {
     let mut skills = Vec::new();
-    let mut seen_ids = std::collections::HashSet::new();
+    let mut seen_ids = HashSet::new();
 
     for root in roots {
-        if !root.is_dir() {
+        if !root.path.is_dir() {
             continue;
         }
 
-        for entry in WalkDir::new(root)
+        for entry in WalkDir::new(&root.path)
             .min_depth(1)
             .max_depth(2)
             .into_iter()
@@ -272,39 +340,45 @@ fn discover_skills(roots: &[PathBuf]) -> Vec<DiscoveredSkill> {
             }
 
             let skill_dir = match entry.path().parent() {
-                Some(d) => d,
+                Some(dir) => dir,
                 None => continue,
             };
 
-            let skill_id = match skill_dir.file_name().and_then(|n| n.to_str()) {
+            let skill_id = match skill_dir.file_name().and_then(|name| name.to_str()) {
                 Some(id) => id.to_string(),
                 None => continue,
             };
 
-            // Deduplicate
             if !seen_ids.insert(skill_id.clone()) {
                 continue;
             }
 
-            // Read and parse frontmatter
             let content = match std::fs::read_to_string(entry.path()) {
-                Ok(c) => c,
+                Ok(content) => content,
                 Err(_) => continue,
             };
 
             let fm = parse_frontmatter(&content);
-
             let name = if fm.name.is_empty() {
                 skill_id.clone()
             } else {
                 fm.name
             };
+            let description = fm.description;
 
             skills.push(DiscoveredSkill {
+                search_terms: tokenize(&build_search_text(
+                    &skill_id,
+                    &name,
+                    &description,
+                    &root.origin,
+                    &content,
+                )),
                 skill_id,
                 name,
-                description: fm.description,
+                description,
                 source_path: entry.path().to_path_buf(),
+                origin: root.origin.clone(),
             });
 
             if skills.len() >= MAX_SKILLS_TO_INDEX {
@@ -317,8 +391,6 @@ fn discover_skills(roots: &[PathBuf]) -> Vec<DiscoveredSkill> {
     skills
 }
 
-/// Parse YAML frontmatter from a SKILL.md file.
-/// Expects `---\nkey: value\n---\n` at the start of the file.
 fn parse_frontmatter(content: &str) -> SkillFrontmatter {
     let trimmed = content.trim_start();
     if !trimmed.starts_with("---") {
@@ -335,16 +407,177 @@ fn parse_frontmatter(content: &str) -> SkillFrontmatter {
     serde_yaml::from_str(yaml_str).unwrap_or_default()
 }
 
-/// Convert f32 vector to raw bytes for sqlite-vec.
-fn vec_to_blob(vec: &[f32]) -> Vec<u8> {
-    vec.iter().flat_map(|f| f.to_le_bytes()).collect()
+fn build_search_text(
+    skill_id: &str,
+    name: &str,
+    description: &str,
+    origin: &str,
+    content: &str,
+) -> String {
+    let body = skill_body_excerpt(content);
+    format!("{skill_id}\n{name}\n{description}\n{origin}\n{body}")
 }
 
-// ─── Tests ───────────────────────────────────────────────────────────────────
+fn skill_body_excerpt(content: &str) -> String {
+    let trimmed = content.trim_start();
+    let body = if !trimmed.starts_with("---") {
+        trimmed
+    } else {
+        let after_first = &trimmed[3..];
+        match after_first.find("---") {
+            Some(pos) => &after_first[(pos + 3)..],
+            None => trimmed,
+        }
+    };
+
+    body.chars().take(SEARCH_TEXT_BODY_LIMIT).collect()
+}
+
+fn tokenize(input: &str) -> HashSet<String> {
+    input
+        .split(|ch: char| !ch.is_alphanumeric())
+        .map(normalize_for_match)
+        .filter(|term| term.len() >= 2)
+        .filter(|term| !is_stop_word(term))
+        .collect()
+}
+
+fn normalize_for_match(input: &str) -> String {
+    input.trim().to_ascii_lowercase()
+}
+
+fn is_stop_word(term: &str) -> bool {
+    matches!(
+        term,
+        "a" | "an"
+            | "and"
+            | "are"
+            | "as"
+            | "at"
+            | "be"
+            | "by"
+            | "do"
+            | "for"
+            | "from"
+            | "help"
+            | "how"
+            | "i"
+            | "in"
+            | "into"
+            | "is"
+            | "it"
+            | "latest"
+            | "me"
+            | "need"
+            | "of"
+            | "on"
+            | "or"
+            | "our"
+            | "please"
+            | "research"
+            | "show"
+            | "that"
+            | "the"
+            | "this"
+            | "to"
+            | "up"
+            | "use"
+            | "using"
+            | "want"
+            | "we"
+            | "with"
+    )
+}
+
+fn lexical_score(
+    skill: &IndexedSkill,
+    normalized_query: &str,
+    query_terms: &HashSet<String>,
+) -> Option<f32> {
+    let mut matched_terms = 0usize;
+    let mut points = 0.0f32;
+
+    for term in query_terms {
+        let mut matched = false;
+
+        if skill.normalized_skill_id == *term {
+            points += 5.0;
+            matched = true;
+        } else if skill.normalized_skill_id.contains(term) {
+            points += 3.0;
+            matched = true;
+        }
+
+        if skill.normalized_name.contains(term) {
+            points += 2.5;
+            matched = true;
+        }
+
+        if skill.normalized_description.contains(term) {
+            points += 2.0;
+            matched = true;
+        }
+
+        if skill.normalized_origin.contains(term) {
+            points += 0.5;
+            matched = true;
+        }
+
+        if skill.search_terms.contains(term) {
+            points += 1.5;
+            matched = true;
+        }
+
+        if matched {
+            matched_terms += 1;
+        }
+    }
+
+    if matched_terms == 0 {
+        return None;
+    }
+
+    if !skill.skill_id_terms.is_empty() && skill.skill_id_terms.is_subset(query_terms) {
+        points += 4.0;
+    }
+
+    if !skill.name_terms.is_empty() && skill.name_terms.is_subset(query_terms) {
+        points += 2.5;
+    }
+
+    if !normalized_query.is_empty()
+        && (skill.normalized_name.contains(normalized_query)
+            || skill.normalized_description.contains(normalized_query)
+            || skill.normalized_skill_id.contains(normalized_query))
+    {
+        points += 2.0;
+    }
+
+    let coverage = matched_terms as f32 / query_terms.len() as f32;
+    let density = (points / (query_terms.len() as f32 * 8.0)).min(1.0);
+    Some((coverage * 0.65 + density * 0.35).clamp(0.0, 1.0))
+}
 
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[derive(Default)]
+    struct FakeKnowledgeBackend;
+
+    impl SkillKnowledgeBackend for FakeKnowledgeBackend {
+        fn search(&self, _query: &str, _top_k: usize) -> Result<Vec<SkillMatch>> {
+            Ok(Vec::new())
+        }
+
+        fn read_skill(&self, _skill_id: &str) -> Result<Option<String>> {
+            Ok(None)
+        }
+
+        fn skill_count(&self) -> usize {
+            7
+        }
+    }
 
     #[test]
     fn parse_frontmatter_extracts_name_and_description() {
@@ -371,7 +604,7 @@ Body content here.
     }
 
     #[test]
-    fn discover_skills_finds_skill_files() {
+    fn discover_skills_finds_skill_files_and_origin() {
         let tmp = tempfile::tempdir().unwrap();
         let skill_dir = tmp.path().join("my-skill");
         std::fs::create_dir_all(&skill_dir).unwrap();
@@ -381,17 +614,128 @@ Body content here.
         )
         .unwrap();
 
-        let skills = discover_skills(&[tmp.path().to_path_buf()]);
+        let skills = discover_skills(&[KnowledgeRoot {
+            path: tmp.path().to_path_buf(),
+            origin: "platform".to_string(),
+        }]);
         assert_eq!(skills.len(), 1);
         assert_eq!(skills[0].skill_id, "my-skill");
         assert_eq!(skills[0].name, "my-skill");
         assert_eq!(skills[0].description, "hello");
+        assert_eq!(skills[0].origin, "platform");
+        assert!(skills[0].search_terms.contains("hello"));
     }
 
     #[test]
-    fn vec_to_blob_roundtrip() {
-        let v = vec![1.0f32, 2.0, 3.0];
-        let blob = vec_to_blob(&v);
-        assert_eq!(blob.len(), 12); // 3 * 4 bytes
+    fn knowledge_index_build_and_search_returns_lexical_match() {
+        let tmp = tempfile::tempdir().unwrap();
+
+        let openai_dir = tmp.path().join("openai-docs");
+        std::fs::create_dir_all(&openai_dir).unwrap();
+        std::fs::write(
+            openai_dir.join("SKILL.md"),
+            "---\nname: OpenAI Docs\ndescription: Use official OpenAI API documentation\n---\nResponses API, embeddings, models, limits",
+        )
+        .unwrap();
+
+        let cloudflare_dir = tmp.path().join("cloudflare-deploy");
+        std::fs::create_dir_all(&cloudflare_dir).unwrap();
+        std::fs::write(
+            cloudflare_dir.join("SKILL.md"),
+            "---\nname: Cloudflare Deploy\ndescription: Deploy workers and pages\n---\nWorkers, Pages, deployments",
+        )
+        .unwrap();
+
+        let index = KnowledgeIndex::build(vec![KnowledgeRoot {
+            path: tmp.path().to_path_buf(),
+            origin: "platform".to_string(),
+        }])
+        .unwrap();
+
+        let matches = index
+            .search("Need OpenAI API docs for embeddings", 3)
+            .unwrap();
+
+        assert!(!matches.is_empty());
+        assert_eq!(matches[0].skill_id, "openai-docs");
+        assert_eq!(matches[0].origin, "platform");
+        assert!(matches[0].score > 0.0);
+    }
+
+    #[test]
+    fn knowledge_index_prioritizes_openai_docs_for_docs_query_with_stop_words() {
+        let tmp = tempfile::tempdir().unwrap();
+
+        let openai_dir = tmp.path().join("openai-docs");
+        std::fs::create_dir_all(&openai_dir).unwrap();
+        std::fs::write(
+            openai_dir.join("SKILL.md"),
+            "---\nname: openai-docs\ndescription: Use official OpenAI documentation with citations for Responses API, Chat Completions API, Agents SDK, and model limits\n---\nOpenAI docs MCP, Responses API, Chat Completions API, Agents SDK, model limits, citations",
+        )
+        .unwrap();
+
+        let apps_dir = tmp.path().join("chatgpt-apps");
+        std::fs::create_dir_all(&apps_dir).unwrap();
+        std::fs::write(
+            apps_dir.join("SKILL.md"),
+            "---\nname: chatgpt-apps\ndescription: Build ChatGPT Apps SDK applications\n---\nApps SDK, MCP server, widgets",
+        )
+        .unwrap();
+
+        let index = KnowledgeIndex::build(vec![KnowledgeRoot {
+            path: tmp.path().to_path_buf(),
+            origin: "community-openai".to_string(),
+        }])
+        .unwrap();
+
+        let matches = index
+            .search(
+                "Research OpenAI Responses API docs for tool calling. Need official OpenAI documentation, citations, Responses API, Chat Completions, Agents SDK, model limits.",
+                5,
+            )
+            .unwrap();
+
+        assert!(!matches.is_empty());
+        assert_eq!(matches[0].skill_id, "openai-docs");
+        assert!(matches[0].score >= 0.2);
+    }
+
+    #[test]
+    fn skill_knowledge_handle_transitions_pending_to_ready() {
+        let handle = SkillKnowledgeHandle::pending();
+        assert_eq!(handle.status(), SkillKnowledgeStatus::Pending);
+
+        let count = handle.set_ready_backend(Arc::new(FakeKnowledgeBackend));
+        assert_eq!(count, 7);
+        assert_eq!(handle.status(), SkillKnowledgeStatus::Ready);
+
+        match handle.snapshot() {
+            SkillKnowledgeSnapshot::Ready(backend) => assert_eq!(backend.skill_count(), 7),
+            _ => panic!("expected ready snapshot"),
+        }
+    }
+
+    #[test]
+    fn skill_knowledge_handle_transitions_pending_to_failed() {
+        let handle = SkillKnowledgeHandle::pending();
+        handle.set_failed("embedding init failed");
+
+        assert_eq!(handle.status(), SkillKnowledgeStatus::Failed);
+        match handle.snapshot() {
+            SkillKnowledgeSnapshot::Failed(detail) => {
+                assert_eq!(detail, "embedding init failed");
+            }
+            _ => panic!("expected failed snapshot"),
+        }
+    }
+
+    #[test]
+    fn skill_knowledge_handle_can_be_disabled() {
+        let handle = SkillKnowledgeHandle::disabled();
+        assert_eq!(handle.status(), SkillKnowledgeStatus::Disabled);
+        assert!(matches!(
+            handle.snapshot(),
+            SkillKnowledgeSnapshot::Disabled
+        ));
     }
 }

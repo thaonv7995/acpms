@@ -105,7 +105,10 @@ fn push_architecture_node(
 
 #[cfg(test)]
 mod tests {
-    use super::preview_delivery_enabled;
+    use super::{
+        deployment_validation_plan_summary, preview_delivery_enabled,
+        summarize_deployment_validation_command,
+    };
     use acpms_db::models::ProjectSettings;
     use serde_json::json;
 
@@ -144,6 +147,28 @@ mod tests {
                 ..ProjectSettings::default()
             }
         ));
+    }
+
+    #[test]
+    fn summarize_deployment_validation_command_humanizes_default_web_gate() {
+        let summary = summarize_deployment_validation_command(
+            "if [ -f docker-compose.yml ]; then docker compose -f docker-compose.yml config -q; elif [ -f Dockerfile ]; then docker build -t acpms-preview-check .; fi",
+        );
+
+        assert_eq!(
+            summary,
+            "Docker Compose configuration or Docker image build fallback"
+        );
+    }
+
+    #[test]
+    fn deployment_validation_plan_summary_uses_human_labels() {
+        let summary = deployment_validation_plan_summary(&[
+            "npm install".to_string(),
+            "npm run build".to_string(),
+        ]);
+
+        assert_eq!(summary, "dependency installation and production build");
     }
 }
 
@@ -192,6 +217,72 @@ struct ValidationOutcome {
     success: bool,
     exit_code: Option<i32>,
     output: String,
+}
+
+fn summarize_deployment_validation_command(command: &str) -> String {
+    let normalized = command.split_whitespace().collect::<Vec<_>>().join(" ");
+    let lower = normalized.to_ascii_lowercase();
+
+    if lower.contains("docker compose")
+        && lower.contains("config -q")
+        && lower.contains("docker build")
+    {
+        return "Docker Compose configuration or Docker image build fallback".to_string();
+    }
+    if lower.contains("docker compose") && lower.contains("config -q") {
+        return "Docker Compose configuration".to_string();
+    }
+    if lower.contains("docker build") {
+        return "Docker image build".to_string();
+    }
+    if lower == "npm install" {
+        return "dependency installation".to_string();
+    }
+    if lower.contains("npm run typecheck") {
+        return "typecheck".to_string();
+    }
+    if lower.contains("npm run build") {
+        return "production build".to_string();
+    }
+    if lower.contains("npm run check") {
+        return "project check".to_string();
+    }
+    if lower.contains("cargo check") {
+        return "Rust compile check".to_string();
+    }
+    if lower.contains("go test") {
+        return "Go test suite".to_string();
+    }
+
+    let shortened = if normalized.len() > 72 {
+        format!("{}...", &normalized[..72])
+    } else {
+        normalized
+    };
+    format!("custom validation step `{shortened}`")
+}
+
+fn deployment_validation_plan_summary(commands: &[String]) -> String {
+    let mut labels = Vec::new();
+    let mut seen = HashSet::new();
+    for command in commands {
+        let label = summarize_deployment_validation_command(command);
+        if seen.insert(label.clone()) {
+            labels.push(label);
+        }
+    }
+
+    match labels.len() {
+        0 => "no validation steps".to_string(),
+        1 => labels[0].clone(),
+        2 => format!("{} and {}", labels[0], labels[1]),
+        _ => {
+            let mut out = labels[..labels.len() - 1].join(", ");
+            out.push_str(", and ");
+            out.push_str(&labels[labels.len() - 1]);
+            out
+        }
+    }
 }
 
 impl ExecutorOrchestrator {
@@ -456,10 +547,11 @@ else echo 'Missing Dockerfile or compose file (docker-compose.yml / compose.yml)
         command: &str,
         command_timeout: Duration,
     ) -> Result<ValidationOutcome> {
+        let command_label = summarize_deployment_validation_command(command);
         self.log(
             attempt_id,
             "system",
-            &format!("🚀 Running deployment validation command: {}", command),
+            &format!("Checking deployment readiness with {}.", command_label),
         )
         .await?;
 
@@ -508,19 +600,15 @@ else echo 'Missing Dockerfile or compose file (docker-compose.yml / compose.yml)
         let exit_code = output.status.code();
 
         if success {
-            self.log(
-                attempt_id,
-                "system",
-                &format!("✅ Deployment validation passed: {}", command),
-            )
-            .await?;
+            self.log(attempt_id, "system", &format!("{} passed.", command_label))
+                .await?;
         } else {
             self.log(
                 attempt_id,
                 "stderr",
                 &format!(
-                    "❌ Deployment validation failed: {} (exit code: {:?})",
-                    command, exit_code
+                    "Deployment validation failed during {} (exit code: {:?}).",
+                    command_label, exit_code
                 ),
             )
             .await?;
@@ -530,8 +618,8 @@ else echo 'Missing Dockerfile or compose file (docker-compose.yml / compose.yml)
                     attempt_id,
                     "stderr",
                     &format!(
-                        "Deployment validation output for `{}`:\n{}",
-                        command, truncated
+                        "Deployment validation output for {}:\n{}",
+                        command_label, truncated
                     ),
                 )
                 .await?;
@@ -1400,7 +1488,10 @@ Project type: {}
         self.log(
             attempt_id,
             "system",
-            &format!("Deployment validation plan: {}", commands.join("  ->  ")),
+            &format!(
+                "Deployment validation will run {}.",
+                deployment_validation_plan_summary(&commands)
+            ),
         )
         .await?;
 
@@ -1465,8 +1556,8 @@ Project type: {}
                     attempt_id,
                     "system",
                     &format!(
-                        "Deployment validation failed on `{}`. Starting auto-fix round {}/{}.",
-                        failure.command,
+                        "Deployment validation failed during {}. Starting auto-fix round {}/{}.",
+                        summarize_deployment_validation_command(&failure.command),
                         pass + 1,
                         fix_rounds
                     ),

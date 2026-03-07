@@ -3,6 +3,7 @@ use crate::sdk_normalized_types::{
     ActionType as SdkActionType, NormalizedEntry as SdkNormalizedEntry,
     NormalizedEntryType as SdkNormalizedEntryType, ToolStatus as SdkToolStatus,
 };
+use crate::task_skills::detect_skill_file;
 use crate::validate_sdk_normalized_entry;
 use crate::{AgentEvent, LogMessage, StatusMessage};
 use acpms_db::models::AttemptStatus;
@@ -12,7 +13,8 @@ use once_cell::sync::Lazy;
 use regex::Regex;
 use serde_json::Value as JsonValue;
 use sqlx::PgPool;
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
+use std::path::Path;
 use tokio::sync::broadcast;
 use tokio::sync::Mutex;
 use tracing::warn;
@@ -70,11 +72,85 @@ struct AttemptRealtimeState {
 
 static REALTIME_STATE: Lazy<Mutex<HashMap<Uuid, AttemptRealtimeState>>> =
     Lazy::new(|| Mutex::new(HashMap::new()));
+static RUNTIME_SKILL_READS: Lazy<Mutex<HashSet<(Uuid, String)>>> =
+    Lazy::new(|| Mutex::new(HashSet::new()));
 
 /// Status management for orchestrator
 pub struct StatusManager;
 
 impl StatusManager {
+    async fn clear_runtime_skill_reads(attempt_id: Uuid) {
+        let mut guard = RUNTIME_SKILL_READS.lock().await;
+        guard.retain(|(logged_attempt_id, _)| *logged_attempt_id != attempt_id);
+    }
+
+    async fn attempt_has_required_skill(
+        db_pool: &PgPool,
+        attempt_id: Uuid,
+        skill_id: &str,
+    ) -> Result<bool> {
+        let metadata = sqlx::query_scalar::<_, serde_json::Value>(
+            "SELECT metadata FROM task_attempts WHERE id = $1",
+        )
+        .bind(attempt_id)
+        .fetch_optional(db_pool)
+        .await
+        .context("Failed to fetch attempt metadata for runtime skill read")?;
+
+        Ok(metadata
+            .as_ref()
+            .and_then(|value| value.get("resolved_skill_chain"))
+            .and_then(|value| value.as_array())
+            .map(|items| items.iter().any(|item| item.as_str() == Some(skill_id)))
+            .unwrap_or(false))
+    }
+
+    async fn maybe_log_runtime_skill_read(
+        db_pool: &PgPool,
+        broadcast_tx: &broadcast::Sender<AgentEvent>,
+        attempt_id: Uuid,
+        entry: &SdkNormalizedEntry,
+    ) -> Result<()> {
+        let SdkNormalizedEntryType::ToolUse {
+            action_type,
+            status,
+            ..
+        } = &entry.entry_type
+        else {
+            return Ok(());
+        };
+
+        if !matches!(status, SdkToolStatus::Success) {
+            return Ok(());
+        }
+
+        let SdkActionType::FileRead { path } = action_type else {
+            return Ok(());
+        };
+
+        let Some(skill_file) = detect_skill_file(Path::new(path)) else {
+            return Ok(());
+        };
+
+        if Self::attempt_has_required_skill(db_pool, attempt_id, &skill_file.skill_id).await? {
+            return Ok(());
+        }
+
+        let key = (attempt_id, skill_file.skill_id.clone());
+        {
+            let mut guard = RUNTIME_SKILL_READS.lock().await;
+            if !guard.insert(key) {
+                return Ok(());
+            }
+        }
+
+        let message = format!(
+            "Runtime skill loaded: {}@{} (via direct file read)",
+            skill_file.skill_id, skill_file.origin
+        );
+        Self::log_simple(db_pool, broadcast_tx, attempt_id, "system", &message).await
+    }
+
     /// Append log to JSONL and return (id, created_at). No agent_logs DB (Vibe Kanban style).
     async fn append_log(
         attempt_id: Uuid,
@@ -310,7 +386,7 @@ impl StatusManager {
     }
 
     pub async fn log_normalized_entry_and_get_id(
-        _db_pool: &PgPool,
+        db_pool: &PgPool,
         broadcast_tx: &broadcast::Sender<AgentEvent>,
         attempt_id: Uuid,
         entry: &SdkNormalizedEntry,
@@ -327,11 +403,12 @@ impl StatusManager {
             created_at,
             tool_name,
         );
+        Self::maybe_log_runtime_skill_read(db_pool, broadcast_tx, attempt_id, entry).await?;
         Ok(log_id)
     }
 
     pub async fn update_normalized_entry(
-        _db_pool: &PgPool,
+        db_pool: &PgPool,
         broadcast_tx: &broadcast::Sender<AgentEvent>,
         attempt_id: Uuid,
         log_id: Uuid,
@@ -349,6 +426,7 @@ impl StatusManager {
             Utc::now(),
             tool_name,
         );
+        Self::maybe_log_runtime_skill_read(db_pool, broadcast_tx, attempt_id, entry).await?;
         Ok(())
     }
 
@@ -579,6 +657,7 @@ impl StatusManager {
             AttemptStatus::Success | AttemptStatus::Failed | AttemptStatus::Cancelled => {
                 // Flush any buffered logs before marking attempt complete
                 let _ = flush_agent_log_buffer().await;
+                Self::clear_runtime_skill_reads(attempt_id).await;
                 // Set completed_at when finishing execution
                 sqlx::query(
                     r#"
@@ -679,6 +758,7 @@ impl StatusManager {
             status: AttemptStatus::Failed,
             timestamp: Utc::now(),
         }));
+        Self::clear_runtime_skill_reads(attempt_id).await;
 
         Ok(())
     }
@@ -723,6 +803,7 @@ impl StatusManager {
             status: AttemptStatus::Cancelled,
             timestamp: Utc::now(),
         }));
+        Self::clear_runtime_skill_reads(attempt_id).await;
 
         Ok(())
     }
@@ -774,7 +855,7 @@ impl StatusManager {
     }
 
     async fn log_normalized_raw(
-        _db_pool: &PgPool,
+        db_pool: &PgPool,
         broadcast_tx: &broadcast::Sender<AgentEvent>,
         attempt_id: Uuid,
         content: &str,
@@ -800,6 +881,9 @@ impl StatusManager {
             created_at,
             None,
         );
+        if let Ok(entry) = serde_json::from_str::<SdkNormalizedEntry>(content) {
+            Self::maybe_log_runtime_skill_read(db_pool, broadcast_tx, attempt_id, &entry).await?;
+        }
         Ok(())
     }
 

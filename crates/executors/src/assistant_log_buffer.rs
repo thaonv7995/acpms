@@ -33,6 +33,10 @@ pub struct AssistantMessage {
     pub created_at: DateTime<Utc>,
 }
 
+fn supported_tool_prefixes() -> [&'static str; 1] {
+    [r#"{"tool""#]
+}
+
 /// Process agent text: extract tool call JSON lines. Returns (content_without_json, metadata).
 /// Used when text is a complete line (e.g. ClaudeCode raw stdout).
 pub fn process_agent_text_for_tool_calls(text: &str) -> (String, Option<serde_json::Value>) {
@@ -102,10 +106,7 @@ impl AgentTextBuffer {
             return None;
         }
 
-        for prefix in [
-            r#"{"tool":"create_task""#,
-            r#"{"tool":"create_requirement""#,
-        ] {
+        for prefix in supported_tool_prefixes() {
             if let Some(start) = trimmed.find(prefix) {
                 if start == 0 {
                     // The buffer starts with an incomplete tool-call candidate; keep it.
@@ -145,10 +146,7 @@ impl AgentTextBuffer {
 
     fn try_extract_tool_call(&mut self) -> Option<(String, Option<serde_json::Value>)> {
         let trimmed = self.buffer.trim();
-        for prefix in [
-            r#"{"tool":"create_task""#,
-            r#"{"tool":"create_requirement""#,
-        ] {
+        for prefix in supported_tool_prefixes() {
             if let Some(start) = trimmed.find(prefix) {
                 let slice = &trimmed[start..];
                 if let Some(end) = find_matching_json_end(slice) {
@@ -201,6 +199,31 @@ mod tests {
         let out = buffer.pop_partial_text_for_display();
         assert_eq!(out, Some(("Here is the plan".to_string(), None)));
     }
+
+    #[test]
+    fn parse_tool_call_metadata_accepts_runtime_skill_search() {
+        let metadata = parse_tool_call_metadata(
+            r#"{"tool":"search_skills","args":{"query":"openai docs","top_k":5}}"#,
+        )
+        .expect("search_skills metadata should parse");
+
+        assert_eq!(
+            metadata["tool_calls"][0]["name"].as_str(),
+            Some("search_skills")
+        );
+    }
+
+    #[test]
+    fn parse_tool_call_metadata_accepts_runtime_skill_load() {
+        let metadata =
+            parse_tool_call_metadata(r#"{"tool":"load_skill","args":{"skill_id":"openai-docs"}}"#)
+                .expect("load_skill metadata should parse");
+
+        assert_eq!(
+            metadata["tool_calls"][0]["name"].as_str(),
+            Some("load_skill")
+        );
+    }
 }
 
 /// Extract complete tool call JSON from text that may be streamed (partial) or embedded.
@@ -209,10 +232,7 @@ fn extract_tool_call_from_streaming_text(text: &str) -> Option<serde_json::Value
     if trimmed.is_empty() {
         return None;
     }
-    for prefix in [
-        r#"{"tool":"create_task""#,
-        r#"{"tool":"create_requirement""#,
-    ] {
+    for prefix in supported_tool_prefixes() {
         if let Some(start) = trimmed.find(prefix) {
             let slice = &trimmed[start..];
             if let Some(end) = find_matching_json_end(slice) {
@@ -263,18 +283,40 @@ fn find_matching_json_end(s: &str) -> Option<usize> {
     None
 }
 
-/// Detect if a line is a tool call JSON ({"tool":"create_requirement"|"create_task","args":{...}}).
+/// Detect if a line is a supported tool call JSON and return metadata for append_assistant_log.
 /// Returns metadata with tool_calls for append_assistant_log if valid.
 pub fn parse_tool_call_metadata(line: &str) -> Option<serde_json::Value> {
     let v: serde_json::Value = serde_json::from_str(line.trim()).ok()?;
     let obj = v.as_object()?;
     let tool = obj.get("tool")?.as_str()?;
-    if tool != "create_requirement" && tool != "create_task" {
-        return None;
-    }
     let args = obj.get("args")?.as_object()?;
-    if args.get("title").and_then(|x| x.as_str()).is_none() {
-        return None;
+    match tool {
+        "create_requirement" | "create_task" => {
+            if args.get("title").and_then(|x| x.as_str()).is_none() {
+                return None;
+            }
+        }
+        "search_skills" => {
+            if args
+                .get("query")
+                .and_then(|value| value.as_str())
+                .map(|value| value.trim().is_empty())
+                .unwrap_or(true)
+            {
+                return None;
+            }
+        }
+        "load_skill" => {
+            if args
+                .get("skill_id")
+                .and_then(|value| value.as_str())
+                .map(|value| value.trim().is_empty())
+                .unwrap_or(true)
+            {
+                return None;
+            }
+        }
+        _ => return None,
     }
     let id = format!("tc_{}", Uuid::new_v4());
     let tool_calls = serde_json::json!([{

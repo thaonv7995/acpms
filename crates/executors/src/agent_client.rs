@@ -4,6 +4,7 @@
 //! including tool_use blocks for vibe-kanban style display.
 
 use crate::approval::{ApprovalService, ApprovalStatus};
+use crate::assistant_log_buffer::AgentTextBuffer;
 use crate::log_writer::LogWriter;
 use crate::normalization::{
     NormalizedEntry as NewNormalizedEntry, NormalizedEntryType as NormalizedEntryTypeTrait,
@@ -19,7 +20,7 @@ use serde_json::Value;
 use sqlx::PgPool;
 use std::collections::HashMap;
 use std::sync::Arc;
-use tokio::sync::{broadcast, RwLock};
+use tokio::sync::{broadcast, mpsc, Mutex, RwLock};
 use uuid::Uuid;
 
 /// Partial tool call data for tracking streaming tool calls
@@ -55,6 +56,8 @@ pub struct ClaudeAgentClient {
     last_token_usage: RwLock<Option<TokenUsageSnapshot>>,
     last_next_action: RwLock<Option<String>>,
     last_answered_question: RwLock<Option<(String, String)>>,
+    assistant_buffer: Mutex<AgentTextBuffer>,
+    runtime_tool_tx: Option<mpsc::UnboundedSender<Value>>,
 }
 
 impl ClaudeAgentClient {
@@ -68,6 +71,7 @@ impl ClaudeAgentClient {
         attempt_id: Uuid,
         log_writer: LogWriter,
         approval_service: Option<Arc<dyn ApprovalService>>,
+        runtime_tool_tx: Option<mpsc::UnboundedSender<Value>>,
     ) -> Arc<Self> {
         let auto_approve = approval_service.is_none();
         Arc::new(Self {
@@ -81,6 +85,8 @@ impl ClaudeAgentClient {
             last_token_usage: RwLock::new(None),
             last_next_action: RwLock::new(None),
             last_answered_question: RwLock::new(None),
+            assistant_buffer: Mutex::new(AgentTextBuffer::new()),
+            runtime_tool_tx,
         })
     }
 
@@ -91,6 +97,7 @@ impl ClaudeAgentClient {
         approval_service: Option<Arc<dyn ApprovalService>>,
         db_pool: PgPool,
         broadcast_tx: broadcast::Sender<crate::AgentEvent>,
+        runtime_tool_tx: Option<mpsc::UnboundedSender<Value>>,
     ) -> Arc<Self> {
         let auto_approve = approval_service.is_none();
         Arc::new(Self {
@@ -104,6 +111,8 @@ impl ClaudeAgentClient {
             last_token_usage: RwLock::new(None),
             last_next_action: RwLock::new(None),
             last_answered_question: RwLock::new(None),
+            assistant_buffer: Mutex::new(AgentTextBuffer::new()),
+            runtime_tool_tx,
         })
     }
 
@@ -207,6 +216,58 @@ impl ClaudeAgentClient {
             if should_emit {
                 self.emit_normalized_entry(&entry).await;
             }
+        }
+    }
+
+    async fn emit_assistant_delta(&self, content: &str) {
+        if content.trim().is_empty() {
+            return;
+        }
+
+        if let (Some(pool), Some(tx)) = (&self.db_pool, &self.broadcast_tx) {
+            let _ = StatusManager::log_assistant_delta(pool, tx, self.attempt_id, content).await;
+        }
+    }
+
+    async fn emit_runtime_tool_metadata(&self, metadata: Option<Value>) {
+        let Some(metadata) = metadata else {
+            return;
+        };
+        let Some(tx) = &self.runtime_tool_tx else {
+            return;
+        };
+
+        let _ = tx.send(metadata);
+    }
+
+    async fn emit_runtime_capable_assistant_content(&self, content: &str) {
+        let mut buffer = self.assistant_buffer.lock().await;
+        buffer.push(content);
+
+        let mut emitted_any = false;
+        while let Some((text, metadata)) = buffer.pop_next() {
+            emitted_any = true;
+            drop(buffer);
+            self.emit_assistant_delta(&text).await;
+            self.emit_runtime_tool_metadata(metadata).await;
+            buffer = self.assistant_buffer.lock().await;
+        }
+
+        if !emitted_any {
+            if let Some((text, metadata)) = buffer.pop_partial_text_for_display() {
+                drop(buffer);
+                self.emit_assistant_delta(&text).await;
+                self.emit_runtime_tool_metadata(metadata).await;
+            }
+        }
+    }
+
+    async fn flush_runtime_capable_assistant_content(&self) {
+        let mut buffer = self.assistant_buffer.lock().await;
+        if let Some((text, metadata)) = buffer.flush() {
+            drop(buffer);
+            self.emit_assistant_delta(&text).await;
+            self.emit_runtime_tool_metadata(metadata).await;
         }
     }
 }
@@ -1099,10 +1160,8 @@ impl ProtocolHandler for ClaudeAgentClient {
         if let (Some(pool), Some(tx)) = (&self.db_pool, &self.broadcast_tx) {
             match &extract_result {
                 ExtractResult::Content(content) => {
-                    // Stream assistant text to the timeline as a normalized assistant_message
-                    // (update-in-place to avoid stdout fragment merging).
-                    let _ = StatusManager::log_assistant_delta(pool, tx, self.attempt_id, content)
-                        .await;
+                    let _ = (pool, tx);
+                    self.emit_runtime_capable_assistant_content(content).await;
                 }
                 ExtractResult::Normalized(entry) => {
                     // Save normalized entry as JSON for vibe-kanban style display
@@ -1135,6 +1194,9 @@ impl ProtocolHandler for ClaudeAgentClient {
                     }
                 }
                 ExtractResult::AssistantMessageStart | ExtractResult::AssistantMessageStop => {
+                    if matches!(extract_result, ExtractResult::AssistantMessageStop) {
+                        self.flush_runtime_capable_assistant_content().await;
+                    }
                     StatusManager::reset_assistant_accumulator(self.attempt_id).await;
                 }
                 ExtractResult::Skip => {
@@ -1157,6 +1219,11 @@ impl ProtocolHandler for ClaudeAgentClient {
                 has_broadcast_tx = self.broadcast_tx.is_some(),
                 "on_non_control: Missing db_pool or broadcast_tx, cannot save to database"
             );
+            if let ExtractResult::Content(content) = &extract_result {
+                self.emit_runtime_capable_assistant_content(content).await;
+            } else if matches!(extract_result, ExtractResult::AssistantMessageStop) {
+                self.flush_runtime_capable_assistant_content().await;
+            }
         }
 
         // Extract metadata-style SDK entries (token usage, next action, user Q/A) from raw event line.

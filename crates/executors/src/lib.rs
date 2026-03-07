@@ -16,6 +16,7 @@ pub mod process;
 pub mod retry_handler;
 pub mod router_config;
 pub mod session;
+pub mod skill_runtime;
 pub mod task_skills;
 pub mod worker_pool;
 pub mod worktree;
@@ -55,7 +56,7 @@ pub use agent_log_buffer::{
 };
 pub use assistant_log_buffer::{
     append_assistant_log, get_assistant_log_file_path, parse_jsonl_to_messages,
-    read_assistant_log_file, AssistantMessage,
+    parse_tool_call_metadata, read_assistant_log_file, AgentTextBuffer, AssistantMessage,
 };
 pub use claude::*;
 pub use codex::*;
@@ -65,7 +66,11 @@ pub use gemini::*;
 pub use git_credential_helper::GitCredentialHelper;
 pub use input_queue::{InputMessage, InputQueue, InputQueueError};
 pub use job_queue::*;
-pub use knowledge_index::{KnowledgeIndex, SkillMatch};
+pub use knowledge_index::{
+    discover_global_skill_roots, IndexedKnowledgeBackend, KnowledgeIndex, KnowledgeRoot,
+    SkillKnowledgeBackend, SkillKnowledgeHandle, SkillKnowledgeSnapshot, SkillKnowledgeStatus,
+    SkillMatch,
+};
 pub use normalization::{
     ActionOperation, ActionType, AggregatedAction, ExecutionStatus, FileChange, FileChangeType,
     LogNormalizer, NormalizedEntry, NormalizedEntryType, SubagentSpawn, TodoItem, TodoStatus,
@@ -80,8 +85,15 @@ pub use retry_handler::{RetryHandler, RetryInfo, RetryScheduleResult};
 pub use router_config::{
     default_filters, serialize_filters, AgentSettings, FilterAction, MessageFilter,
 };
+pub use skill_runtime::{
+    PlannedSkill, RuntimeSkillLoadResult, RuntimeSkillSearchMatch, RuntimeSkillSearchResult,
+    SkillPlan, SkillPlanDecision, SkillRuntime, SkillSelectionTrace, SkippedSkill,
+};
 pub use task_skills::{
-    build_skill_instruction_block, build_skill_instruction_block_with_rag, resolve_skill_chain,
+    build_skill_instruction_block, build_skill_instruction_block_with_rag,
+    build_skill_instruction_context, build_skill_metadata_patch, build_skill_plan,
+    format_loaded_skills_log_line, get_runtime_skill_attachment, render_skill_instruction_context,
+    resolve_skill_chain, RuntimeLoadedSkill, SkillInstructionContext, SuggestedSkill,
 };
 pub use worker_pool::*;
 pub use worker_pool_config::*;

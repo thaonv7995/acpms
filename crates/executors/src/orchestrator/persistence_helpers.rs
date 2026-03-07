@@ -176,29 +176,30 @@ impl ExecutorOrchestrator {
         })
     }
 
-    pub(super) async fn persist_resolved_skill_chain(
+    pub(super) async fn persist_skill_instruction_context(
         &self,
         attempt_id: Uuid,
-        skill_chain: &[String],
+        context: &crate::SkillInstructionContext,
         source: &str,
     ) -> Result<()> {
+        let patch = crate::build_skill_metadata_patch(context, source);
         sqlx::query(
             r#"
             UPDATE task_attempts
-            SET metadata = COALESCE(metadata, '{}'::jsonb)
-                || jsonb_build_object(
-                    'resolved_skill_chain', $2::jsonb,
-                    'resolved_skill_chain_source', $3::text
-                )
+            SET metadata = COALESCE(metadata, '{}'::jsonb) || $2::jsonb
             WHERE id = $1
             "#,
         )
         .bind(attempt_id)
-        .bind(serde_json::json!(skill_chain))
-        .bind(source)
+        .bind(patch)
         .execute(&self.db_pool)
         .await
-        .context("Failed to persist resolved skill chain metadata")?;
+        .with_context(|| {
+            format!(
+                "Failed to persist skill instruction metadata for source {}",
+                source
+            )
+        })?;
 
         Ok(())
     }

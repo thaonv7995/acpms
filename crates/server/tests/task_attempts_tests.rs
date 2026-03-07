@@ -286,7 +286,21 @@ async fn test_get_attempt_skills_from_metadata() {
         UPDATE task_attempts
         SET metadata = jsonb_build_object(
             'resolved_skill_chain', $2::jsonb,
-            'resolved_skill_chain_source', 'seeded_test'
+            'resolved_skill_chain_source', 'seeded_test',
+            'knowledge_suggestions', jsonb_build_object(
+                'status', 'ready',
+                'detail', 'Seeded for test',
+                'items', jsonb_build_array(
+                    jsonb_build_object(
+                        'skill_id', 'openai-docs',
+                        'name', 'OpenAI Docs',
+                        'description', 'Use official docs',
+                        'score', 0.95,
+                        'source_path', '/tmp/openai-docs/SKILL.md',
+                        'origin', 'community-openai'
+                    )
+                )
+            )
         )
         WHERE id = $1
         "#,
@@ -322,6 +336,19 @@ async fn test_get_attempt_skills_from_metadata() {
         "env-and-secrets-validate"
     );
     assert_eq!(returned_chain[1].as_str().unwrap(), "code-implement");
+    assert_eq!(
+        response["data"]["knowledge_suggestions"]["status"]
+            .as_str()
+            .unwrap(),
+        "ready"
+    );
+    assert_eq!(
+        response["data"]["knowledge_suggestions"]["items"]
+            .as_array()
+            .expect("knowledge suggestion items must be array")
+            .len(),
+        1
+    );
 
     cleanup_test_data(&pool, user_id, Some(project_id)).await;
 }
@@ -355,7 +382,7 @@ async fn test_get_attempt_skills_derived_and_persisted_when_missing() {
     assert!(response["success"].as_bool().unwrap());
     assert_eq!(
         response["data"]["source"].as_str().unwrap(),
-        "derived_runtime"
+        "attempt_skills_read_fallback"
     );
 
     let returned_chain = response["data"]["resolved_skill_chain"]
@@ -384,6 +411,26 @@ async fn test_get_attempt_skills_derived_and_persisted_when_missing() {
             .as_ref()
             .is_some_and(serde_json::Value::is_array),
         "Expected resolved_skill_chain to be persisted into attempt metadata"
+    );
+
+    let persisted_knowledge: Option<serde_json::Value> = sqlx::query_scalar(
+        "SELECT metadata->'knowledge_suggestions' FROM task_attempts WHERE id = $1",
+    )
+    .bind(attempt_id)
+    .fetch_one(&pool)
+    .await
+    .expect("Failed to fetch persisted knowledge_suggestions");
+    assert_eq!(
+        response["data"]["knowledge_suggestions"]["status"]
+            .as_str()
+            .unwrap(),
+        "disabled"
+    );
+    assert!(
+        persisted_knowledge
+            .as_ref()
+            .is_some_and(serde_json::Value::is_object),
+        "Expected knowledge_suggestions to be persisted into attempt metadata"
     );
 
     cleanup_test_data(&pool, user_id, Some(project_id)).await;

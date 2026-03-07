@@ -45,6 +45,7 @@ frontend/src/shared/types.ts.backup
 tmp/
 temp/
 *.tmp
+.fastembed_cache
 
 # Testing / automation artifacts (do not commit)
 .playwright-cli/

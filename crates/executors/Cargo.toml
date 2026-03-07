@@ -59,10 +59,7 @@ async-stream = "0.3"         # For MsgStore stream generation
 futures = "0.3"              # Stream utilities
 
 # Knowledge Base RAG
-fastembed = "4"                                        # Local ONNX embedding model
-rusqlite = { version = "0.31", features = ["bundled"] } # SQLite for vector storage
-sqlite-vec = "0.1"                                      # SQLite vector search extension
-serde_yaml = "0.9"                                      # Parse SKILL.md frontmatter
+serde_yaml = "0.9" # Parse SKILL.md frontmatter
 
 [target.'cfg(unix)'.dependencies]
 nix = { version = "0.29", features = ["signal", "process"] }

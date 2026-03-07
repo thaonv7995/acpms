@@ -41,7 +41,6 @@ pub struct AppState {
     pub patch_store: Arc<PatchStore>,
     pub stream_service: Arc<StreamService>,
     pub auth_session_store: Arc<AuthSessionStore>,
-    pub knowledge_index: Option<Arc<acpms_executors::KnowledgeIndex>>,
 }
 
 impl axum::extract::FromRef<AppState> for PgPool {
