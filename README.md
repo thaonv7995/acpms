@@ -1,5 +1,7 @@
 # ACPMS - Agentic Coding Project Management System
 
+![Agentic Coding Architecture](docs/screenshots/agentic-coding-architecture.png)
+
 A platform that integrates Project Management (Requirements, Tasks, Bugs) with **AI Agents** (Claude Code / Codex / Gemini / Cursor AI) to automate the software development lifecycle. Inspired by **Vibe Kanban**, with a simpler, lightweight design.
 
 Focused on **project management** and **breaking down requirements** into manageable pieces so projects stay under control. **BA, PO, PM, and Tester** can drive work from ticket to deployable preview—AI agents handle coding and deployment based on approved specs, with human-in-the-loop review. Preview environments let non-developers verify results before production. Best suited for **small teams and small projects**.
