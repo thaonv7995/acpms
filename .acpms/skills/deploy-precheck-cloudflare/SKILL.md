@@ -11,15 +11,19 @@ Enforce safe deploy gating for Web/API auto-deploy so attempts can still complet
 ## Inputs
 - `auto_deploy` flag resolved from task/project settings.
 - Project type.
-- Cloudflare configuration availability (account ID + API token).
+- Cloudflare configuration availability from env vars injected by ACPMS:
+  - `CLOUDFLARE_ACCOUNT_ID`
+  - `CLOUDFLARE_API_TOKEN`
+  - `CLOUDFLARE_ZONE_ID`
+  - `CLOUDFLARE_BASE_DOMAIN`
 
 ## Decision Table
 | Condition | Result |
 |---|---|
 | `auto_deploy=false` | `DEPLOY_PRECHECK=not_required` |
 | project type not `web` or `api` | `DEPLOY_PRECHECK=not_required` |
-| `auto_deploy=true` and Cloudflare configured | `DEPLOY_PRECHECK=ready` |
-| `auto_deploy=true` and Cloudflare missing | `DEPLOY_PRECHECK=skipped_cloudflare_not_configured` |
+| `preview_enabled/auto_deploy` and all 4 Cloudflare env vars present | `DEPLOY_PRECHECK=ready` |
+| `preview_enabled/auto_deploy` and any Cloudflare env var missing | `DEPLOY_PRECHECK=skipped_cloudflare_not_configured` |
 
 ## Log for User
 **Agent must output this message** when Cloudflare is not configured—it appears in the attempt log (chat session). Do not use technical wording.

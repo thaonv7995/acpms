@@ -6246,6 +6246,8 @@ impl ExecutorOrchestrator {
         if let Some(extra_env) = provider_env {
             env_vars.extend(extra_env);
         }
+        self.extend_agent_env_with_cloudflare_settings(&mut env_vars)
+            .await;
 
         // Spawn with timeout and env vars
         tokio::time::timeout(SPAWN_TIMEOUT, async {

@@ -16,14 +16,19 @@ Provide preview routing details that downstream pipeline can use for preview met
 
 ## Inputs
 - Local runtime port for the service.
-- Tunnel/domain configuration for the project.
+- Tunnel/domain configuration from env vars injected by ACPMS:
+  - `CLOUDFLARE_ACCOUNT_ID`
+  - `CLOUDFLARE_API_TOKEN`
+  - `CLOUDFLARE_ZONE_ID`
+  - `CLOUDFLARE_BASE_DOMAIN`
 
 ## Workflow
 1. Start the local service if not already running.
 2. Confirm local service is reachable at `http://127.0.0.1:<port>` (or `localhost`).
-3. Create/resolve tunnel route to the local runtime.
-4. Validate route responds successfully.
-5. Emit preview fields in final output (required).
+3. Read Cloudflare config from the env vars above.
+4. Create/resolve tunnel route to the local runtime.
+5. Validate route responds successfully.
+6. Emit preview fields in final output (required).
 
 ## Required Output
 

@@ -7,8 +7,8 @@ use std::fs;
 use std::path::Path;
 use std::time::Duration;
 use tokio::sync::watch;
-use uuid::Uuid;
 use url::Url;
+use uuid::Uuid;
 
 const MAX_VALIDATION_OUTPUT_CHARS: usize = 12_000;
 const MAX_VALIDATION_FIX_ROUNDS: usize = 3;
@@ -663,10 +663,7 @@ else echo 'Missing Dockerfile or compose file (docker-compose.yml / compose.yml)
         )
     }
 
-    async fn ensure_preview_target_ready(
-        &self,
-        preview_target: &str,
-    ) -> Result<()> {
+    async fn ensure_preview_target_ready(&self, preview_target: &str) -> Result<()> {
         if self.preview_target_reachable(preview_target).await {
             return Ok(());
         }
@@ -1837,13 +1834,10 @@ Project type: {}
                         .fetch_attempt_log_lines(attempt_id, "deployment failure reason")
                         .await
                         .unwrap_or_default();
-                    let agent_reason = super::extract_labeled_value(
-                        &lines,
-                        "DEPLOYMENT_FAILURE_REASON",
-                    )
-                    .or_else(|| {
-                        super::extract_labeled_value(&lines, "deployment_failure_reason")
-                    });
+                    let agent_reason =
+                        super::extract_labeled_value(&lines, "DEPLOYMENT_FAILURE_REASON").or_else(
+                            || super::extract_labeled_value(&lines, "deployment_failure_reason"),
+                        );
                     if let Some(reason) = &agent_reason {
                         format!(
                             "Preview delivery failed: Agent reported — {}. (Agent must output DEPLOYMENT_FAILURE_REASON when PREVIEW_TARGET cannot be provided.)",

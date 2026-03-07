@@ -6,14 +6,18 @@ description: Create Cloudflare tunnel for preview. Use when agent needs to expos
 # Create Cloudflare Preview Tunnel
 
 ## Objective
-Create Cloudflare tunnel to expose local runtime for preview. Read config from System Settings (cloudflare_account_id, cloudflare_api_token). When config is missing or tunnel creation fails, **agent must output a message** that appears in the attempt log for the user.
+Create Cloudflare tunnel to expose local runtime for preview. Read config from ACPMS-injected env vars (`CLOUDFLARE_ACCOUNT_ID`, `CLOUDFLARE_API_TOKEN`, `CLOUDFLARE_ZONE_ID`, `CLOUDFLARE_BASE_DOMAIN`). When config is missing or tunnel creation fails, **agent must output a message** that appears in the attempt log for the user.
 
 ## Inputs
 - Local runtime port (e.g. from dev-server)
-- System Settings: cloudflare_account_id, cloudflare_api_token
+- Env vars injected by ACPMS:
+  - `CLOUDFLARE_ACCOUNT_ID`
+  - `CLOUDFLARE_API_TOKEN`
+  - `CLOUDFLARE_ZONE_ID`
+  - `CLOUDFLARE_BASE_DOMAIN`
 
 ## Workflow
-1. Read Cloudflare config from System Settings.
+1. Read Cloudflare config from the env vars above.
 2. If config missing or invalid → output message for user (see Log for User).
 3. Create tunnel route to `http://127.0.0.1:<port>`.
 4. Validate route responds.

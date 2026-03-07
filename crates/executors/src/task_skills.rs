@@ -2229,6 +2229,7 @@ fn builtin_skill_content(skill_id: &str) -> Option<&'static str> {
             r#"Guide for Cloudflare tunnel preview. Required System Settings: Account ID, API Token, Zone ID, Base Domain.
 - Output PREVIEW_TARGET: http://127.0.0.1:<port> when preview needed.
 - If preview runs in Docker, write `.acpms/preview-output.json` with `preview_target` and `runtime_control`.
+- ACPMS injects Cloudflare config into env vars: `CLOUDFLARE_ACCOUNT_ID`, `CLOUDFLARE_API_TOKEN`, `CLOUDFLARE_ZONE_ID`, `CLOUDFLARE_BASE_DOMAIN`.
 - When tunnel fails: tell user to ensure all 4 fields in System Settings (/settings)."#,
         ),
         "deploy-cloudflare-pages" => Some(
@@ -2245,10 +2246,12 @@ fn builtin_skill_content(skill_id: &str) -> Option<&'static str> {
             r#"Prepare preview tunnel details for web/api.
 - Produce PREVIEW_TARGET for runtime endpoint.
 - If preview runtime is controllable via Docker, emit `.acpms/preview-output.json` with `runtime_control`.
+- Read Cloudflare config from env vars `CLOUDFLARE_ACCOUNT_ID`, `CLOUDFLARE_API_TOKEN`, `CLOUDFLARE_ZONE_ID`, `CLOUDFLARE_BASE_DOMAIN`.
 - If public URL is available, output PREVIEW_URL."#,
         ),
         "deploy-precheck-cloudflare" => Some(
             r#"Before deploy/tunnel, verify Cloudflare settings are configured.
+- Check env vars `CLOUDFLARE_ACCOUNT_ID`, `CLOUDFLARE_API_TOKEN`, `CLOUDFLARE_ZONE_ID`, `CLOUDFLARE_BASE_DOMAIN`.
 - If missing, report: cloudflare not configured.
 - Skip deploy/tunnel safely and continue normal completion flow."#,
         ),

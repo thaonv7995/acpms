@@ -378,6 +378,86 @@ impl ExecutorOrchestrator {
     }
 
     /// Helper: Fetch task from database
+    pub(super) async fn extend_agent_env_with_cloudflare_settings(
+        &self,
+        env_vars: &mut HashMap<String, String>,
+    ) {
+        let settings = match self.fetch_system_settings().await {
+            Ok(settings) => settings,
+            Err(error) => {
+                warn!(
+                    "Failed to load system settings for Cloudflare env injection: {}",
+                    error
+                );
+                return;
+            }
+        };
+
+        if let Some(account_id) = settings
+            .cloudflare_account_id
+            .as_deref()
+            .map(str::trim)
+            .filter(|value| !value.is_empty())
+        {
+            env_vars.insert("CLOUDFLARE_ACCOUNT_ID".to_string(), account_id.to_string());
+        }
+
+        if let Some(zone_id) = settings
+            .cloudflare_zone_id
+            .as_deref()
+            .map(str::trim)
+            .filter(|value| !value.is_empty())
+        {
+            env_vars.insert("CLOUDFLARE_ZONE_ID".to_string(), zone_id.to_string());
+        }
+
+        if let Some(base_domain) = settings
+            .cloudflare_base_domain
+            .as_deref()
+            .map(str::trim)
+            .filter(|value| !value.is_empty())
+        {
+            env_vars.insert(
+                "CLOUDFLARE_BASE_DOMAIN".to_string(),
+                base_domain.to_string(),
+            );
+        }
+
+        if let Some(encrypted_token) = settings
+            .cloudflare_api_token_encrypted
+            .as_deref()
+            .filter(|value| !value.trim().is_empty())
+        {
+            match self.decrypt_value(encrypted_token) {
+                Ok(token) => {
+                    let token = token
+                        .trim()
+                        .trim_start_matches("Bearer ")
+                        .trim()
+                        .to_string();
+                    if !token.is_empty() {
+                        env_vars.insert("CLOUDFLARE_API_TOKEN".to_string(), token);
+                    }
+                }
+                Err(error) => {
+                    warn!(
+                        "Failed to decrypt Cloudflare API token for agent env: {}",
+                        error
+                    );
+                }
+            }
+        }
+
+        if env_vars.contains_key("CLOUDFLARE_ACCOUNT_ID")
+            && env_vars.contains_key("CLOUDFLARE_API_TOKEN")
+            && env_vars.contains_key("CLOUDFLARE_ZONE_ID")
+            && env_vars.contains_key("CLOUDFLARE_BASE_DOMAIN")
+        {
+            env_vars.insert("CLOUDFLARE_CONFIGURED".to_string(), "true".to_string());
+        }
+    }
+
+    /// Helper: Fetch task from database
     pub(super) async fn fetch_task(&self, task_id: Uuid) -> Result<Task> {
         sqlx::query_as::<_, Task>(
             r#"SELECT id, project_id, requirement_id, sprint_id, title, description,

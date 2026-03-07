@@ -387,9 +387,40 @@ check_services() {
   die "Services did not start in time. Check: docker compose -p acpms logs postgres minio"
 }
 
+# Ensure PATH includes common CLI install locations before any provider checks
+ensure_provider_path() {
+  local extra_paths="$HOME/.local/bin:$HOME/.cursor/bin:$HOME/.npm-global/bin:$HOME/.local/share/cursor/bin"
+  if [[ ":$PATH:" != *":$HOME/.local/bin:"* ]]; then
+    export PATH="$extra_paths:$PATH"
+  fi
+}
+
+# Resolve provider binary: check PATH first, then common install paths
+resolve_provider_bin() {
+  local name="$1"
+  local path
+  path="$(command -v "$name" 2>/dev/null)" && [ -n "$path" ] && [ -x "$path" ] && echo "$path" && return
+  for dir in "$HOME/.local/bin" "$HOME/.cursor/bin" /usr/local/bin /opt/homebrew/bin; do
+    if [ -x "$dir/$name" ]; then
+      echo "$dir/$name"
+      return
+    fi
+  done
+  return 1
+}
+
+# Verify provider works (e.g. claude --version). Returns 0 if OK.
+verify_provider_works() {
+  local bin="$1" ver_flag="${2:---version}"
+  [ -z "$bin" ] && return 1
+  "$bin" $ver_flag >/dev/null 2>&1 || true
+  return 0
+}
+
 # Check Agent CLI providers (optional but recommended)
 # Providers: claude (curl), codex (npm), gemini (npm), Cursor CLI (`agent` / `cursor-agent`)
 check_agent_cli_providers() {
+  ensure_provider_path
   local npm_providers=("codex:@openai/codex" "gemini:@google/gemini-cli")
   local missing_npm=()
   local need_cursor=false
@@ -399,18 +430,18 @@ check_agent_cli_providers() {
 
   for entry in "${npm_providers[@]}"; do
     cmd="${entry%%:*}"
-    if ! command -v "$cmd" >/dev/null 2>&1; then
+    if ! resolve_provider_bin "$cmd" >/dev/null 2>&1; then
       missing_npm+=("${entry##*:}")
     fi
   done
 
-  if ! command -v claude >/dev/null 2>&1; then
+  if ! resolve_provider_bin claude >/dev/null 2>&1; then
     need_claude=true
   fi
 
-  cursor_cmd="$(command -v agent 2>/dev/null || true)"
+  cursor_cmd="$(resolve_provider_bin agent 2>/dev/null || true)"
   if [ -z "$cursor_cmd" ]; then
-    cursor_cmd="$(command -v cursor-agent 2>/dev/null || true)"
+    cursor_cmd="$(resolve_provider_bin cursor-agent 2>/dev/null || true)"
   fi
   if [ -z "$cursor_cmd" ]; then
     need_cursor=true
@@ -418,6 +449,7 @@ check_agent_cli_providers() {
 
   if [ ${#missing_npm[@]} -eq 0 ] && [ "$need_cursor" = false ] && [ "$need_claude" = false ]; then
     log "Agent CLI providers: all found (claude, codex, gemini, cursor)"
+    verify_and_report_providers
     return
   fi
 
@@ -436,15 +468,21 @@ check_agent_cli_providers() {
   # Install Claude Code via official script
   if [ "$need_claude" = true ]; then
     log "Installing Claude Code..."
-    if curl -fsSL https://claude.ai/install.sh | bash 2>/dev/null; then
-      log "  Claude Code installed."
-      # Auto-setup PATH for ~/.local/bin if not present
-      if [[ ":$PATH:" != *":$HOME/.local/bin:"* ]]; then
-        log "  Adding ~/.local/bin to shell profile..."
+    if curl -fsSL https://claude.ai/install.sh | bash; then
+      ensure_provider_path
+      local claude_path
+      claude_path="$(resolve_provider_bin claude 2>/dev/null)" || true
+      if [ -n "$claude_path" ]; then
+        log "  Claude Code installed: $claude_path"
+        if claude --version >/dev/null 2>&1; then
+          log "  Claude OK: $(claude --version 2>/dev/null | head -1)"
+        fi
+      else
+        err "  Claude install script ran but 'claude' not found. Add ~/.local/bin to PATH and run: claude --version"
         for profile_file in "$HOME/.bashrc" "$HOME/.zshrc" "$HOME/.profile"; do
           if [ -f "$profile_file" ] && ! grep -q 'export PATH="$HOME/.local/bin:$PATH"' "$profile_file"; then
             echo 'export PATH="$HOME/.local/bin:$PATH"' >> "$profile_file"
-            log "    Added to $profile_file"
+            log "    Added ~/.local/bin to $profile_file"
           fi
         done
         export PATH="$HOME/.local/bin:$PATH"
@@ -457,11 +495,12 @@ check_agent_cli_providers() {
   # Install Cursor CLI (agent) via official script — not npm; @anthropic-ai/cursor does not exist
   if [ "$need_cursor" = true ]; then
     log "Installing Cursor CLI (agent)..."
-    if curl -fsSL https://cursor.com/install | bash 2>/dev/null; then
-      if command -v agent >/dev/null 2>&1 || command -v cursor-agent >/dev/null 2>&1; then
+    if curl -fsSL https://cursor.com/install | bash; then
+      ensure_provider_path
+      if resolve_provider_bin agent >/dev/null 2>&1 || resolve_provider_bin cursor-agent >/dev/null 2>&1; then
         log "  Cursor CLI installed."
       else
-        log "  Cursor CLI script ran; if 'agent'/'cursor-agent' is not in PATH, add the install dir to PATH or run: curl https://cursor.com/install -fsS | bash"
+        err "  Cursor install script ran but 'agent'/'cursor-agent' not found. Add install dir to PATH or run: curl https://cursor.com/install -fsS | bash"
       fi
     else
       err "Failed to install Cursor CLI. Run manually: curl https://cursor.com/install -fsS | bash"
@@ -469,7 +508,7 @@ check_agent_cli_providers() {
   fi
 
   if [ ${#missing_npm[@]} -eq 0 ]; then
-    log "Agent CLI providers installed. Authenticate via Settings → Agent CLI Provider after first login."
+    verify_and_report_providers
     return
   fi
 
@@ -538,11 +577,70 @@ check_agent_cli_providers() {
   log "Installing Agent CLI providers via npm..."
   for pkg in "${missing_npm[@]}"; do
     log "  Installing $pkg..."
-    npm install -g "$pkg" 2>/dev/null || sudo npm install -g "$pkg" 2>/dev/null || {
+    if npm install -g "$pkg" 2>/dev/null || sudo npm install -g "$pkg" 2>/dev/null; then
+      log "    $pkg installed."
+    else
       err "Failed to install $pkg. Run manually: npm install -g $pkg"
-    }
+    fi
   done
-  log "Agent CLI providers installed. Authenticate via Settings → Agent CLI Provider after first login."
+  verify_and_report_providers
+}
+
+# Report status of each provider (found/missing, path, version if available)
+verify_and_report_providers() {
+  log "Verifying Agent CLI providers..."
+  local claude_p codex_p gemini_p cursor_p npx_p script_p
+  claude_p="$(resolve_provider_bin claude 2>/dev/null)" || true
+  codex_p="$(resolve_provider_bin codex 2>/dev/null)" || true
+  gemini_p="$(resolve_provider_bin gemini 2>/dev/null)" || true
+  cursor_p="$(resolve_provider_bin agent 2>/dev/null)" || cursor_p="$(resolve_provider_bin cursor-agent 2>/dev/null)" || true
+  npx_p="$(resolve_provider_bin npx 2>/dev/null)" || true
+  script_p="$(command -v script 2>/dev/null)" || true
+
+  local failures=0
+  if [ -n "$claude_p" ]; then
+    local v; v="$($claude_p --version 2>/dev/null | head -1)" || v=""
+    log "  claude:  $claude_p${v:+ - $v}"
+  else
+    err "  claude:  NOT FOUND - run: curl -fsSL https://claude.ai/install.sh | bash"
+    failures=$((failures + 1))
+  fi
+  if [ -n "$codex_p" ]; then
+    log "  codex:   $codex_p"
+  else
+    err "  codex:   NOT FOUND - run: npm install -g @openai/codex"
+    failures=$((failures + 1))
+  fi
+  if [ -n "$gemini_p" ]; then
+    log "  gemini:  $gemini_p"
+  else
+    err "  gemini:  NOT FOUND - run: npm install -g @google/gemini-cli"
+    failures=$((failures + 1))
+  fi
+  if [ -n "$cursor_p" ]; then
+    log "  cursor:  $cursor_p"
+  else
+    err "  cursor:  NOT FOUND - run: curl -fsSL https://cursor.com/install | bash"
+    failures=$((failures + 1))
+  fi
+  if [ -n "$npx_p" ]; then
+    log "  npx:     $npx_p (fallback for claude/codex/gemini)"
+  else
+    err "  npx:     NOT FOUND - install Node.js from https://nodejs.org"
+    failures=$((failures + 1))
+  fi
+  if [ -n "$script_p" ]; then
+    log "  script:  $script_p (needed for auth on Debian/GNU)"
+  else
+    err "  script:  NOT FOUND - run: apt install bsdutils"
+    failures=$((failures + 1))
+  fi
+
+  if [ $failures -gt 0 ]; then
+    err "Missing $failures provider(s). Install all before using Agent CLI. Authenticate via Settings → Agent CLI Provider after first login."
+  else
+    log "All Agent CLI providers OK. Authenticate via Settings → Agent CLI Provider after first login."
+  fi
 }
 
 # =============================================================================
@@ -696,17 +794,23 @@ generate_env() {
   case "$worktrees_path" in ~*) worktrees_path=$(eval echo "$worktrees_path") ;; esac
   [ -z "$worktrees_path" ] && worktrees_path="/var/acpms/worktrees"
   # Capture absolute CLI paths at install time so runtime (systemd/launchd) does not depend on shell PATH.
-  # Ensure ~/.local/bin and ~/.cursor/bin are in PATH during capture (where Claude and Cursor install)
-  export PATH="$HOME/.local/bin:$HOME/.cursor/bin:$PATH"
+  ensure_provider_path
   local claude_bin codex_bin gemini_bin cursor_bin npx_bin
-  claude_bin="$(command -v claude 2>/dev/null || true)"
-  codex_bin="$(command -v codex 2>/dev/null || true)"
-  gemini_bin="$(command -v gemini 2>/dev/null || true)"
-  cursor_bin="$(command -v agent 2>/dev/null || true)"
+  claude_bin="$(resolve_provider_bin claude 2>/dev/null)" || true
+  codex_bin="$(resolve_provider_bin codex 2>/dev/null)" || true
+  gemini_bin="$(resolve_provider_bin gemini 2>/dev/null)" || true
+  cursor_bin="$(resolve_provider_bin agent 2>/dev/null)" || true
   if [ -z "$cursor_bin" ]; then
-    cursor_bin="$(command -v cursor-agent 2>/dev/null || true)"
+    cursor_bin="$(resolve_provider_bin cursor-agent 2>/dev/null)" || true
   fi
-  npx_bin="$(command -v npx 2>/dev/null || true)"
+  npx_bin="$(resolve_provider_bin npx 2>/dev/null)" || true
+
+  if [ -z "$claude_bin" ]; then
+    log "Claude not found; ACPMS will use npx fallback for auth if npx is available."
+  fi
+  if [ -z "$npx_bin" ] && [ -z "$claude_bin" ]; then
+    err "Neither claude nor npx found. Claude provider auth will fail. Install: curl -fsSL https://claude.ai/install.sh | bash  OR  Node.js with npx."
+  fi
 
   log "Generating $ENV_FILE..."
   $USE_SUDO mkdir -p "$(dirname "$ENV_FILE")"

@@ -113,6 +113,7 @@ For a single container:
 - If `curl http://127.0.0.1:<port>` fails, do not output `PREVIEW_TARGET`.
 - If a public URL exists, `PREVIEW_URL` should be that public URL.
 - If only a local preview exists, `PREVIEW_URL` should be the same local URL as `PREVIEW_TARGET`.
+- If ACPMS injected `CLOUDFLARE_ACCOUNT_ID`, `CLOUDFLARE_API_TOKEN`, `CLOUDFLARE_ZONE_ID`, and `CLOUDFLARE_BASE_DOMAIN`, you should try to create the public Cloudflare preview URL after the local Docker preview is reachable.
 
 ## Decision Rules
 | Situation | Action |
