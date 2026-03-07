@@ -4,6 +4,7 @@ import { useSettings } from '../hooks/useSettings';
 import { useToast } from '../hooks/useToast';
 import { Toast } from '../components/shared/Toast';
 import {
+    checkCloudflareConnection,
     getAgentProvidersStatus,
     initiateAgentAuth,
     getAgentAuthSession,
@@ -12,6 +13,7 @@ import {
     type AgentProviderStatus,
     type AgentProvidersStatusResponse,
     type AgentAuthSession,
+    type CloudflareConnectionCheckResponse,
 } from '../api/settings';
 import { ApiError } from '../api/client';
 import { useAgentAuthSessionStream } from '../hooks/useAgentAuthSessionStream';
@@ -243,6 +245,21 @@ function pickFallbackProvider(statuses: AgentProviderStatus[]): string | null {
     return statuses.find((status) => status.available)?.provider ?? null;
 }
 
+function formatCloudflareFieldLabel(field: string): string {
+    switch (field) {
+        case 'cloudflare_account_id':
+            return 'Account ID';
+        case 'cloudflare_api_token':
+            return 'API Token';
+        case 'cloudflare_zone_id':
+            return 'Zone ID';
+        case 'cloudflare_base_domain':
+            return 'Base Domain';
+        default:
+            return field.replace(/_/g, ' ');
+    }
+}
+
 function isAuthTerminal(status: AgentAuthSession['status'] | undefined): boolean {
     return (
         status === 'succeeded' ||
@@ -290,6 +307,9 @@ export function SettingsPage() {
     const [cfBaseDomain, setCfBaseDomain] = useState('');
     const [showCfToken, setShowCfToken] = useState(false);
     const [isEditingCloudflare, setIsEditingCloudflare] = useState(false);
+    const [cloudflareCheckResult, setCloudflareCheckResult] =
+        useState<CloudflareConnectionCheckResponse | null>(null);
+    const [isCheckingCloudflare, setIsCheckingCloudflare] = useState(false);
 
     // Worktrees Path & Agent Language State
     const [worktreesPath, setWorktreesPath] = useState('');
@@ -565,6 +585,53 @@ export function SettingsPage() {
             showToast('Cloudflare settings saved successfully', 'success');
         } catch {
             showToast('Failed to save Cloudflare settings', 'error');
+        }
+    };
+
+    const handleCheckCloudflare = async () => {
+        setIsCheckingCloudflare(true);
+        try {
+            const tokenOverride =
+                cfToken.trim().length === 0
+                    ? ''
+                    : cfToken.startsWith('••')
+                        ? undefined
+                        : cfToken;
+
+            const result = await checkCloudflareConnection({
+                cloudflare_account_id: cfAccountId,
+                cloudflare_api_token: tokenOverride,
+                cloudflare_zone_id: cfZoneId,
+                cloudflare_base_domain: cfBaseDomain,
+            });
+
+            setCloudflareCheckResult(result);
+            showToast(
+                result.message,
+                result.ok ? 'success' : 'error'
+            );
+        } catch (error) {
+            const message =
+                error instanceof ApiError && error.message
+                    ? error.message
+                    : 'Failed to validate Cloudflare settings';
+            showToast(message, 'error');
+            setCloudflareCheckResult({
+                status: 'error',
+                ok: false,
+                config_complete: false,
+                connection_ok: false,
+                tunnel_create_ok: false,
+                dns_record_ok: null,
+                cleanup_ok: true,
+                missing_fields: [],
+                message,
+                details: [],
+                checked_at: new Date().toISOString(),
+                preview_url_example: null,
+            });
+        } finally {
+            setIsCheckingCloudflare(false);
         }
     };
 
@@ -1216,6 +1283,24 @@ export function SettingsPage() {
                                     </div>
 
                                     <div className="flex items-center gap-3">
+                                        <button
+                                            onClick={handleCheckCloudflare}
+                                            disabled={isCheckingCloudflare || saving}
+                                            className="px-3 py-1.5 border border-border text-card-foreground hover:bg-muted text-xs font-bold rounded-lg transition-colors flex items-center gap-1 disabled:opacity-50 disabled:cursor-not-allowed"
+                                            title="Validate Cloudflare connection and test tunnel creation"
+                                        >
+                                            {isCheckingCloudflare ? (
+                                                <>
+                                                    <span className="material-symbols-outlined text-[14px] animate-spin">progress_activity</span>
+                                                    Checking...
+                                                </>
+                                            ) : (
+                                                <>
+                                                    <span className="material-symbols-outlined text-[14px]">network_check</span>
+                                                    Check
+                                                </>
+                                            )}
+                                        </button>
                                         {!isEditingCloudflare ? (
                                             <button
                                                 onClick={() => setIsEditingCloudflare(true)}
@@ -1254,6 +1339,83 @@ export function SettingsPage() {
                                     </div>
                                 </div>
 
+                                {cloudflareCheckResult && (
+                                    <div
+                                        className={`rounded-lg border px-4 py-3 ${
+                                            cloudflareCheckResult.status === 'success'
+                                                ? 'border-emerald-500/30 bg-emerald-500/10'
+                                                : cloudflareCheckResult.status === 'warning'
+                                                    ? 'border-amber-500/30 bg-amber-500/10'
+                                                    : 'border-rose-500/30 bg-rose-500/10'
+                                        }`}
+                                    >
+                                        <div className="flex items-start gap-3">
+                                            <span
+                                                className={`material-symbols-outlined text-[18px] ${
+                                                    cloudflareCheckResult.status === 'success'
+                                                        ? 'text-emerald-400'
+                                                        : cloudflareCheckResult.status === 'warning'
+                                                            ? 'text-amber-400'
+                                                            : 'text-rose-400'
+                                                }`}
+                                            >
+                                                {cloudflareCheckResult.status === 'success'
+                                                    ? 'check_circle'
+                                                    : cloudflareCheckResult.status === 'warning'
+                                                        ? 'warning'
+                                                        : 'error'}
+                                            </span>
+                                            <div className="min-w-0 flex-1">
+                                                <div className="flex flex-wrap items-center gap-x-3 gap-y-1">
+                                                    <p className="text-sm font-semibold text-card-foreground">
+                                                        {cloudflareCheckResult.message}
+                                                    </p>
+                                                    <span className="text-xs text-muted-foreground">
+                                                        Checked {new Date(cloudflareCheckResult.checked_at).toLocaleString()}
+                                                    </span>
+                                                </div>
+
+                                                <div className="mt-2 flex flex-wrap gap-2 text-[11px] font-semibold uppercase tracking-wide">
+                                                    <span className={`rounded-full px-2 py-1 ${cloudflareCheckResult.connection_ok ? 'bg-emerald-500/15 text-emerald-300' : 'bg-rose-500/15 text-rose-300'}`}>
+                                                        Connection {cloudflareCheckResult.connection_ok ? 'OK' : 'Failed'}
+                                                    </span>
+                                                    <span className={`rounded-full px-2 py-1 ${cloudflareCheckResult.tunnel_create_ok ? 'bg-emerald-500/15 text-emerald-300' : 'bg-rose-500/15 text-rose-300'}`}>
+                                                        Tunnel {cloudflareCheckResult.tunnel_create_ok ? 'OK' : 'Failed'}
+                                                    </span>
+                                                    {cloudflareCheckResult.dns_record_ok !== null && (
+                                                        <span className={`rounded-full px-2 py-1 ${cloudflareCheckResult.dns_record_ok ? 'bg-emerald-500/15 text-emerald-300' : 'bg-amber-500/15 text-amber-300'}`}>
+                                                            DNS {cloudflareCheckResult.dns_record_ok ? 'OK' : 'Failed'}
+                                                        </span>
+                                                    )}
+                                                    <span className={`rounded-full px-2 py-1 ${cloudflareCheckResult.cleanup_ok ? 'bg-emerald-500/15 text-emerald-300' : 'bg-amber-500/15 text-amber-300'}`}>
+                                                        Cleanup {cloudflareCheckResult.cleanup_ok ? 'OK' : 'Warning'}
+                                                    </span>
+                                                </div>
+
+                                                {cloudflareCheckResult.missing_fields.length > 0 && (
+                                                    <p className="mt-2 text-xs text-muted-foreground">
+                                                        Missing: {cloudflareCheckResult.missing_fields.map(formatCloudflareFieldLabel).join(', ')}
+                                                    </p>
+                                                )}
+
+                                                {cloudflareCheckResult.preview_url_example && (
+                                                    <p className="mt-2 text-xs text-muted-foreground break-all">
+                                                        Probe preview URL: <span className="font-mono text-card-foreground">{cloudflareCheckResult.preview_url_example}</span>
+                                                    </p>
+                                                )}
+
+                                                {cloudflareCheckResult.details.length > 0 && (
+                                                    <ul className="mt-2 space-y-1 text-xs text-muted-foreground list-disc pl-4">
+                                                        {cloudflareCheckResult.details.map((detail, index) => (
+                                                            <li key={`${detail}-${index}`}>{detail}</li>
+                                                        ))}
+                                                    </ul>
+                                                )}
+                                            </div>
+                                        </div>
+                                    </div>
+                                )}
+
                                 <div className="grid grid-cols-1 md:grid-cols-2 gap-4 mt-2">
                                     <div className="flex flex-col gap-1.5">
                                         <label className="text-xs font-medium text-muted-foreground uppercase tracking-wider">Account ID</label>
@@ -1267,7 +1429,10 @@ export function SettingsPage() {
                                                 type="text"
                                                 value={cfAccountId}
                                                 disabled={!isEditingCloudflare}
-                                                onChange={(e) => setCfAccountId(e.target.value)}
+                                                onChange={(e) => {
+                                                    setCfAccountId(e.target.value);
+                                                    setCloudflareCheckResult(null);
+                                                }}
                                                 placeholder="e.g. 8f2a1c..."
                                             />
                                         </div>
@@ -1284,7 +1449,10 @@ export function SettingsPage() {
                                                 type={showCfToken && isEditingCloudflare ? "text" : "password"}
                                                 value={cfToken}
                                                 disabled={!isEditingCloudflare}
-                                                onChange={(e) => setCfToken(e.target.value)}
+                                                onChange={(e) => {
+                                                    setCfToken(e.target.value);
+                                                    setCloudflareCheckResult(null);
+                                                }}
                                                 placeholder="Cloudflare API Token"
                                             />
                                             {isEditingCloudflare && (
@@ -1309,7 +1477,10 @@ export function SettingsPage() {
                                                 type="text"
                                                 value={cfZoneId}
                                                 disabled={!isEditingCloudflare}
-                                                onChange={(e) => setCfZoneId(e.target.value)}
+                                                onChange={(e) => {
+                                                    setCfZoneId(e.target.value);
+                                                    setCloudflareCheckResult(null);
+                                                }}
                                                 placeholder="e.g. 023e105..."
                                             />
                                         </div>
@@ -1326,7 +1497,10 @@ export function SettingsPage() {
                                                 type="text"
                                                 value={cfBaseDomain}
                                                 disabled={!isEditingCloudflare}
-                                                onChange={(e) => setCfBaseDomain(e.target.value)}
+                                                onChange={(e) => {
+                                                    setCfBaseDomain(e.target.value);
+                                                    setCloudflareCheckResult(null);
+                                                }}
                                                 placeholder="e.g. previews.acpms.dev"
                                             />
                                         </div>

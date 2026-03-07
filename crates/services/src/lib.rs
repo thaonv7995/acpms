@@ -91,7 +91,9 @@ pub use project_assistant_tools::{parse_tool_call_line, ToolCall};
 pub use repository_access::RepositoryAccessService;
 pub use requirement::RequirementService;
 pub use sprint::SprintService;
-pub use system_settings_service::SystemSettingsService;
+pub use system_settings_service::{
+    CloudflareConfigOverrides, ResolvedCloudflareConfig, SystemSettingsService,
+};
 pub use task::{TaskService, TaskWithLatestAttempt};
 pub use task_attempt::*;
 pub use token_blacklist_service::TokenBlacklistService;

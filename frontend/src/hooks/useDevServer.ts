@@ -251,7 +251,24 @@ function normalizePreviewUrlCandidate(candidate: string): string | undefined {
   const trimmed = candidate.trim().replace(/^[<({\["'`]+/g, '');
   const firstBoundary = trimmed.search(/[\s`"'*|]/);
   const slice = firstBoundary >= 0 ? trimmed.slice(0, firstBoundary) : trimmed;
-  const normalized = slice.replace(/[),.;\]}>\"'`]+$/g, '');
+  const markerCandidates = [
+    'preview_url:',
+    'preview_target:',
+    '**summary:**',
+    'summary:',
+    'what was done:',
+    'what was built:',
+    'deploy_precheck:',
+    'deployment_failure_reason:',
+  ];
+  const lowerSlice = slice.toLowerCase();
+  const markerIndex = markerCandidates
+    .map((marker) => lowerSlice.indexOf(marker))
+    .filter((index) => index > 0)
+    .sort((a, b) => a - b)[0];
+  const truncated =
+    typeof markerIndex === 'number' ? slice.slice(0, markerIndex) : slice;
+  const normalized = truncated.replace(/[),.;:\]}>\"'`]+$/g, '');
   if (!normalized) {
     return undefined;
   }

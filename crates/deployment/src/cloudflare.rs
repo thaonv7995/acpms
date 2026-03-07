@@ -68,6 +68,15 @@ struct GetTunnelResponse {
     errors: Vec<CloudflareError>,
 }
 
+/// Response from Cloudflare API when verifying account access
+#[derive(Debug, Deserialize)]
+struct GetAccountResponse {
+    #[allow(dead_code)]
+    result: serde_json::Value,
+    success: bool,
+    errors: Vec<CloudflareError>,
+}
+
 /// Response from Cloudflare API when creating a DNS record
 #[derive(Debug, Deserialize)]
 struct CreateDnsRecordResponse {
@@ -264,6 +273,47 @@ impl CloudflareClient {
         }
 
         Ok(response_body.result)
+    }
+
+    /// Verify the API token can access the configured Cloudflare account.
+    pub async fn verify_account_access(&self) -> Result<()> {
+        let url = self.endpoint(&format!("accounts/{}", self.account_id));
+
+        let mut headers = HeaderMap::new();
+        headers.insert(
+            AUTHORIZATION,
+            HeaderValue::from_str(&format!("Bearer {}", self.api_token))
+                .context("Invalid API token")?,
+        );
+
+        let response = self
+            .http_client
+            .get(&url)
+            .headers(headers)
+            .send()
+            .await
+            .context("Failed to send account verification request")?;
+
+        let status = response.status();
+        let response_body: GetAccountResponse = response
+            .json()
+            .await
+            .context("Failed to parse account verification response")?;
+
+        if !response_body.success {
+            let error_messages: Vec<String> = response_body
+                .errors
+                .iter()
+                .map(|e| format!("{}: {}", e.code, e.message))
+                .collect();
+            anyhow::bail!(
+                "Failed to verify Cloudflare account access (status {}): {}",
+                status,
+                error_messages.join(", ")
+            );
+        }
+
+        Ok(())
     }
 
     /// Generate preview URL

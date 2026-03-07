@@ -128,6 +128,20 @@ describe('useDevServer error helpers', () => {
     ).toBe('http://localhost:4174');
   });
 
+  it('strips concatenated preview markers from preview URL candidates', () => {
+    expect(
+      extractPreviewUrlFromText(
+        'PREVIEW_TARGET: http://localhost:8081PREVIEW_URL: http://localhost:8081What was done:- started container'
+      )
+    ).toBe('http://localhost:8081');
+
+    expect(
+      extractPreviewUrlFromText(
+        'PREVIEW_URL: http://localhost:8081PREVIEW_TARGET: http://localhost:8081Summary:- verified 200'
+      )
+    ).toBe('http://localhost:8081');
+  });
+
   it('prefers PREVIEW_URL over PREVIEW_TARGET when both are present', () => {
     expect(
       extractPreviewUrlFromText(

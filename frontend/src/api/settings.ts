@@ -181,6 +181,28 @@ export interface ConnectionTestResult {
     message: string;
 }
 
+export interface CloudflareConnectionCheckRequest {
+    cloudflare_account_id?: string;
+    cloudflare_api_token?: string;
+    cloudflare_zone_id?: string;
+    cloudflare_base_domain?: string;
+}
+
+export interface CloudflareConnectionCheckResponse {
+    status: 'success' | 'warning' | 'error';
+    ok: boolean;
+    config_complete: boolean;
+    connection_ok: boolean;
+    tunnel_create_ok: boolean;
+    dns_record_ok: boolean | null;
+    cleanup_ok: boolean;
+    missing_fields: string[];
+    message: string;
+    details: string[];
+    checked_at: string;
+    preview_url_example: string | null;
+}
+
 export async function testClaudeConnection(): Promise<ConnectionTestResult> {
     // Claude connection is tested via /api/v1/agent/status endpoint
     // This is already handled in SettingsPage via apiGet('/agent/status')
@@ -189,6 +211,15 @@ export async function testClaudeConnection(): Promise<ConnectionTestResult> {
 
 export async function testGitLabConnection(): Promise<ConnectionTestResult> {
     return apiGet<ConnectionTestResult>('/api/v1/settings/test-gitlab');
+}
+
+export async function checkCloudflareConnection(
+    payload: CloudflareConnectionCheckRequest
+): Promise<CloudflareConnectionCheckResponse> {
+    return apiPost<CloudflareConnectionCheckResponse>(
+        '/api/v1/settings/cloudflare/check',
+        payload
+    );
 }
 
 export type ProviderAuthState =

@@ -7245,6 +7245,25 @@ fn trim_repo_url_candidate(url: &str) -> String {
     }) {
         candidate = &candidate[..idx];
     }
+    let lower_candidate = candidate.to_ascii_lowercase();
+    let truncation_markers = [
+        "preview_url:",
+        "preview_target:",
+        "**summary:**",
+        "summary:",
+        "what was done:",
+        "what was built:",
+        "deploy_precheck:",
+        "deployment_failure_reason:",
+    ];
+    let marker_index = truncation_markers
+        .iter()
+        .filter_map(|marker| lower_candidate.find(marker))
+        .filter(|idx| *idx > 0)
+        .min();
+    if let Some(idx) = marker_index {
+        candidate = &candidate[..idx];
+    }
     candidate
         .trim_end_matches(['.', ',', ';', ':', ')', ']', '>', '}', '\n', '\r'])
         .trim()
@@ -7923,6 +7942,24 @@ REPO_URL: https://gitlab.com/user/repo"#
         ];
         let url = extract_preview_url(&lines);
         assert_eq!(url, Some("http://localhost:4174".to_string()));
+    }
+
+    #[test]
+    fn test_extract_preview_target_strips_concatenated_preview_url_marker() {
+        let lines = vec![
+            r#"PREVIEW_TARGET: http://localhost:8081PREVIEW_URL: http://localhost:8081What was done:- Built successfully"#.to_string(),
+        ];
+        let target = extract_preview_target(&lines);
+        assert_eq!(target, Some("http://localhost:8081".to_string()));
+    }
+
+    #[test]
+    fn test_extract_preview_url_strips_concatenated_preview_target_marker() {
+        let lines = vec![
+            r#"PREVIEW_URL: http://localhost:8081PREVIEW_TARGET: http://localhost:8081Summary:- Built successfully"#.to_string(),
+        ];
+        let url = extract_preview_url(&lines);
+        assert_eq!(url, Some("http://localhost:8081".to_string()));
     }
 
     #[test]

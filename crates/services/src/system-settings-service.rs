@@ -3,6 +3,22 @@ use acpms_db::models::{SystemSettings, SystemSettingsResponse, UpdateSystemSetti
 use anyhow::{Context, Result};
 use sqlx::PgPool;
 
+#[derive(Debug, Clone, Default)]
+pub struct CloudflareConfigOverrides {
+    pub account_id: Option<String>,
+    pub api_token: Option<String>,
+    pub zone_id: Option<String>,
+    pub base_domain: Option<String>,
+}
+
+#[derive(Debug, Clone, Default)]
+pub struct ResolvedCloudflareConfig {
+    pub account_id: Option<String>,
+    pub api_token: Option<String>,
+    pub zone_id: Option<String>,
+    pub base_domain: Option<String>,
+}
+
 /// SystemSettingsService manages global system configuration.
 ///
 /// ## Design
@@ -58,6 +74,36 @@ impl SystemSettingsService {
     pub async fn get_response(&self) -> Result<SystemSettingsResponse> {
         let settings = self.get().await?;
         Ok(SystemSettingsResponse::from(settings))
+    }
+
+    pub async fn resolve_cloudflare_config(
+        &self,
+        overrides: CloudflareConfigOverrides,
+    ) -> Result<ResolvedCloudflareConfig> {
+        let settings = self.get().await?;
+        let stored_api_token = settings
+            .cloudflare_api_token_encrypted
+            .as_deref()
+            .filter(|value| !value.trim().is_empty())
+            .map(|value| {
+                self.encryption
+                    .decrypt(value)
+                    .context("Failed to decrypt Cloudflare API token")
+            })
+            .transpose()?;
+
+        Ok(ResolvedCloudflareConfig {
+            account_id: normalize_cloudflare_input(
+                overrides.account_id,
+                settings.cloudflare_account_id,
+            ),
+            api_token: normalize_cloudflare_input(overrides.api_token, stored_api_token),
+            zone_id: normalize_cloudflare_input(overrides.zone_id, settings.cloudflare_zone_id),
+            base_domain: normalize_cloudflare_input(
+                overrides.base_domain,
+                settings.cloudflare_base_domain,
+            ),
+        })
     }
 
     /// Update system settings.
@@ -432,6 +478,25 @@ impl SystemSettingsService {
         // TODO: Add actual API call to verify connection
         let _ = client;
         Ok(true)
+    }
+}
+
+fn normalize_cloudflare_input(
+    override_value: Option<String>,
+    stored_value: Option<String>,
+) -> Option<String> {
+    match override_value {
+        Some(value) => {
+            let normalized = value.trim().trim_matches('/').to_string();
+            if normalized.is_empty() {
+                None
+            } else {
+                Some(normalized)
+            }
+        }
+        None => stored_value
+            .map(|value| value.trim().trim_matches('/').to_string())
+            .filter(|value| !value.is_empty()),
     }
 }
 
