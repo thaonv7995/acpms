@@ -4,6 +4,7 @@
  */
 import { ChevronDown, Pencil } from 'lucide-react';
 import { cn } from '@/lib/utils';
+import { formatLogPathForConversation } from '@/lib/logPathDisplay';
 
 export interface AggregatedFileChange {
   path: string;
@@ -26,6 +27,8 @@ export function ChatAggregatedFileChanges({
 }: ChatAggregatedFileChangesProps) {
   const canOpen = Boolean(onViewDiff);
   const hasStats = file.linesAdded > 0 || file.linesRemoved > 0;
+  const displayPath = formatLogPathForConversation(file.path);
+  const summary = `${file.changeLabel} ${displayPath}`;
 
   return (
     <div
@@ -52,7 +55,7 @@ export function ChatAggregatedFileChanges({
     >
       <Pencil className="h-4 w-4 shrink-0" />
       <span className={cn("min-w-0 flex-1 text-sm truncate", canOpen ? "text-inherit" : "text-foreground")}>
-        {file.path}
+        {summary}
       </span>
       {hasStats && (
         <div className="flex items-center gap-2 text-xs font-medium tabular-nums shrink-0">

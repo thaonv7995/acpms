@@ -69,7 +69,25 @@ export function formatLogPathForDisplay(rawPath: string): string {
     return lastSegment;
   }
 
-  return segments.slice(Math.max(0, segments.length - 3)).join('/');
+  return segments.slice(Math.max(0, segments.length - 2)).join('/');
+}
+
+export function formatLogPathForConversation(rawPath: string): string {
+  const displayPath = formatLogPathForDisplay(rawPath);
+  const segments = splitPathSegments(displayPath);
+  const firstSegment = segments[0];
+  const lastSegment = segments[segments.length - 1];
+
+  if (
+    segments.length === 2 &&
+    lastSegment?.includes('.') &&
+    firstSegment &&
+    !PATH_DISPLAY_MARKERS.includes(firstSegment)
+  ) {
+    return lastSegment;
+  }
+
+  return displayPath;
 }
 
 export function humanizeLogText(text: string): string {

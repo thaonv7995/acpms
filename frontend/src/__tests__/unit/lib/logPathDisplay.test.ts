@@ -1,5 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import {
+  formatLogPathForConversation,
   formatLogPathForDisplay,
   humanizeLogText,
 } from '../../../lib/logPathDisplay';
@@ -25,6 +26,18 @@ describe('formatLogPathForDisplay', () => {
         '/Users/thaonv/Projects/Personal/Agentic-Coding/frontend/src/components/App.tsx'
       )
     ).toBe('frontend/src/components/App.tsx');
+  });
+
+  it('drops redundant parent folders for root-level files in conversation labels', () => {
+    expect(
+      formatLogPathForConversation('/Users/thaonv/Projects1/landing-page-9898/README.md')
+    ).toBe('README.md');
+  });
+
+  it('keeps useful repo-relative folders for nested source files in conversation labels', () => {
+    expect(
+      formatLogPathForConversation('/Users/thaonv/Projects1/landing-page-9898/src/App.tsx')
+    ).toBe('src/App.tsx');
   });
 });
 

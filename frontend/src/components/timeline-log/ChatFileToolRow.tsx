@@ -5,7 +5,7 @@
  */
 import { Eye, Pencil } from 'lucide-react';
 import { cn } from '@/lib/utils';
-import { formatLogPathForDisplay } from '@/lib/logPathDisplay';
+import { formatLogPathForConversation } from '@/lib/logPathDisplay';
 
 interface ChatFileToolRowProps {
   action: 'file_read' | 'file_edit' | 'file_write';
@@ -28,7 +28,8 @@ export function ChatFileToolRow({
   const isEdit = action === 'file_edit' || action === 'file_write';
   const hasStats = isEdit && (linesAdded > 0 || linesRemoved > 0);
   const isClickable = Boolean(onViewDiff);
-  const displayPath = formatLogPathForDisplay(path);
+  const displayPath = formatLogPathForConversation(path);
+  const label = isRead ? `Opened ${displayPath}` : displayPath;
 
   return (
     <div
@@ -45,21 +46,15 @@ export function ChatFileToolRow({
       ) : (
         <Pencil className="h-4 w-4 shrink-0" />
       )}
-      {isRead ? (
-        <code className="text-foreground font-mono text-[13px] truncate min-w-0">
-          {displayPath}
-        </code>
-      ) : (
-        <>
-          <span className="min-w-0 flex-1 truncate">{displayPath}</span>
-          {hasStats && (
-            <span className="shrink-0 text-xs font-medium tabular-nums">
-              <span className="text-emerald-500">+{linesAdded}</span>
-              <span className="text-destructive"> -{linesRemoved}</span>
-            </span>
-          )}
-        </>
-      )}
+      <>
+        <span className="min-w-0 flex-1 truncate">{label}</span>
+        {hasStats && (
+          <span className="shrink-0 text-xs font-medium tabular-nums">
+            <span className="text-emerald-500">+{linesAdded}</span>
+            <span className="text-destructive"> -{linesRemoved}</span>
+          </span>
+        )}
+      </>
     </div>
   );
 }

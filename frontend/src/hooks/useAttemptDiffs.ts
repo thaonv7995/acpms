@@ -1,22 +1,58 @@
 import { useEffect, useState } from 'react';
-import { getAttemptDiffSummary } from '@/api/taskAttempts';
+import { getAttemptDiff, getAttemptDiffSummary } from '@/api/taskAttempts';
 import type { FileDiffSummary } from '@/types/timeline-log';
 import { logger } from '@/lib/logger';
 
 /**
  * Hook to fetch file diff metadata for an attempt.
  *
- * Uses the lightweight diff-summary endpoint (no log processing).
- * Use for timeline enrichment instead of structured-logs.
+ * Uses the lightweight diff-summary endpoint by default.
+ * While an attempt is still active, it falls back to the live diff endpoint
+ * so file-edit rows can show +/− metadata before the attempt finishes.
  */
-export function useAttemptDiffs(attemptId: string | undefined) {
+const LIVE_DIFF_POLL_INTERVAL_MS = 4000;
+
+interface UseAttemptDiffsOptions {
+  enablePolling?: boolean;
+}
+
+function mapLiveDiffsToSummary(
+  files: Awaited<ReturnType<typeof getAttemptDiff>>['files']
+): FileDiffSummary[] {
+  return files
+    .map((file, index) => {
+      const filePath = file.new_path || file.old_path || '';
+      if (!filePath) return null;
+      return {
+        id: `live:${filePath}:${index}`,
+        file_path: filePath,
+        additions: Math.max(0, file.additions ?? 0),
+        deletions: Math.max(0, file.deletions ?? 0),
+        change_type:
+          file.change === 'added'
+            ? 'created'
+            : file.change === 'deleted'
+              ? 'deleted'
+              : 'modified',
+      } satisfies FileDiffSummary;
+    })
+    .filter((file): file is FileDiffSummary => file !== null);
+}
+
+export function useAttemptDiffs(
+  attemptId: string | undefined,
+  options: UseAttemptDiffsOptions = {}
+) {
   const [diffs, setDiffs] = useState<FileDiffSummary[]>([]);
   const [isLoading, setIsLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const enablePolling = options.enablePolling ?? false;
 
   useEffect(() => {
     if (!attemptId) {
       setDiffs([]);
+      setError(null);
+      setIsLoading(false);
       return;
     }
 
@@ -24,23 +60,49 @@ export function useAttemptDiffs(attemptId: string | undefined) {
     setIsLoading(true);
     setError(null);
 
-    getAttemptDiffSummary(attemptId)
-      .then(({ files }) => {
+    const refresh = async (showLoading: boolean) => {
+      if (showLoading && mounted) {
+        setIsLoading(true);
+      }
+
+      try {
+        const { files } = await getAttemptDiffSummary(attemptId);
+        let nextDiffs = files;
+
+        if (nextDiffs.length === 0 && enablePolling) {
+          const liveDiff = await getAttemptDiff(attemptId);
+          nextDiffs = mapLiveDiffsToSummary(liveDiff.files);
+        }
+
         if (!mounted) return;
-        setDiffs(files);
-        setIsLoading(false);
-      })
-      .catch(err => {
+        setDiffs(nextDiffs);
+        setError(null);
+      } catch (err) {
         if (!mounted) return;
         logger.error('Failed to fetch file diffs:', err);
         setError(err instanceof Error ? err.message : 'Failed to fetch file diffs');
-        setIsLoading(false);
-      });
+      } finally {
+        if (mounted && showLoading) {
+          setIsLoading(false);
+        }
+      }
+    };
+
+    void refresh(true);
+
+    const pollId = enablePolling
+      ? window.setInterval(() => {
+          void refresh(false);
+        }, LIVE_DIFF_POLL_INTERVAL_MS)
+      : null;
 
     return () => {
       mounted = false;
+      if (pollId != null) {
+        window.clearInterval(pollId);
+      }
     };
-  }, [attemptId]);
+  }, [attemptId, enablePolling]);
 
   return { diffs, isLoading, error };
 }

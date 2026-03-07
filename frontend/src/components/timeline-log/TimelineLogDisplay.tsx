@@ -411,16 +411,22 @@ function isTodoToolEntry(entry: TimelineEntry): boolean {
   return parseTodoItems(actionType.todos ?? actionType.arguments).length > 0;
 }
 
-function extractLatestRuntimeTodos(entries: TimelineEntry[]): TodoSummaryItem[] {
+export function extractLatestRuntimeTodos(entries: TimelineEntry[]): TodoSummaryItem[] {
+  const todoEntries = entries
+    .filter((entry): entry is TimelineEntry & {
+      actionType?: { action?: string; todos?: unknown; arguments?: unknown };
+    } => entry.type === 'tool_call')
+    .map((entry) => ({
+      entry,
+      timestamp: Date.parse(entry.timestamp) || 0,
+    }))
+    .sort((a, b) => a.timestamp - b.timestamp);
+
   const mergedTodos = new Map<string, TodoSummaryItem>();
   const orderedKeys: string[] = [];
 
-  for (let index = entries.length - 1; index >= 0; index -= 1) {
-    const entry = entries[index];
-    if (entry.type !== 'tool_call') continue;
-    const actionType = (entry as {
-      actionType?: { action?: string; todos?: unknown; arguments?: unknown };
-    }).actionType;
+  for (const { entry } of todoEntries) {
+    const actionType = entry.actionType;
     if (!actionType) continue;
 
     const todos = parseTodoItems(actionType.todos ?? actionType.arguments);

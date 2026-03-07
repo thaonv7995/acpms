@@ -32,7 +32,7 @@ import remarkGfm from 'remark-gfm';
 import { parseTodoItems } from './todo-utils';
 import { useApproval } from '@/hooks/useApproval';
 import { formatShellCommandForDisplay } from '@/lib/commandDisplay';
-import { humanizeLogText } from '@/lib/logPathDisplay';
+import { formatLogPathForConversation, humanizeLogText } from '@/lib/logPathDisplay';
 import { ChatEntryContainer } from './ChatEntryContainer';
 import { ChatToolSummary } from './ChatToolSummary';
 import { ChatTodoList } from './ChatTodoList';
@@ -238,7 +238,11 @@ function formatToolSummary(toolCall: ToolCallEntry): string {
     const formatted = formatSearchTarget(String(target));
     summary += formatted ? `: ${formatted}` : '';
   } else if (target) {
-    summary += `: ${truncate(compactInline(String(target)), 120)}`;
+    const formattedTarget =
+      action === 'file_read' || action === 'file_edit' || action === 'file_write'
+        ? formatLogPathForConversation(String(target))
+        : compactInline(String(target));
+    summary += `: ${truncate(formattedTarget, 120)}`;
   }
 
   if (toolCall.status === 'success' && toolCall.duration) {
@@ -289,7 +293,11 @@ function formatGroupSummary(group: OperationGroup): string {
       const at = op.actionType;
       const raw = at?.file_path || at?.path || at?.target || at?.query;
       return typeof raw === 'string' && raw.trim()
-        ? (group.groupType === 'search' ? formatSearchTarget(raw) : redactSensitiveContent(raw))
+        ? (
+            group.groupType === 'search'
+              ? formatSearchTarget(raw)
+              : redactSensitiveContent(formatLogPathForConversation(raw))
+          )
         : null;
     })
     .filter(Boolean) as string[];

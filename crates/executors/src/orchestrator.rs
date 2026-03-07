@@ -1,5 +1,6 @@
 use crate::assistant_log_buffer::AgentTextBuffer;
 use crate::claude::{ClaudeRuntimeSkillConfig, SpawnedAgent};
+use crate::msg_store::{LogMsg, MsgStore};
 use crate::process::{kill_process_group, terminate_process, InterruptSender};
 use crate::retry_handler::{RetryHandler, RetryScheduleResult};
 use crate::session::ClaudeSessionManager;
@@ -41,6 +42,7 @@ use tokio::process::Command;
 use tokio::sync::mpsc;
 use tokio::sync::Mutex;
 use tokio::sync::{broadcast, watch};
+use tokio_stream::StreamExt;
 use tracing::{debug, error, info, warn};
 use uuid::Uuid;
 
@@ -702,6 +704,64 @@ pub struct ExecutorOrchestrator {
 }
 
 impl ExecutorOrchestrator {
+    fn is_claude_sdk_turn_complete_line(line: &str) -> bool {
+        let Ok(value) = serde_json::from_str::<serde_json::Value>(line) else {
+            return false;
+        };
+
+        let message_type = value
+            .get("type")
+            .and_then(serde_json::Value::as_str)
+            .map(|value| value.to_ascii_lowercase());
+
+        if matches!(message_type.as_deref(), Some("result")) {
+            return true;
+        }
+
+        if !matches!(message_type.as_deref(), Some("message_stop")) {
+            return false;
+        }
+
+        let stop_reason = [
+            "/message/stop_reason",
+            "/event/message/stop_reason",
+            "/stream_event/event/message/stop_reason",
+            "/stop_reason",
+            "/stopReason",
+        ]
+        .iter()
+        .find_map(|path| value.pointer(path).and_then(serde_json::Value::as_str))
+        .map(|value| value.to_ascii_lowercase());
+
+        matches!(stop_reason.as_deref(), Some("end_turn"))
+    }
+
+    pub(super) async fn wait_for_claude_sdk_turn_completion(
+        &self,
+        msg_store: Arc<MsgStore>,
+        timeout: Duration,
+    ) -> Result<()> {
+        let stream = msg_store.history_plus_stream();
+        tokio::pin!(stream);
+
+        tokio::time::timeout(timeout, async {
+            while let Some(message) = stream.next().await {
+                match message? {
+                    LogMsg::Stdout(line) | LogMsg::Stderr(line) => {
+                        if Self::is_claude_sdk_turn_complete_line(&line) {
+                            return Ok(());
+                        }
+                    }
+                    LogMsg::Finished => return Ok(()),
+                }
+            }
+
+            Ok(())
+        })
+        .await
+        .map_err(|_| anyhow::anyhow!("Claude SDK turn did not finish within {:?}", timeout))?
+    }
+
     pub fn new(
         db_pool: PgPool,
         worktrees_path: std::sync::Arc<tokio::sync::RwLock<std::path::PathBuf>>,
@@ -2396,7 +2456,7 @@ impl ExecutorOrchestrator {
             child,
             interrupt_sender,
             interrupt_receiver,
-            msg_store: _,
+            msg_store,
         } = spawned;
 
         // Store session for termination control (with cleanup guard)
@@ -2521,7 +2581,14 @@ impl ExecutorOrchestrator {
                         ).await
                     }
                     // Claude SDK mode logs are persisted via ProtocolPeer + ClaudeAgentClient.
-                    AgentCliProvider::ClaudeCode => Ok(()),
+                    AgentCliProvider::ClaudeCode => {
+                        if let Some(store) = msg_store.clone() {
+                            self.wait_for_claude_sdk_turn_completion(store, INIT_TASK_TIMEOUT)
+                                .await
+                        } else {
+                            Ok(())
+                        }
+                    }
                 }
             } => {
                 result
@@ -7331,6 +7398,20 @@ mod tests {
         let env = ExecutorOrchestrator::resolve_provider_command_env(AgentCliProvider::ClaudeCode)
             .expect("claude provider should not fail");
         assert!(env.is_none(), "claude provider should not inject exec env");
+    }
+
+    #[test]
+    fn detects_claude_sdk_turn_completion_from_end_turn_message_stop() {
+        let line = r#"{"type":"message_stop","message":{"stop_reason":"end_turn"}}"#;
+        assert!(ExecutorOrchestrator::is_claude_sdk_turn_complete_line(line));
+    }
+
+    #[test]
+    fn does_not_treat_tool_use_message_stop_as_completion() {
+        let line = r#"{"type":"message_stop","message":{"stop_reason":"tool_use"}}"#;
+        assert!(!ExecutorOrchestrator::is_claude_sdk_turn_complete_line(
+            line
+        ));
     }
 
     #[test]

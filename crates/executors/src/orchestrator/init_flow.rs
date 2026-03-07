@@ -1124,7 +1124,6 @@ You are tasked with creating a new {} project and initializing it with a basic p
 
                 // Note: MsgStore logging removed to avoid duplicate raw JSON entries
                 // Logs are already saved via on_non_control in ClaudeAgentClient with proper extraction
-                let _ = msg_store;
 
                 // Register session for send_input API and termination control
                 let child_arc = Arc::new(Mutex::new(Some(child)));
@@ -1154,48 +1153,85 @@ You are tasked with creating a new {} project and initializing it with a basic p
                     .as_mut()
                     .ok_or_else(|| anyhow::anyhow!("Child process not available"))?;
 
-                // Wait for process with timeout (logs handled by ProtocolPeer)
-                let result = tokio::time::timeout(task_timeout, child_ref.wait()).await;
-                let status = match result {
+                let Some(store) = msg_store else {
+                    let error_msg =
+                        "Claude SDK session missing message store; cannot detect completion";
+                    error!("{}", error_msg);
+                    self.log(attempt_id, "stderr", error_msg).await?;
+                    self.fail_attempt(attempt_id, error_msg).await?;
+                    return Err(anyhow::anyhow!(error_msg));
+                };
+
+                if let Err(e) = self
+                    .wait_for_claude_sdk_turn_completion(store, task_timeout)
+                    .await
+                {
+                    self.log(
+                        attempt_id,
+                        "system",
+                        &format!(
+                            "Task timed out after {} mins, terminating agent...",
+                            project_settings.timeout_mins
+                        ),
+                    )
+                    .await?;
+                    let interrupt_sender = self
+                        .active_sessions
+                        .lock()
+                        .await
+                        .remove(&attempt_id)
+                        .and_then(|s| s.interrupt_sender);
+                    let _ =
+                        terminate_process(child_ref, interrupt_sender, GRACEFUL_SHUTDOWN_TIMEOUT)
+                            .await;
+                    self.mark_task_failed(
+                        task_id,
+                        &format!(
+                            "Task execution timed out after {} mins",
+                            project_settings.timeout_mins
+                        ),
+                    )
+                    .await?;
+                    return Err(e.context(
+                        "From-scratch init timed out waiting for Claude SDK turn completion",
+                    ));
+                }
+
+                if let Some(session) = self.active_sessions.lock().await.get_mut(&attempt_id) {
+                    session.input_sender = None;
+                }
+
+                let status = match tokio::time::timeout(
+                    AGENT_EXIT_TIMEOUT_AFTER_STREAM,
+                    child_ref.wait(),
+                )
+                .await
+                {
                     Ok(Ok(status)) => status,
                     Ok(Err(e)) => {
-                        let error_msg = format!("Failed to wait for agent: {:?}", e);
+                        let error_msg = format!("Failed to wait for agent process exit: {:?}", e);
                         error!("{}", error_msg);
                         self.log(attempt_id, "stderr", &error_msg).await?;
                         self.fail_attempt(attempt_id, &e.to_string()).await?;
-                        return Err(anyhow::anyhow!("Failed to wait for agent: {}", e));
+                        return Err(anyhow::anyhow!(
+                            "Failed to wait for agent process exit: {}",
+                            e
+                        ));
                     }
                     Err(_) => {
                         self.log(
                             attempt_id,
-                            "system",
+                            "stderr",
                             &format!(
-                                "Task timed out after {} mins, terminating agent...",
-                                project_settings.timeout_mins
+                                "Agent process did not exit after Claude SDK turn completion (>{:?}). Forcing shutdown to avoid hang.",
+                                AGENT_EXIT_TIMEOUT_AFTER_STREAM
                             ),
                         )
                         .await?;
-                        let interrupt_sender = self
-                            .active_sessions
-                            .lock()
-                            .await
-                            .remove(&attempt_id)
-                            .and_then(|s| s.interrupt_sender);
-                        let _ = terminate_process(
-                            child_ref,
-                            interrupt_sender,
-                            GRACEFUL_SHUTDOWN_TIMEOUT,
-                        )
-                        .await;
-                        self.mark_task_failed(
-                            task_id,
-                            &format!(
-                                "Task execution timed out after {} mins",
-                                project_settings.timeout_mins
-                            ),
-                        )
-                        .await?;
-                        bail!("From-scratch init timed out after {:?}", task_timeout);
+                        let _ = terminate_process(child_ref, None, GRACEFUL_SHUTDOWN_TIMEOUT).await;
+                        child_ref.wait().await.map_err(|e| {
+                            anyhow::anyhow!("Failed to wait for forced Claude shutdown: {}", e)
+                        })?
                     }
                 };
 

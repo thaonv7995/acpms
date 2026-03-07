@@ -432,9 +432,16 @@ export function useTimelineStream(
   const historicalProcessStreamError = historicalProcessLogsQueries
     .map((query) => (query.error instanceof Error ? query.error.message : null))
     .find((message): message is string => Boolean(message)) || null;
+  const attemptStatusHint = processAttemptStatus ?? attempt?.status?.toLowerCase();
+  const shouldPollDiffs =
+    attemptStatusHint === 'running' ||
+    attemptStatusHint === 'queued' ||
+    connectionState === 'live' ||
+    connectionState === 'reconnecting' ||
+    connectionState === 'stale';
 
   // Fetch file diffs for this attempt
-  const { diffs } = useAttemptDiffs(attemptId);
+  const { diffs } = useAttemptDiffs(attemptId, { enablePolling: shouldPollDiffs });
 
   // Return early if no attemptId
   const hasAttemptId = !!attemptId;
@@ -472,7 +479,7 @@ export function useTimelineStream(
   const groupedEntries = useOperationGrouping(entriesWithSubagents);
   const groupAdjustedEntries = enableGrouping ? groupedEntries : entriesWithSubagents;
 
-  const attemptStatus = processAttemptStatus ?? attempt?.status?.toLowerCase();
+  const attemptStatus = attemptStatusHint;
   const attemptHistoryError =
     attemptHistoryQuery.error instanceof Error ? attemptHistoryQuery.error.message : null;
 

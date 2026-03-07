@@ -2,6 +2,7 @@ import type { TimelineEntry, FileChangeEntry } from '@/types/timeline-log';
 import { TimelineEntryRenderer, ThinkingGroupRenderer } from './TimelineEntryRenderer';
 import { ChatAggregatedFileChanges, type AggregatedFileChange } from './ChatAggregatedFileChanges';
 import { cn } from '@/lib/utils';
+import { formatLogPathForConversation } from '@/lib/logPathDisplay';
 import { memo, useMemo, useState } from 'react';
 
 export interface MessageBlock {
@@ -49,6 +50,18 @@ function processBlockEntries(entries: TimelineEntry[]): DisplayItem[] {
   const result: DisplayItem[] = [];
   let thinkingBuffer: Array<{ id: string; content: string }> = [];
   let fileBuffer: FileChangeEntry[] = [];
+  const fileToolDisplayPaths = new Set(
+    entries.flatMap((entry) => {
+      if (entry.type !== 'tool_call') return [];
+      const action = entry.actionType?.action;
+      if (action !== 'file_edit' && action !== 'file_write') return [];
+
+      const path = entry.actionType?.file_path || entry.actionType?.path;
+      if (typeof path !== 'string' || !path.trim()) return [];
+
+      return [formatLogPathForConversation(path)];
+    })
+  );
 
   const flushThinking = () => {
     if (thinkingBuffer.length === 1) {
@@ -77,6 +90,10 @@ function processBlockEntries(entries: TimelineEntry[]): DisplayItem[] {
     if (fileBuffer.length === 0) return;
     const first = fileBuffer[0];
     const path = first.path;
+    if (fileToolDisplayPaths.has(formatLogPathForConversation(path))) {
+      fileBuffer = [];
+      return;
+    }
     let linesAdded = 0;
     let linesRemoved = 0;
     for (const e of fileBuffer) {
