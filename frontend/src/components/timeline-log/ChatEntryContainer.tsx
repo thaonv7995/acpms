@@ -4,6 +4,7 @@
  */
 import type { ComponentType } from 'react';
 import { ChevronDown } from 'lucide-react';
+import { AnimatePresence, motion } from 'framer-motion';
 import { cn } from '@/lib/utils';
 
 export type ChatEntryVariant =
@@ -138,15 +139,31 @@ export function ChatEntryContainer({
         {hasToggle && (
           <span className="shrink-0 text-muted-foreground">
             <ChevronDown
-              className={cn('h-4 w-4 transition-transform', !expanded && '-rotate-90')}
+              className={cn('h-4 w-4 transition-transform duration-300 ease-out', !expanded && '-rotate-90')}
             />
           </span>
         )}
       </div>
 
       {/* Content - when expanded or alwaysExpanded */}
-      {(alwaysExpanded || expanded) && children && (
+      {alwaysExpanded && children && (
         <div className="px-3 py-2 border-t border-border/40 text-sm">{children}</div>
+      )}
+
+      {!alwaysExpanded && (
+        <AnimatePresence initial={false}>
+          {expanded && children && (
+            <motion.div
+              initial={{ height: 0, opacity: 0, y: -4 }}
+              animate={{ height: 'auto', opacity: 1, y: 0 }}
+              exit={{ height: 0, opacity: 0, y: -4 }}
+              transition={{ duration: 0.28, ease: [0.22, 1, 0.36, 1] }}
+              className="overflow-hidden"
+            >
+              <div className="px-3 py-2 border-t border-border/40 text-sm">{children}</div>
+            </motion.div>
+          )}
+        </AnimatePresence>
       )}
 
       {/* Actions footer */}

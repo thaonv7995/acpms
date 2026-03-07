@@ -157,7 +157,7 @@ export function ToolCallTimelineCard({ toolCall, onViewDiff }: ToolCallTimelineC
               initial={{ height: 0, opacity: 0 }}
               animate={{ height: 'auto', opacity: 1 }}
               exit={{ height: 0, opacity: 0 }}
-              transition={{ duration: 0.2 }}
+              transition={{ duration: 0.28, ease: [0.22, 1, 0.36, 1] }}
               className="overflow-hidden"
             >
               <div className="border-t border-border bg-muted/20 px-4 py-3">

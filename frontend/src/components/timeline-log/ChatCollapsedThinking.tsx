@@ -4,6 +4,7 @@
  */
 import { useState } from 'react';
 import { Brain, ChevronRight } from 'lucide-react';
+import { AnimatePresence, motion } from 'framer-motion';
 import { cn } from '@/lib/utils';
 import { timelineT } from './timeline-i18n';
 
@@ -45,7 +46,7 @@ export function ChatCollapsedThinking({
           {isHovered ? (
             <ChevronRight
               className={cn(
-                'h-4 w-4 transition-transform duration-150',
+                'h-4 w-4 transition-transform duration-300 ease-out',
                 expanded && 'rotate-90'
               )}
             />
@@ -56,15 +57,25 @@ export function ChatCollapsedThinking({
         <span className="truncate">{timelineT.thinking}</span>
       </div>
 
-      {expanded && (
-        <div className="ml-6 pt-2 flex flex-col gap-2">
-          {entries.map((entry) => (
-            <div key={entry.expansionKey} className="text-xs text-muted-foreground/75 pl-4">
-              {renderMarkdown(entry.content)}
+      <AnimatePresence initial={false}>
+        {expanded && (
+          <motion.div
+            initial={{ height: 0, opacity: 0, y: -4 }}
+            animate={{ height: 'auto', opacity: 1, y: 0 }}
+            exit={{ height: 0, opacity: 0, y: -4 }}
+            transition={{ duration: 0.28, ease: [0.22, 1, 0.36, 1] }}
+            className="overflow-hidden"
+          >
+            <div className="ml-6 pt-2 flex flex-col gap-2">
+              {entries.map((entry) => (
+                <div key={entry.expansionKey} className="text-xs text-muted-foreground/75 pl-4">
+                  {renderMarkdown(entry.content)}
+                </div>
+              ))}
             </div>
-          ))}
-        </div>
-      )}
+          </motion.div>
+        )}
+      </AnimatePresence>
     </div>
   );
 }

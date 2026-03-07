@@ -3,6 +3,7 @@
  * Header row (icon + title + chevron) + expandable list.
  */
 import { ListChecks, ChevronDown } from 'lucide-react';
+import { AnimatePresence, motion } from 'framer-motion';
 import { cn } from '@/lib/utils';
 import { CheckCircle2, Circle, CircleDot } from 'lucide-react';
 import { timelineT } from './timeline-i18n';
@@ -41,32 +42,42 @@ export function ChatTodoList({ todos, expanded, onToggle }: ChatTodoListProps) {
         <span className="flex-1">{timelineT.updatedTodos}</span>
         <ChevronDown
           className={cn(
-            'shrink-0 h-4 w-4 transition-transform',
+            'shrink-0 h-4 w-4 transition-transform duration-300 ease-out',
             expanded && 'rotate-180'
           )}
         />
       </div>
-      {expanded && todos.length > 0 && (
-        <ul className="pt-2 ml-6 space-y-1 [&>li+li]:pt-1">
-          {todos.map((todo, index) => (
-            <li
-              key={`${todo.content}-${index}`}
-              className="flex items-start gap-2"
-            >
-              <span className="pt-0.5 h-4 w-4 flex items-center justify-center shrink-0">
-                {getStatusIcon(todo.status)}
-              </span>
-              <span className="leading-5 break-words">
-                {todo.status?.toLowerCase() === 'cancelled' ? (
-                  <s className="text-muted-foreground">{todo.content}</s>
-                ) : (
-                  todo.content
-                )}
-              </span>
-            </li>
-          ))}
-        </ul>
-      )}
+      <AnimatePresence initial={false}>
+        {expanded && todos.length > 0 && (
+          <motion.div
+            initial={{ height: 0, opacity: 0, y: -4 }}
+            animate={{ height: 'auto', opacity: 1, y: 0 }}
+            exit={{ height: 0, opacity: 0, y: -4 }}
+            transition={{ duration: 0.28, ease: [0.22, 1, 0.36, 1] }}
+            className="overflow-hidden"
+          >
+            <ul className="pt-2 ml-6 space-y-1 [&>li+li]:pt-1">
+              {todos.map((todo, index) => (
+                <li
+                  key={`${todo.content}-${index}`}
+                  className="flex items-start gap-2"
+                >
+                  <span className="pt-0.5 h-4 w-4 flex items-center justify-center shrink-0">
+                    {getStatusIcon(todo.status)}
+                  </span>
+                  <span className="leading-5 break-words">
+                    {todo.status?.toLowerCase() === 'cancelled' ? (
+                      <s className="text-muted-foreground">{todo.content}</s>
+                    ) : (
+                      todo.content
+                    )}
+                  </span>
+                </li>
+              ))}
+            </ul>
+          </motion.div>
+        )}
+      </AnimatePresence>
     </div>
   );
 }

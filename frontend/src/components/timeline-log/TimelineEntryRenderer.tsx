@@ -716,7 +716,7 @@ function ToolCallRows({
                         {actionArea}
                         {hasExpandableContent && (
                           <ChevronRight className={cn(
-                            "h-3 w-3 text-slate-500 dark:text-zinc-400 transition-transform duration-200 ease-out",
+                            "h-3 w-3 text-slate-500 dark:text-zinc-400 transition-transform duration-300 ease-out",
                             expanded && "rotate-90"
                           )} />
                         )}
@@ -724,7 +724,7 @@ function ToolCallRows({
                     </div>
                     {/* Command - always visible, truncated when collapsed (only if expandable) */}
                     <div className={cn(
-                      "px-3 py-2.5 text-[13px] text-slate-900 dark:text-[#cccccc] font-mono leading-relaxed transition-all duration-200 ease-out",
+                      "px-3 py-2.5 text-[13px] text-slate-900 dark:text-[#cccccc] font-mono leading-relaxed transition-all duration-300 ease-out",
                       hasExpandableContent && !expanded
                         ? "truncate overflow-hidden whitespace-nowrap"
                         : "whitespace-pre-wrap break-all",
@@ -736,7 +736,7 @@ function ToolCallRows({
                     {/* Output - animated expand/collapse */}
                     {hasCommandDetails && commandOutput && (
                       <div
-                        className="grid transition-[grid-template-rows] duration-200 ease-out"
+                        className="grid transition-[grid-template-rows] duration-300 ease-[cubic-bezier(0.22,1,0.36,1)]"
                         style={{ gridTemplateRows: expanded ? '1fr' : '0fr' }}
                       >
                         <div className="overflow-hidden">
