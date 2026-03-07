@@ -47,6 +47,10 @@ fn task_require_review(task: &Task, settings: &ProjectSettings) -> bool {
         .unwrap_or(settings.require_review)
 }
 
+fn task_follow_up_creates_new_attempt(task: &Task) -> bool {
+    task.status == TaskStatus::Done
+}
+
 fn task_run_build_and_tests(task: &Task) -> bool {
     task.metadata
         .get("execution")
@@ -1919,6 +1923,232 @@ pub async fn resume_attempt(
             })?
     };
 
+    let project_service = ProjectService::new(pool.clone());
+    let project = project_service
+        .get_project(task.project_id)
+        .await
+        .map_err(|e| ApiError::Internal(e.to_string()))?
+        .ok_or_else(|| ApiError::NotFound("Project not found".to_string()))?;
+    let project = maybe_autorecheck_legacy_repository_context(
+        &state,
+        &project_service,
+        project,
+        "attempt_follow_up",
+    )
+    .await;
+
+    let settings = project_service
+        .get_settings(task.project_id)
+        .await
+        .map_err(|e| ApiError::Internal(e.to_string()))?;
+    let require_review = task_require_review(&task, &settings);
+
+    if task.task_type != TaskType::Init
+        && repository_mode_blocks_coding_attempt(&project.repository_context)
+        && !task_allows_analysis_only_attempt(&task)
+    {
+        return Err(ApiError::Conflict(format!(
+            "Project repository is not writable for coding follow-up attempts (mode: {}). Re-check repository access before continuing.",
+            repository_access_mode_label(project.repository_context.access_mode)
+        )));
+    }
+
+    // Build follow-up instruction combining task context + user prompt.
+    // Wrap trivial messages (e.g. "Hi", "ok") to avoid full context re-run and token waste.
+    let task_desc = task.description.as_deref().unwrap_or(&task.title);
+    let wrapped_prompt = acpms_executors::follow_up_utils::wrap_trivial_follow_up(&payload.prompt);
+    let mut instruction = format!(
+        r#"## Previous Context
+You previously worked on this task:
+{}
+
+## Follow-up Request
+{}
+
+Continue working on the same task. Build on your previous work."#,
+        task_desc, wrapped_prompt
+    );
+    let preferred_settings = state.settings_service.get().await.ok();
+    let preferred_lang = preferred_settings
+        .as_ref()
+        .and_then(|s| s.preferred_agent_language.as_deref());
+    instruction = prepend_language_instruction(instruction, preferred_lang);
+
+    let original_task_status = task.status;
+    let should_create_new_attempt = task_follow_up_creates_new_attempt(&task);
+
+    // Resolve base repository path for the project.
+    // Do NOT use attempt.worktree_path here because completed attempts may have cleaned worktrees.
+    let repo_path = resolve_project_repo_path(&project);
+
+    if should_create_new_attempt {
+        let new_attempt_metadata = serde_json::json!({
+            "follow_up": true,
+            "manual_follow_up": true,
+            "previous_attempt_id": attempt_id.to_string(),
+            "source_execution_process_id": resume_source_process.id.to_string(),
+            "previous_task_status": task_status_to_metadata_value(original_task_status),
+        });
+
+        let new_attempt = attempt_service
+            .create_attempt_with_status_and_metadata(
+                task.id,
+                AttemptStatus::Queued,
+                new_attempt_metadata,
+            )
+            .await
+            .map_err(|e| {
+                let message = e.to_string();
+                if message.contains("already has an active attempt") {
+                    ApiError::BadRequest(message)
+                } else {
+                    ApiError::Internal(format!("Failed to create follow-up attempt: {}", message))
+                }
+            })?;
+
+        sqlx::query(
+            r#"
+            UPDATE task_attempts
+            SET metadata = metadata || jsonb_build_object(
+                'follow_up_attempt_id', $2::text,
+                'next_attempt_id', $2::text
+            )
+            WHERE id = $1
+            "#,
+        )
+        .bind(attempt_id)
+        .bind(new_attempt.id.to_string())
+        .execute(&pool)
+        .await
+        .map_err(|e| ApiError::Internal(format!("Failed to link follow-up attempt: {}", e)))?;
+
+        if let Err(e) = StatusManager::log(
+            &pool,
+            &state.broadcast_tx,
+            new_attempt.id,
+            "user",
+            &payload.prompt,
+        )
+        .await
+        {
+            tracing::warn!("Failed to log user follow-up on new attempt: {}", e);
+        }
+
+        if let Err(e) = StatusManager::log(
+            &pool,
+            &state.broadcast_tx,
+            attempt_id,
+            "system",
+            &format!(
+                "This follow-up will continue in a new attempt: {}",
+                new_attempt.id
+            ),
+        )
+        .await
+        {
+            tracing::warn!("Failed to log follow-up attempt linkage: {}", e);
+        }
+
+        if let Err(error) = task_service
+            .update_task_status(task.id, TaskStatus::InProgress)
+            .await
+        {
+            let message = format!("Failed to update task status: {}", error);
+            let _ = attempt_service
+                .update_status(new_attempt.id, AttemptStatus::Failed, Some(message.clone()))
+                .await;
+            return Err(ApiError::Internal(message));
+        }
+
+        let execution_process_id =
+            create_execution_process_record(&pool, new_attempt.id, Some(repo_path.as_path()), None)
+                .await
+                .map_err(|e| {
+                    ApiError::Internal(format!("Failed to create execution process record: {}", e))
+                })?;
+
+        if task.task_type == TaskType::Init {
+            let orchestrator = state.orchestrator.clone();
+            let new_attempt_id = new_attempt.id;
+            let repo_path = repo_path.clone();
+            tokio::spawn(async move {
+                if let Err(e) = orchestrator
+                    .execute_agent_for_attempt(new_attempt_id, &repo_path, &instruction)
+                    .await
+                {
+                    tracing::error!(
+                        "Follow-up execution failed for new attempt {}: {:?}",
+                        new_attempt_id,
+                        e
+                    );
+                }
+            });
+        } else if let Some(worker_pool) = &state.worker_pool {
+            use acpms_executors::AgentJob;
+
+            let job = AgentJob::new(
+                new_attempt.id,
+                task.id,
+                task.project_id,
+                repo_path.clone(),
+                instruction.clone(),
+                require_review,
+            )
+            .with_timeout(settings.timeout_mins)
+            .with_retry_config(settings.max_retries, settings.auto_retry)
+            .with_project_max_concurrent(settings.max_concurrent)
+            .with_priority(JobPriority::High);
+
+            if let Err(error) = worker_pool.submit(job).await {
+                cleanup_execution_process_record(&pool, execution_process_id).await;
+                let message = format!("Failed to submit follow-up job: {}", error);
+                mark_submission_failed(
+                    &attempt_service,
+                    &task_service,
+                    new_attempt.id,
+                    task.id,
+                    original_task_status,
+                    message.clone(),
+                )
+                .await;
+                return Err(ApiError::Internal(message));
+            }
+        } else {
+            let orchestrator = state.orchestrator.clone();
+            let new_attempt_id = new_attempt.id;
+            let task_id = task.id;
+            let project_id = task.project_id;
+            let instruction = instruction.clone();
+            let repo_path = repo_path.clone();
+            tokio::spawn(async move {
+                let (_cancel_tx, cancel_rx) = tokio::sync::watch::channel(false);
+                if let Err(e) = orchestrator
+                    .execute_task_with_cancel_review(
+                        new_attempt_id,
+                        task_id,
+                        repo_path,
+                        instruction,
+                        cancel_rx,
+                        require_review,
+                    )
+                    .await
+                {
+                    tracing::error!(
+                        "Direct follow-up execution failed for attempt {} (task {}, project {}): {:?}",
+                        new_attempt_id,
+                        task_id,
+                        project_id,
+                        e
+                    );
+                }
+            });
+        }
+
+        let dto = TaskAttemptDto::from(new_attempt);
+        let response = ApiResponse::success(dto, "Follow-up started in a new attempt");
+        return Ok(Json(response));
+    }
+
     // Log user follow-up message so it appears in the timeline
     if let Err(e) = StatusManager::log(
         &pool,
@@ -1931,8 +2161,6 @@ pub async fn resume_attempt(
     {
         tracing::warn!("Failed to log user follow-up: {}", e);
     }
-
-    let original_task_status = task.status;
 
     sqlx::query(
         r#"
@@ -1979,65 +2207,19 @@ pub async fn resume_attempt(
         timestamp: Utc::now(),
     }));
 
-    // Build follow-up instruction combining task context + user prompt.
-    // Wrap trivial messages (e.g. "Hi", "ok") to avoid full context re-run and token waste.
-    let task_desc = task.description.as_deref().unwrap_or(&task.title);
-    let wrapped_prompt = acpms_executors::follow_up_utils::wrap_trivial_follow_up(&payload.prompt);
-    let mut instruction = format!(
-        r#"## Previous Context
-You previously worked on this task:
-{}
-
-## Follow-up Request
-{}
-
-Continue working on the same task. Build on your previous work."#,
-        task_desc, wrapped_prompt
-    );
-    let preferred_settings = state.settings_service.get().await.ok();
-    let preferred_lang = preferred_settings
-        .as_ref()
-        .and_then(|s| s.preferred_agent_language.as_deref());
-    instruction = prepend_language_instruction(instruction, preferred_lang);
-
-    // Get project info for repo path
-    let project_service = ProjectService::new(pool.clone());
-    let project = project_service
-        .get_project(task.project_id)
-        .await
-        .map_err(|e| ApiError::Internal(e.to_string()))?
-        .ok_or_else(|| ApiError::NotFound("Project not found".to_string()))?;
-
-    let settings = project_service
-        .get_settings(task.project_id)
-        .await
-        .map_err(|e| ApiError::Internal(e.to_string()))?;
-    let require_review = task_require_review(&task, &settings);
-
-    // Resolve base repository path for the project.
-    // Do NOT use attempt.worktree_path here because completed attempts may have cleaned worktrees.
-    let worktrees_base = std::env::var("WORKTREES_PATH").unwrap_or_else(|_| {
-        std::env::var("HOME")
-            .ok()
-            .map(|h| format!("{}/Projects", h.trim_end_matches('/')))
-            .unwrap_or_else(|| "./worktrees".to_string())
-    });
-    let default_repo_path = std::path::PathBuf::from(worktrees_base).join(
-        project_repo_relative_path(project.id, &project.metadata, &project.name),
-    );
-    let repo_path = resume_source_process
+    let resume_repo_path = resume_source_process
         .worktree_path
         .as_deref()
         .map(std::path::PathBuf::from)
         .filter(|path| !path.as_os_str().is_empty())
-        .unwrap_or(default_repo_path);
+        .unwrap_or(repo_path);
     let resume_branch_name = resume_source_process.branch_name.as_deref();
 
     // Create a process record for the follow-up run on this existing attempt.
     let execution_process_id = create_execution_process_record(
         &pool,
         attempt_id,
-        Some(repo_path.as_path()),
+        Some(resume_repo_path.as_path()),
         resume_branch_name,
     )
     .await
@@ -2047,6 +2229,7 @@ Continue working on the same task. Build on your previous work."#,
     if task.task_type == TaskType::Init {
         let orchestrator = state.orchestrator.clone();
         let aid = attempt_id;
+        let repo_path = resume_repo_path.clone();
         tokio::spawn(async move {
             // For init tasks, use execute_from_scratch which reuses the worktree
             if let Err(e) = orchestrator
@@ -2063,7 +2246,7 @@ Continue working on the same task. Build on your previous work."#,
             attempt_id,
             task.id,
             task.project_id,
-            repo_path,
+            resume_repo_path,
             instruction,
             require_review,
         )
@@ -2090,6 +2273,7 @@ Continue working on the same task. Build on your previous work."#,
     } else {
         let orchestrator = state.orchestrator.clone();
         let aid = attempt_id;
+        let repo_path = resume_repo_path.clone();
         tokio::spawn(async move {
             if let Err(e) = orchestrator
                 .execute_agent_for_attempt(aid, &repo_path, &instruction)

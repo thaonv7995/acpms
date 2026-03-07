@@ -16,8 +16,8 @@ use std::{
     process::Command,
     sync::Arc,
 };
-use tokio::time::{sleep, Duration as TokioDuration, Instant};
 use tokio::sync::RwLock;
+use tokio::time::{sleep, Duration as TokioDuration, Instant};
 use tracing::{debug, error, info, warn};
 use uuid::Uuid;
 
@@ -1304,10 +1304,7 @@ impl PreviewManager {
                     last_error,
                     started_at,
                     stopped_at,
-                    message: Some(
-                        "Preview source path not found for attempt"
-                            .to_string(),
-                    ),
+                    message: Some("Preview source path not found for attempt".to_string()),
                 });
             }
         };
@@ -1479,10 +1476,7 @@ impl PreviewManager {
                         .and_then(|metadata| metadata.compose_file_path),
                     tail,
                     logs: String::new(),
-                    message: Some(
-                        "Preview source path not found for attempt"
-                            .to_string(),
-                    ),
+                    message: Some("Preview source path not found for attempt".to_string()),
                 });
             }
         };
@@ -1869,7 +1863,10 @@ impl PreviewManager {
         Ok((base.join(repo_rel), PreviewSourceKind::Repository))
     }
 
-    async fn find_existing_attempt_worktree_path(&self, attempt_id: Uuid) -> Result<Option<PathBuf>> {
+    async fn find_existing_attempt_worktree_path(
+        &self,
+        attempt_id: Uuid,
+    ) -> Result<Option<PathBuf>> {
         let execution_process_worktree = sqlx::query_scalar::<_, String>(
             r#"
             SELECT worktree_path

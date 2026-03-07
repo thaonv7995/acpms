@@ -497,7 +497,10 @@ impl WorktreeManager {
         if !output.status.success() && !branch_exists {
             let stderr = String::from_utf8_lossy(&output.stderr);
             if stderr.contains("already exists")
-                && self.branch_exists(repo_path, &branch_name).await.unwrap_or(false)
+                && self
+                    .branch_exists(repo_path, &branch_name)
+                    .await
+                    .unwrap_or(false)
             {
                 tracing::info!(
                     "Feature branch {} appeared during worktree creation; retrying by reusing it",
@@ -1419,9 +1422,8 @@ mod tests {
         run_git(repo_path, &["add", "."]).await;
         run_git(repo_path, &["commit", "-m", "seed"]).await;
 
-        let manager = WorktreeManager::new(Arc::new(RwLock::new(
-            worktrees_dir.path().to_path_buf(),
-        )));
+        let manager =
+            WorktreeManager::new(Arc::new(RwLock::new(worktrees_dir.path().to_path_buf())));
         let attempt_id = Uuid::new_v4();
 
         let first = manager

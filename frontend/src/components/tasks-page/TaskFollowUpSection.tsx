@@ -32,6 +32,7 @@ export interface TaskFollowUpSectionProps {
   isRunning: boolean;
   disabled?: boolean;
   retryProcessId?: string | null;
+  onFollowUpAttemptCreated?: (attemptId: string) => void;
   taskId?: string | null;
   projectId?: string | null;
   attemptStatus?: string | null;
@@ -69,6 +70,7 @@ export function TaskFollowUpSection({
   isRunning,
   disabled = false,
   retryProcessId = null,
+  onFollowUpAttemptCreated,
   taskId = null,
   projectId = null,
   attemptStatus = null,
@@ -95,6 +97,7 @@ export function TaskFollowUpSection({
     message,
     retryProcessId,
     onAfterSendCleanup: handleCleanup,
+    onFollowUpAttemptCreated,
   });
 
   const {

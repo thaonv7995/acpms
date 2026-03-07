@@ -206,3 +206,83 @@ async fn test_follow_up_execution_process_multi_turn_creates_distinct_process_ch
 
     cleanup_test_data(&pool, user_id, Some(project_id)).await;
 }
+
+#[tokio::test]
+#[ignore = "requires test database"]
+async fn test_follow_up_execution_process_creates_new_attempt_when_task_is_done() {
+    let pool = setup_test_db().await;
+    let state = create_test_app_state(pool.clone()).await;
+    let router = create_router(state);
+
+    let (user_id, _) = create_test_user(&pool, None, None, None).await;
+    let token = generate_test_token(user_id);
+
+    let project_id = create_test_project(&pool, user_id, Some("Done Follow-up Project")).await;
+    let task_id = create_test_task(&pool, project_id, user_id, Some("Done Follow-up Task")).await;
+    let attempt_id = create_test_attempt(&pool, task_id, Some("success")).await;
+
+    sqlx::query("UPDATE tasks SET status = 'done'::task_status WHERE id = $1")
+        .bind(task_id)
+        .execute(&pool)
+        .await
+        .expect("failed to mark task done");
+
+    let source_process_id = Uuid::new_v4();
+    sqlx::query(
+        r#"
+        INSERT INTO execution_processes (id, attempt_id, process_id, worktree_path, branch_name)
+        VALUES ($1, $2, NULL, $3, $4)
+        "#,
+    )
+    .bind(source_process_id)
+    .bind(attempt_id)
+    .bind(format!("/tmp/worktree-{}", source_process_id))
+    .bind(format!("feat/attempt-{}", attempt_id))
+    .execute(&pool)
+    .await
+    .expect("failed to seed source process");
+
+    let path = format!("/api/v1/execution-processes/{source_process_id}/follow-up");
+    let (status, body) = make_request_with_string_headers(
+        &router,
+        "POST",
+        &path,
+        Some(&json!({ "prompt": "continue after merge" }).to_string()),
+        vec![
+            ("content-type", "application/json".to_string()),
+            auth_header_bearer(&token),
+        ],
+    )
+    .await;
+
+    assert_eq!(status, StatusCode::OK, "unexpected status {status}: {body}");
+
+    let payload: serde_json::Value =
+        serde_json::from_str(&body).expect("response body should be valid json");
+    let new_attempt_id = payload["data"]["id"]
+        .as_str()
+        .expect("response should include new attempt id");
+    assert_ne!(new_attempt_id, attempt_id.to_string());
+
+    let attempt_count: i64 =
+        sqlx::query_scalar("SELECT COUNT(*) FROM task_attempts WHERE task_id = $1")
+            .bind(task_id)
+            .fetch_one(&pool)
+            .await
+            .expect("failed to count attempts");
+    assert_eq!(
+        attempt_count, 2,
+        "expected original + new follow-up attempt"
+    );
+
+    let linked_follow_up_attempt_id: Option<String> = sqlx::query_scalar(
+        "SELECT metadata->>'follow_up_attempt_id' FROM task_attempts WHERE id = $1",
+    )
+    .bind(attempt_id)
+    .fetch_one(&pool)
+    .await
+    .expect("failed to load follow-up linkage");
+    assert_eq!(linked_follow_up_attempt_id.as_deref(), Some(new_attempt_id));
+
+    cleanup_test_data(&pool, user_id, Some(project_id)).await;
+}

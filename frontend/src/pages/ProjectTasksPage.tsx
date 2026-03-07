@@ -422,6 +422,15 @@ export function ProjectTasksPage() {
     [taskId, handleCreateAttemptSuccess]
   );
 
+  const handleFollowUpAttemptCreated = useCallback(
+    (newAttemptId: string) => {
+      if (taskId) {
+        handleCreateAttemptSuccess(taskId, newAttemptId);
+      }
+    },
+    [taskId, handleCreateAttemptSuccess]
+  );
+
   const handleFiltersChange = useCallback(
     (filters: { agentOnly?: boolean; search?: string; createdDate?: CreatedDateFilter }) => {
       setFilters(filters);
@@ -772,6 +781,7 @@ export function ProjectTasksPage() {
               task={selectedTask}
               attempt={selectedAttempt}
               onAttemptStatusChange={handleAttemptStatusFromStream}
+              onFollowUpAttemptCreated={handleFollowUpAttemptCreated}
             >
               {({ logs, followUp, isRunning }) => (
                 <>

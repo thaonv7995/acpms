@@ -16,10 +16,17 @@ interface TaskAttemptPanelProps {
     task: KanbanTask;
     attempt: TaskAttempt | null;
     onAttemptStatusChange?: (status: string | null) => void;
+    onFollowUpAttemptCreated?: (attemptId: string) => void;
     children: (sections: { logs: ReactNode; followUp: ReactNode; isRunning: boolean }) => ReactNode;
 }
 
-export function TaskAttemptPanel({ attempt, task, onAttemptStatusChange, children }: TaskAttemptPanelProps) {
+export function TaskAttemptPanel({
+    attempt,
+    task,
+    onAttemptStatusChange,
+    onFollowUpAttemptCreated,
+    children,
+}: TaskAttemptPanelProps) {
     const [liveAttemptStatus, setLiveAttemptStatus] = useState<string | null>(attempt?.status ?? null);
     const [tokenUsageInfo, setTokenUsageInfo] = useState<TimelineTokenUsageInfo | null>(null);
     const { processes } = useExecutionProcessesStream(attempt?.id);
@@ -92,6 +99,7 @@ export function TaskAttemptPanel({ attempt, task, onAttemptStatusChange, childre
                             isRunning={isRunning}
                             disabled={false}
                             retryProcessId={latestProcessId}
+                            onFollowUpAttemptCreated={onFollowUpAttemptCreated}
                             taskId={task.id}
                             projectId={task.projectId ?? null}
                             attemptStatus={liveAttemptStatus}

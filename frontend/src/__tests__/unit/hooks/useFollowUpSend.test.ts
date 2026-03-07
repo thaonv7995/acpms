@@ -1,8 +1,10 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 import { renderHook, act, waitFor } from '@testing-library/react';
+import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import { useFollowUpSend } from '../../../hooks/useFollowUpSend';
 import { sendAttemptInput } from '@/api/taskAttempts';
 import { followUpExecutionProcess } from '@/api/executionProcesses';
+import { createElement, type ReactNode } from 'react';
 
 vi.mock('@/api/taskAttempts', () => ({
   sendAttemptInput: vi.fn(),
@@ -13,6 +15,20 @@ vi.mock('@/api/executionProcesses', () => ({
 }));
 
 describe('useFollowUpSend', () => {
+  const createWrapper = () => {
+    const queryClient = new QueryClient({
+      defaultOptions: {
+        queries: {
+          retry: false,
+        },
+      },
+    });
+
+    return function Wrapper({ children }: { children: ReactNode }) {
+      return createElement(QueryClientProvider, { client: queryClient }, children);
+    };
+  };
+
   beforeEach(() => {
     vi.clearAllMocks();
   });
@@ -28,7 +44,8 @@ describe('useFollowUpSend', () => {
         message: 'ship this change',
         retryProcessId: null,
         onAfterSendCleanup: cleanupSpy,
-      })
+      }),
+      { wrapper: createWrapper() }
     );
 
     await act(async () => {
@@ -43,7 +60,17 @@ describe('useFollowUpSend', () => {
 
   it('uses process-scoped follow-up when attempt is not running', async () => {
     const cleanupSpy = vi.fn();
-    vi.mocked(followUpExecutionProcess).mockResolvedValue(undefined as any);
+    const followUpCreatedSpy = vi.fn();
+    vi.mocked(followUpExecutionProcess).mockResolvedValue({
+      id: 'attempt-2',
+      task_id: 'task-1',
+      status: 'QUEUED',
+      started_at: null,
+      completed_at: null,
+      error_message: null,
+      metadata: {},
+      created_at: new Date().toISOString(),
+    } as any);
 
     const { result } = renderHook(() =>
       useFollowUpSend({
@@ -52,7 +79,9 @@ describe('useFollowUpSend', () => {
         message: 'continue from review feedback',
         retryProcessId: 'process-9',
         onAfterSendCleanup: cleanupSpy,
-      })
+        onFollowUpAttemptCreated: followUpCreatedSpy,
+      }),
+      { wrapper: createWrapper() }
     );
 
     await act(async () => {
@@ -61,6 +90,7 @@ describe('useFollowUpSend', () => {
 
     expect(followUpExecutionProcess).toHaveBeenCalledWith('process-9', 'continue from review feedback');
     expect(sendAttemptInput).not.toHaveBeenCalled();
+    expect(followUpCreatedSpy).toHaveBeenCalledWith('attempt-2');
     expect(cleanupSpy).toHaveBeenCalledTimes(1);
     expect(result.current.followUpError).toBeNull();
   });
@@ -75,7 +105,8 @@ describe('useFollowUpSend', () => {
         message: 'resume please',
         retryProcessId: null,
         onAfterSendCleanup: cleanupSpy,
-      })
+      }),
+      { wrapper: createWrapper() }
     );
 
     await act(async () => {

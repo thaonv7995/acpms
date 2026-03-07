@@ -530,6 +530,126 @@ pub async fn request_changes(
         (payload.feedback.clone(), 0)
     };
 
+    let should_create_new_attempt = task.status == TaskStatus::Done;
+
+    if should_create_new_attempt {
+        let (new_attempt_id, comments_included) = review_service
+            .create_attempt_with_feedback(
+                attempt_id,
+                task.id,
+                &payload.feedback,
+                payload.include_comments,
+            )
+            .await
+            .map_err(|e| {
+                ApiError::Internal(format!("Failed to create follow-up attempt: {}", e))
+            })?;
+
+        sqlx::query(
+            r#"
+            UPDATE task_attempts
+            SET metadata = metadata || jsonb_build_object('previous_task_status', 'done')
+            WHERE id = $1
+            "#,
+        )
+        .bind(new_attempt_id)
+        .execute(&pool)
+        .await
+        .map_err(|e| ApiError::Internal(format!("Failed to persist follow-up metadata: {}", e)))?;
+
+        if let Err(e) = acpms_executors::StatusManager::log(
+            &pool,
+            &state.broadcast_tx,
+            new_attempt_id,
+            "user",
+            &format!("[Request Changes] {}", feedback_with_comments),
+        )
+        .await
+        {
+            tracing::warn!("Failed to log request-changes on new attempt: {}", e);
+        }
+
+        if let Err(error) = task_service
+            .update_task_status(task.id, TaskStatus::InProgress)
+            .await
+        {
+            return Err(ApiError::Internal(format!(
+                "Failed to update task status: {}",
+                error
+            )));
+        }
+
+        let instruction = format!(
+            r#"## Previous Context
+You previously worked on this task:
+{}
+
+## Review Feedback (Request Changes)
+{}
+
+Address the feedback and continue. Build on your previous work."#,
+            task.description.as_deref().unwrap_or(&task.title),
+            feedback_with_comments
+        );
+
+        let project_service = ProjectService::new(pool.clone());
+        let project = project_service
+            .get_project(task.project_id)
+            .await
+            .map_err(|e| ApiError::Internal(e.to_string()))?
+            .ok_or_else(|| ApiError::NotFound("Project not found".to_string()))?;
+        let repo = std::path::PathBuf::from(std::env::var("WORKTREES_PATH").unwrap_or_else(|_| {
+            std::env::var("HOME")
+                .ok()
+                .map(|h| format!("{}/Projects", h.trim_end_matches('/')))
+                .unwrap_or_else(|| "./worktrees".to_string())
+        }))
+        .join(project_repo_relative_path(
+            project.id,
+            &project.metadata,
+            &project.name,
+        ));
+
+        let _ = sqlx::query(
+            r#"
+            INSERT INTO execution_processes (attempt_id, process_id, worktree_path, branch_name)
+            VALUES ($1, NULL, $2, NULL)
+            "#,
+        )
+        .bind(new_attempt_id)
+        .bind(repo.to_string_lossy().to_string())
+        .execute(&pool)
+        .await;
+
+        let orchestrator = state.orchestrator.clone();
+        let instr = instruction.clone();
+        tokio::spawn(async move {
+            if let Err(e) = orchestrator
+                .execute_agent_for_attempt(new_attempt_id, &repo, &instr)
+                .await
+            {
+                tracing::error!(
+                    "Request-changes follow-up failed for new attempt {}: {:?}",
+                    new_attempt_id,
+                    e
+                );
+            }
+        });
+
+        let response_dto = RequestChangesResponseDto {
+            original_attempt_id: attempt_id,
+            new_attempt_id,
+            feedback: payload.feedback,
+            comments_included,
+        };
+
+        let response = ApiResponse::created(
+            response_dto,
+            "Changes requested, follow-up started in a new attempt",
+        );
+        return Ok((StatusCode::CREATED, Json(response)));
+    }
+
     // Log user follow-up (request changes) so it appears in timeline
     if let Err(e) = acpms_executors::StatusManager::log(
         &pool,

@@ -9,6 +9,7 @@ export interface UseFollowUpSendArgs {
   message: string;
   retryProcessId?: string | null;
   onAfterSendCleanup: () => void;
+  onFollowUpAttemptCreated?: (attemptId: string) => void;
 }
 
 export interface UseFollowUpSendReturn {
@@ -24,6 +25,7 @@ export function useFollowUpSend({
   message,
   retryProcessId,
   onAfterSendCleanup,
+  onFollowUpAttemptCreated,
 }: UseFollowUpSendArgs): UseFollowUpSendReturn {
   const queryClient = useQueryClient();
   const [isSendingFollowUp, setIsSendingFollowUp] = useState(false);
@@ -46,11 +48,16 @@ export function useFollowUpSend({
         if (!retryProcessId) {
           throw new Error('Execution process context is not ready yet. Please try again in a moment.');
         }
-        await followUpExecutionProcess(retryProcessId, message.trim());
+        const followUpAttempt = await followUpExecutionProcess(retryProcessId, message.trim());
+        if (followUpAttempt.id && followUpAttempt.id !== sessionId) {
+          onFollowUpAttemptCreated?.(followUpAttempt.id);
+          void queryClient.invalidateQueries({ queryKey: ['execution-processes', followUpAttempt.id] });
+        }
       }
 
       // Refetch attempt logs so new user message appears seamlessly (no full reload)
       void queryClient.invalidateQueries({ queryKey: ['attempt-logs-full', sessionId] });
+      void queryClient.invalidateQueries({ queryKey: ['task-attempts'] });
 
       // Clean up on success
       onAfterSendCleanup();
@@ -68,6 +75,7 @@ export function useFollowUpSend({
     retryProcessId,
     isSendingFollowUp,
     onAfterSendCleanup,
+    onFollowUpAttemptCreated,
     queryClient,
   ]);
 
