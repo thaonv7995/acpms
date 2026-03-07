@@ -1,4 +1,5 @@
 import type { TimelineEntry, ToolCallEntry } from '@/types/timeline-log';
+import { formatShellCommandForDisplay } from '@/lib/commandDisplay';
 
 export function mapStdoutToolAction(toolName: string): string {
     const normalized = toolName.toLowerCase();
@@ -350,30 +351,6 @@ export function parseCodexJsonStdoutEntries(
     // If we successfully parsed Codex JSON events, hide the raw JSON line even if it mapped to no UI entries.
     if (parsedAny) return entries;
     return null;
-}
-
-export function formatShellCommandForDisplay(command: string): string {
-    let cmd = (command || '').trim();
-    if (!cmd) return cmd;
-
-    const lcIndex = cmd.indexOf(' -lc ');
-    if (lcIndex !== -1) {
-        cmd = cmd.slice(lcIndex + 5).trim();
-        if (
-            (cmd.startsWith("'") && cmd.endsWith("'")) ||
-            (cmd.startsWith('"') && cmd.endsWith('"'))
-        ) {
-            cmd = cmd.slice(1, -1);
-        } else if (cmd.startsWith("'") || cmd.startsWith('"')) {
-            cmd = cmd.slice(1);
-        }
-        cmd = cmd.trim();
-    }
-
-    // Strip the boilerplate "cd <path> &&" prefix used by some agents.
-    cmd = cmd.replace(/^cd\s+[^&]+&&\s*/i, '');
-
-    return cmd.trim();
 }
 
 export function parseStdoutTranscriptEntries(

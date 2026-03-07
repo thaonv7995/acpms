@@ -20,6 +20,40 @@ pub struct WorktreeManager {
     base_path: Arc<RwLock<PathBuf>>,
 }
 
+pub(crate) fn summarize_repository_source(repo_url: &str) -> String {
+    let trimmed = repo_url.trim().trim_end_matches('/');
+    if trimmed.is_empty() {
+        return "the configured source".to_string();
+    }
+
+    let segment = trimmed
+        .rsplit(['/', ':'])
+        .find(|part| !part.is_empty())
+        .unwrap_or(trimmed)
+        .trim_end_matches(".git")
+        .trim();
+
+    if segment.is_empty() {
+        "the configured source".to_string()
+    } else {
+        segment.to_string()
+    }
+}
+
+pub(crate) fn format_repository_sync_log(repo_url: &str) -> String {
+    format!(
+        "Repository is already available locally. Syncing latest changes from {}.",
+        summarize_repository_source(repo_url)
+    )
+}
+
+pub(crate) fn format_repository_clone_log(repo_url: &str) -> String {
+    format!(
+        "Preparing a fresh local repository copy from {}.",
+        summarize_repository_source(repo_url)
+    )
+}
+
 impl WorktreeManager {
     pub fn new(base_path: Arc<RwLock<PathBuf>>) -> Self {
         Self { base_path }
@@ -1086,7 +1120,10 @@ fn parse_repo_identity(raw: &str) -> Option<(String, String)> {
 
 #[cfg(test)]
 mod tests {
-    use super::{inject_pat_into_url, parse_tracking_branch, repo_url_matches};
+    use super::{
+        format_repository_clone_log, format_repository_sync_log, inject_pat_into_url,
+        parse_tracking_branch, repo_url_matches, summarize_repository_source,
+    };
 
     #[test]
     fn inject_pat_into_https_gitlab_url() {
@@ -1164,5 +1201,36 @@ mod tests {
         let (remote, branch) = parse_tracking_branch("HEAD", "upstream");
         assert_eq!(remote, "upstream");
         assert_eq!(branch, "main");
+    }
+
+    #[test]
+    fn summarize_repository_source_uses_repo_name_for_local_path() {
+        assert_eq!(
+            summarize_repository_source("/Users/thaonv/Projects/Personal/Agentic-Coding"),
+            "Agentic-Coding"
+        );
+    }
+
+    #[test]
+    fn summarize_repository_source_uses_repo_name_for_remote_url() {
+        assert_eq!(
+            summarize_repository_source("https://gitlab.example.com/group/repo-name.git"),
+            "repo-name"
+        );
+    }
+
+    #[test]
+    fn repository_log_messages_do_not_expose_absolute_paths() {
+        let sync = format_repository_sync_log("/Users/thaonv/Projects/Personal/Agentic-Coding");
+        let clone = format_repository_clone_log("/Users/thaonv/Projects/Personal/Agentic-Coding");
+
+        assert_eq!(
+            sync,
+            "Repository is already available locally. Syncing latest changes from Agentic-Coding."
+        );
+        assert_eq!(
+            clone,
+            "Preparing a fresh local repository copy from Agentic-Coding."
+        );
     }
 }

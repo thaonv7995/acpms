@@ -3,7 +3,7 @@ use crate::claude::{ClaudeRuntimeSkillConfig, SpawnedAgent};
 use crate::process::{kill_process_group, terminate_process, InterruptSender};
 use crate::retry_handler::{RetryHandler, RetryScheduleResult};
 use crate::session::ClaudeSessionManager;
-use crate::worktree::repo_url_matches;
+use crate::worktree::{format_repository_clone_log, format_repository_sync_log, repo_url_matches};
 use crate::{
     append_assistant_log, build_skill_instruction_context, format_loaded_skills_log_line,
     AgentEvent, AssistantLogMessage, AttemptSuccessHook, ClaudeClient, CodexClient, CursorClient,
@@ -4408,22 +4408,11 @@ impl ExecutorOrchestrator {
 
                 // Check if repo exists to log appropriate message
                 if repo_path.join(".git").exists() {
-                    self.log(
-                        attempt_id,
-                        "system",
-                        &format!(
-                            "Repository exists at {:?}, syncing latest changes from {}",
-                            repo_path, repo_url
-                        ),
-                    )
-                    .await?;
+                    self.log(attempt_id, "system", &format_repository_sync_log(repo_url))
+                        .await?;
                 } else {
-                    self.log(
-                        attempt_id,
-                        "system",
-                        &format!("Cloning repository from {}", repo_url),
-                    )
-                    .await?;
+                    self.log(attempt_id, "system", &format_repository_clone_log(repo_url))
+                        .await?;
                 }
 
                 self.worktree_manager

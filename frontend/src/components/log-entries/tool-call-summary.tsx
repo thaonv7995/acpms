@@ -1,4 +1,5 @@
 import type { ActionType } from '@/bindings/ActionType';
+import { formatShellCommandForDisplay } from '@/lib/commandDisplay';
 
 /**
  * Render one-line summary of tool action (varies by type)
@@ -19,13 +20,15 @@ export function ToolSummary({ actionType }: { actionType: ActionType }) {
         </div>
       );
 
-    case 'command_run':
+    case 'command_run': {
+      const displayCommand = formatShellCommandForDisplay(actionType.command);
       return (
         <div className="text-xs text-muted-foreground font-mono truncate">
-          {actionType.command.slice(0, 60)}
-          {actionType.command.length > 60 ? '...' : ''}
+          {displayCommand.slice(0, 60)}
+          {displayCommand.length > 60 ? '...' : ''}
         </div>
       );
+    }
 
     case 'search':
       return (

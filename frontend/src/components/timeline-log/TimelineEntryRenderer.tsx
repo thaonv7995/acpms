@@ -31,6 +31,8 @@ import ReactMarkdown from 'react-markdown';
 import remarkGfm from 'remark-gfm';
 import { parseTodoItems } from './todo-utils';
 import { useApproval } from '@/hooks/useApproval';
+import { formatShellCommandForDisplay } from '@/lib/commandDisplay';
+import { humanizeLogText } from '@/lib/logPathDisplay';
 import { ChatEntryContainer } from './ChatEntryContainer';
 import { ChatToolSummary } from './ChatToolSummary';
 import { ChatTodoList } from './ChatTodoList';
@@ -88,10 +90,11 @@ const SENSITIVE_PATTERNS: Array<{ regex: RegExp; replacement: string }> = [
 ];
 
 function redactSensitiveContent(text: string): string {
-  return SENSITIVE_PATTERNS.reduce(
+  const redacted = SENSITIVE_PATTERNS.reduce(
     (safeText, rule) => safeText.replace(rule.regex, rule.replacement),
     text
   );
+  return humanizeLogText(redacted);
 }
 
 function formatDuration(ms?: number): string | null {
@@ -664,7 +667,9 @@ function ToolCallRows({
           tone="tool"
           content={
             (() => {
-              const commandStr = String(actionType.command || '');
+              const commandStr = formatShellCommandForDisplay(
+                String(actionType.command || '')
+              );
               const isLongCommand = commandStr.length > 80 || commandStr.includes('\n');
               const hasExpandableContent = hasCommandDetails || isLongCommand;
 
@@ -701,7 +706,7 @@ function ToolCallRows({
                       expanded && hasCommandDetails && "border-b border-slate-300 dark:border-zinc-700/50"
                     )}>
                       <span className="text-slate-400 dark:text-zinc-500 select-none mr-2">$</span>
-                      {actionType.command}
+                      {commandStr}
                     </div>
                     {/* Output - animated expand/collapse */}
                     {hasCommandDetails && commandOutput && (

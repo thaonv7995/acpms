@@ -3,6 +3,7 @@ import { motion, AnimatePresence } from 'framer-motion';
 import { ChevronRight, ChevronDown, Eye, Edit, Search } from 'lucide-react';
 import type { OperationGroup, ToolCallEntry } from '@/types/timeline-log';
 import { cn } from '@/lib/utils';
+import { formatLogPathForDisplay } from '@/lib/logPathDisplay';
 import { formatTimestamp } from '@/utils/formatters';
 
 interface OperationGroupCardProps {
@@ -52,10 +53,12 @@ export function OperationGroupCard({ group }: OperationGroupCardProps) {
     .slice(0, 3)
     .map(
       (op) =>
-        op.actionType.file_path ||
-        op.actionType.path ||
-        op.actionType.target ||
-        'unknown'
+        formatLogPathForDisplay(
+          op.actionType.file_path ||
+            op.actionType.path ||
+            op.actionType.target ||
+            'unknown'
+        )
     );
 
   return (
@@ -156,10 +159,12 @@ function OperationItem({
   index: number;
 }) {
   const target =
-    operation.actionType.file_path ||
-    operation.actionType.path ||
-    operation.actionType.target ||
-    'unknown';
+    formatLogPathForDisplay(
+      operation.actionType.file_path ||
+        operation.actionType.path ||
+        operation.actionType.target ||
+        'unknown'
+    );
 
   return (
     <div className="flex items-start gap-3 text-xs">

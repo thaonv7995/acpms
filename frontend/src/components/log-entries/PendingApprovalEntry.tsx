@@ -1,6 +1,7 @@
 import { Clock, CheckCircle, XCircle } from 'lucide-react';
 import { BaseEntry } from './BaseEntry';
 import { RawLogText } from './RawLogText';
+import { formatShellCommandForDisplay } from '@/lib/commandDisplay';
 import { getActionIcon } from '@/utils/icon-mapping';
 import type { ActionType } from '@/bindings/ActionType';
 import type { ToolStatus } from '@/bindings/ToolStatus';
@@ -25,6 +26,10 @@ export function PendingApprovalEntry({
   timestamp,
 }: PendingApprovalEntryProps) {
   const Icon = getActionIcon(actionType.action);
+  const formattedCommand =
+    actionType.action === 'command_run'
+      ? formatShellCommandForDisplay(actionType.command)
+      : null;
 
   // Extract approval details if status is pending_approval
   const approvalId = status.status === 'pending_approval' ? status.approval_id : '';
@@ -60,7 +65,13 @@ export function PendingApprovalEntry({
           </div>
 
           <div className="text-sm text-muted-foreground mb-3">
-            <RawLogText text={content} />
+            {formattedCommand ? (
+              <div className="font-mono break-all">
+                Command: {formattedCommand}
+              </div>
+            ) : (
+              <RawLogText text={content} />
+            )}
           </div>
 
           {timeoutAt && (

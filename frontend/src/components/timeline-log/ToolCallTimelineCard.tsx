@@ -2,6 +2,8 @@ import { useState } from 'react';
 import { motion, AnimatePresence } from 'framer-motion';
 import { ChevronRight, ChevronDown, CheckCircle2, XCircle, Clock } from 'lucide-react';
 import type { ToolCallEntry } from '@/types/timeline-log';
+import { formatShellCommandForDisplay } from '@/lib/commandDisplay';
+import { formatLogPathForDisplay } from '@/lib/logPathDisplay';
 import { cn } from '@/lib/utils';
 import { getActionIcon, getActionLabel } from '@/utils/icon-mapping';
 import { formatTimestamp } from '@/utils/formatters';
@@ -25,6 +27,7 @@ export function ToolCallTimelineCard({ toolCall, onViewDiff }: ToolCallTimelineC
     toolCall.actionType.file_path ||
     toolCall.actionType.path ||
     toolCall.actionType.target;
+  const displayTarget = target ? formatLogPathForDisplay(target) : null;
 
   // Determine if expandable (has meaningful details)
   const hasDetails =
@@ -114,9 +117,12 @@ export function ToolCallTimelineCard({ toolCall, onViewDiff }: ToolCallTimelineC
                 </div>
               )}
             </div>
-            {target && (
-              <div className="text-xs font-mono text-muted-foreground truncate" title={target}>
-                {target}
+            {displayTarget && (
+              <div
+                className="text-xs font-mono text-muted-foreground truncate"
+                title={displayTarget}
+              >
+                {displayTarget}
               </div>
             )}
           </div>
@@ -170,6 +176,12 @@ export function ToolCallTimelineCard({ toolCall, onViewDiff }: ToolCallTimelineC
  */
 function ToolDetails({ toolCall }: { toolCall: ToolCallEntry }) {
   const { actionType } = toolCall;
+  const displayPath = formatLogPathForDisplay(
+    actionType.file_path || actionType.path || 'N/A'
+  );
+  const displayCommand = formatShellCommandForDisplay(
+    String((actionType as any).command || actionType.target || 'N/A')
+  );
 
   // Render details based on action type
   switch (actionType.action) {
@@ -178,7 +190,7 @@ function ToolDetails({ toolCall }: { toolCall: ToolCallEntry }) {
         <div className="space-y-2">
           <div className="text-xs font-medium text-muted-foreground">Command</div>
           <pre className="text-xs bg-background border border-border rounded px-3 py-2 overflow-x-auto">
-            {(actionType as any).command || actionType.target || 'N/A'}
+            {displayCommand}
           </pre>
         </div>
       );
@@ -188,7 +200,7 @@ function ToolDetails({ toolCall }: { toolCall: ToolCallEntry }) {
         <div className="space-y-2">
           <div className="text-xs font-medium text-muted-foreground">File Path</div>
           <div className="text-xs font-mono bg-background border border-border rounded px-3 py-2 break-all">
-            {actionType.file_path || actionType.path || 'N/A'}
+            {displayPath}
           </div>
           {(actionType as any).changes && (
             <>

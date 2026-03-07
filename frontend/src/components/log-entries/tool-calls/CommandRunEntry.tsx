@@ -1,4 +1,5 @@
 import { RawLogText } from '../RawLogText';
+import { formatShellCommandForDisplay } from '@/lib/commandDisplay';
 import { formatExitCode } from '@/utils/formatters';
 import type { CommandRunResult } from '@/bindings/CommandRunResult';
 
@@ -13,11 +14,12 @@ interface CommandRunEntryProps {
  */
 export function CommandRunEntry({ command, output, result }: CommandRunEntryProps) {
   const exitCode = result?.exit_status?.type === 'exit_code' ? result.exit_status.code : undefined;
+  const displayCommand = formatShellCommandForDisplay(command);
 
   return (
     <div className="space-y-2">
       <div className="text-sm font-mono text-muted-foreground">
-        Command: {command}
+        Command: {displayCommand}
       </div>
       {exitCode !== undefined && (
         <div className="text-xs">

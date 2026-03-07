@@ -4,6 +4,7 @@ import type { ActionType } from '@/bindings/ActionType';
 import type { ToolStatus } from '@/bindings/ToolStatus';
 import { BaseEntry } from './BaseEntry';
 import { StatusIndicator } from './StatusIndicator';
+import { formatShellCommandForDisplay } from '@/lib/commandDisplay';
 import { getActionIcon } from '@/utils/icon-mapping';
 import { ToolContent } from './tool-call-content';
 
@@ -59,13 +60,15 @@ function InlineToolDisplay({ actionType, content }: { actionType: ActionType; co
         </span>
       );
 
-    case 'command_run':
+    case 'command_run': {
+      const displayCommand = formatShellCommandForDisplay(actionType.command);
       return (
         <span className="font-mono text-sm text-secondary-foreground truncate">
-          {actionType.command.slice(0, 80)}
-          {actionType.command.length > 80 ? '...' : ''}
+          {displayCommand.slice(0, 80)}
+          {displayCommand.length > 80 ? '...' : ''}
         </span>
       );
+    }
 
     case 'search':
       return (

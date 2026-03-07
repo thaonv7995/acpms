@@ -3,6 +3,7 @@ import { AlertTriangle, Clock } from 'lucide-react';
 import { Button } from '@/components/ui/button';
 import { AutoExpandingTextarea } from '@/components/ui/auto-expanding-textarea';
 import { useApproval } from '@/hooks/useApproval';
+import { formatShellCommandForDisplay } from '@/lib/commandDisplay';
 import { cn } from '@/lib/utils';
 
 export type ActionType =
@@ -53,7 +54,7 @@ function renderActionDetails(actionType: ActionType): React.ReactNode {
         <div className="text-sm">
           <p className="mb-1">Run command:</p>
           <pre className="bg-muted p-2 rounded text-xs overflow-x-auto">
-            {actionType.command}
+            {formatShellCommandForDisplay(actionType.command)}
           </pre>
         </div>
       );

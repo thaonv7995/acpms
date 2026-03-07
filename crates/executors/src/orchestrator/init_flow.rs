@@ -1,5 +1,6 @@
 use super::*;
 use crate::task_skills::get_skill_content;
+use crate::worktree::{format_repository_clone_log, format_repository_sync_log};
 use acpms_db::models::{RepositoryProvider, RepositoryVerificationStatus};
 use chrono::Utc;
 use std::io::Cursor;
@@ -145,22 +146,11 @@ impl ExecutorOrchestrator {
 
         // Check if repo exists to log appropriate message
         if repo_path.join(".git").exists() {
-            self.log(
-                attempt_id,
-                "system",
-                &format!(
-                    "Repository exists at {:?}, syncing latest changes",
-                    repo_path
-                ),
-            )
-            .await?;
+            self.log(attempt_id, "system", &format_repository_sync_log(repo_url))
+                .await?;
         } else {
-            self.log(
-                attempt_id,
-                "system",
-                &format!("Cloning repository to {:?}", repo_path),
-            )
-            .await?;
+            self.log(attempt_id, "system", &format_repository_clone_log(repo_url))
+                .await?;
         }
 
         // Use WorktreeManager to clone or sync (PAT injected for private repos when configured)
