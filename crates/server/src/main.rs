@@ -1105,6 +1105,7 @@ mod tests {
             (*settings_service).clone(),
             pool.clone(),
             Some(7),
+            worktrees_path.clone(),
         ));
         let storage_service = Arc::new(
             StorageService::new()
@@ -1924,6 +1925,7 @@ async fn main() -> anyhow::Result<()> {
         (*settings_service).clone(),
         pool.clone(),
         Some(7), // TTL 7 days
+        worktrees_path.clone(),
     ));
 
     // Initialize Build and Deploy Services

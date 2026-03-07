@@ -96,8 +96,12 @@ function getPrimaryArtifactDownload(
   return null;
 }
 
-function getAttemptPreviewUrl(metadata?: Record<string, unknown>): string | undefined {
+function getAttemptPreviewUrl(
+  metadata?: Record<string, unknown>,
+  taskStatus?: string
+): string | undefined {
   if (!metadata) return undefined;
+  if (taskStatus === 'done') return undefined;
 
   const previewUrl = metadata.preview_url;
   if (typeof previewUrl === 'string' && previewUrl.trim().length > 0) {
@@ -319,8 +323,8 @@ export function ProjectTasksPage() {
     [selectedTask?.metadata]
   );
   const selectedAttemptPreviewUrl = useMemo(
-    () => getAttemptPreviewUrl(selectedAttempt?.metadata),
-    [selectedAttempt?.metadata]
+    () => getAttemptPreviewUrl(selectedAttempt?.metadata, selectedTask?.status),
+    [selectedAttempt?.metadata, selectedTask?.status]
   );
   const isLatestAttemptSelected = Boolean(
     selectedAttempt?.id &&
@@ -816,6 +820,7 @@ export function ProjectTasksPage() {
         taskId={selectedTask.id}
         attemptId={selectedAttempt.id}
         fallbackPreviewUrl={selectedAttemptPreviewUrl}
+        autoStartOnMount={selectedTask.status === 'done' && projectPreviewEnabled}
       />
     ) : null;
 

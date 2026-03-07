@@ -176,6 +176,7 @@ pub async fn create_test_app_state(pool: PgPool) -> AppState {
         (*settings_service).clone(),
         pool.clone(),
         Some(7), // TTL 7 days
+        worktrees_path.clone(),
     ));
 
     // Initialize Build and Deploy Services

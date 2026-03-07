@@ -18,6 +18,8 @@ interface DevServerState {
   startDisabled: boolean;
   startDisabledReason?: string;
   externalPreview: boolean;
+  previewRevision: number;
+  lastExternalPreviewSignal?: string;
 }
 
 interface UseDevServerReturn {
@@ -31,6 +33,12 @@ interface UseDevServerReturn {
   startDisabled: boolean;
   startDisabledReason?: string;
   externalPreview: boolean;
+  previewRevision: number;
+}
+
+interface PreviewLogSignal {
+  url: string;
+  signalKey: string;
 }
 
 const PREVIEW_READINESS_BLOCKERS = [
@@ -249,22 +257,35 @@ function extractPreviewUrlFromStructuredLog(value: unknown): string | undefined 
 }
 
 export function extractPreviewUrlFromAttemptLogs(logs: AgentLog[]): string | undefined {
+  return extractPreviewSignalFromAttemptLogs(logs)?.url;
+}
+
+export function extractPreviewSignalFromAttemptLogs(
+  logs: AgentLog[]
+): PreviewLogSignal | undefined {
   for (let index = logs.length - 1; index >= 0; index -= 1) {
-    const content = logs[index]?.content;
+    const log = logs[index];
+    const content = log?.content;
     if (typeof content !== 'string' || content.length === 0) {
       continue;
     }
 
     const direct = extractPreviewUrlFromText(content);
     if (direct) {
-      return direct;
+      return {
+        url: direct,
+        signalKey: `${log.id}:${log.created_at}:${direct}`,
+      };
     }
 
     try {
       const parsed = JSON.parse(content) as unknown;
       const extracted = extractPreviewUrlFromStructuredLog(parsed);
       if (extracted) {
-        return extracted;
+        return {
+          url: extracted,
+          signalKey: `${log.id}:${log.created_at}:${extracted}`,
+        };
       }
     } catch {
       // Ignore plain-text logs that are not JSON.
@@ -277,8 +298,14 @@ export function extractPreviewUrlFromAttemptLogs(logs: AgentLog[]): string | und
 function buildExternalPreviewState(
   baseState: DevServerState,
   previewUrl: string,
-  readinessReason?: string
+  readinessReason?: string,
+  signalKey?: string
 ): DevServerState {
+  const shouldBumpRevision =
+    typeof signalKey === 'string' &&
+    signalKey.length > 0 &&
+    signalKey !== baseState.lastExternalPreviewSignal;
+
   return {
     ...baseState,
     status: 'running',
@@ -289,6 +316,10 @@ function buildExternalPreviewState(
     startDisabledReason:
       readinessReason || 'Preview is available via the agent-reported PREVIEW_TARGET.',
     externalPreview: true,
+    previewRevision: shouldBumpRevision
+      ? baseState.previewRevision + 1
+      : baseState.previewRevision,
+    lastExternalPreviewSignal: signalKey || baseState.lastExternalPreviewSignal,
   };
 }
 
@@ -304,7 +335,8 @@ function buildExternalPreviewState(
 export function useDevServer(
   taskId: string,
   attemptId?: string,
-  fallbackPreviewUrl?: string
+  fallbackPreviewUrl?: string,
+  autoStartOnMount = false
 ): UseDevServerReturn {
   const [state, setState] = useState<DevServerState>({
     status: 'idle',
@@ -314,11 +346,15 @@ export function useDevServer(
     startDisabled: false,
     startDisabledReason: undefined,
     externalPreview: false,
+    previewRevision: 0,
+    lastExternalPreviewSignal: undefined,
   });
   const [isLoading, setIsLoading] = useState(false);
+  const [hasHydrated, setHasHydrated] = useState(false);
 
   // Hydrate preview state from backend when task/attempt changes.
   useEffect(() => {
+    setHasHydrated(false);
     setState({
       status: 'idle',
       url: undefined,
@@ -327,6 +363,8 @@ export function useDevServer(
       startDisabled: false,
       startDisabledReason: undefined,
       externalPreview: false,
+      previewRevision: 0,
+      lastExternalPreviewSignal: undefined,
     });
     if (!attemptId) {
       return;
@@ -345,8 +383,13 @@ export function useDevServer(
 
         const readinessBlocked = !readiness.ready;
         const readinessReason = readiness.reason || undefined;
-        const agentPreviewUrl =
-          fallbackPreviewUrl || extractPreviewUrlFromAttemptLogs(logs);
+        const agentPreviewSignal =
+          typeof fallbackPreviewUrl === 'string' && fallbackPreviewUrl.trim().length > 0
+            ? {
+                url: fallbackPreviewUrl,
+                signalKey: `fallback:${fallbackPreviewUrl}`,
+              }
+            : extractPreviewSignalFromAttemptLogs(logs);
 
         setState((prev) => {
           const baseState: DevServerState = {
@@ -357,11 +400,12 @@ export function useDevServer(
           };
 
           if (!preview || prev.status === 'starting') {
-            if (agentPreviewUrl) {
+            if (agentPreviewSignal) {
               return buildExternalPreviewState(
                 baseState,
-                agentPreviewUrl,
-                readinessReason
+                agentPreviewSignal.url,
+                readinessReason,
+                agentPreviewSignal.signalKey
               );
             }
             return baseState;
@@ -374,6 +418,8 @@ export function useDevServer(
             errorMessage: undefined,
             previewId: preview.id,
             externalPreview: false,
+            previewRevision: 0,
+            lastExternalPreviewSignal: undefined,
           };
         });
       })
@@ -388,6 +434,7 @@ export function useDevServer(
       .finally(() => {
         if (!cancelled) {
           setIsLoading(false);
+          setHasHydrated(true);
         }
       });
 
@@ -399,7 +446,7 @@ export function useDevServer(
   // Poll attempt logs while the agent is still running so PREVIEW_TARGET can
   // surface without requiring a manual page refresh.
   useEffect(() => {
-    if (!attemptId || fallbackPreviewUrl || state.externalPreview || state.previewId) {
+    if (!attemptId || fallbackPreviewUrl || state.previewId) {
       return;
     }
 
@@ -412,13 +459,13 @@ export function useDevServer(
           return;
         }
 
-        const previewUrl = extractPreviewUrlFromAttemptLogs(logs);
-        if (!previewUrl) {
+        const previewSignal = extractPreviewSignalFromAttemptLogs(logs);
+        if (!previewSignal) {
           return;
         }
 
         setState((prev) => {
-          if (prev.externalPreview || prev.previewId) {
+          if (prev.previewId) {
             return prev;
           }
           if (prev.status === 'starting' || prev.status === 'stopping') {
@@ -427,8 +474,9 @@ export function useDevServer(
 
           return buildExternalPreviewState(
             prev,
-            previewUrl,
-            prev.startDisabledReason
+            previewSignal.url,
+            prev.startDisabledReason,
+            previewSignal.signalKey
           );
         });
       } catch {
@@ -448,7 +496,6 @@ export function useDevServer(
   }, [
     attemptId,
     fallbackPreviewUrl,
-    state.externalPreview,
     state.previewId,
     state.status,
   ]);
@@ -477,6 +524,8 @@ export function useDevServer(
                 runtimeStatus.message ||
                 'Preview runtime is not running. Start again to retry.',
               ),
+              previewRevision: 0,
+              lastExternalPreviewSignal: undefined,
             };
           });
         }
@@ -516,6 +565,8 @@ export function useDevServer(
         startDisabled: true,
         startDisabledReason: 'Attempt ID is required to start preview',
         externalPreview: false,
+        previewRevision: 0,
+        lastExternalPreviewSignal: undefined,
       });
       return;
     }
@@ -533,6 +584,8 @@ export function useDevServer(
         startDisabled: false,
         startDisabledReason: undefined,
         externalPreview: false,
+        previewRevision: 0,
+        lastExternalPreviewSignal: undefined,
       });
     } catch (error) {
       const parsedMessage = parseApiError(error, 'Failed to start preview');
@@ -546,11 +599,13 @@ export function useDevServer(
         startDisabled: blockedByReadiness,
         startDisabledReason: blockedByReadiness ? parsedMessage : undefined,
         externalPreview: false,
+        previewRevision: 0,
+        lastExternalPreviewSignal: undefined,
       });
     } finally {
       setIsLoading(false);
     }
-  }, [state.status, isLoading, attemptId]);
+  }, [state.status, state.startDisabled, state.startDisabledReason, isLoading, attemptId]);
 
   const stopServer = useCallback(async () => {
     if (isLoading) return;
@@ -588,6 +643,8 @@ export function useDevServer(
         startDisabled: state.startDisabled,
         startDisabledReason: state.startDisabledReason,
         externalPreview: false,
+        previewRevision: 0,
+        lastExternalPreviewSignal: undefined,
       });
     } catch (error) {
       const parsedMessage = parseApiError(error, 'Failed to stop preview');
@@ -599,6 +656,8 @@ export function useDevServer(
           errorMessage: undefined,
           previewId: undefined,
           externalPreview: false,
+          previewRevision: 0,
+          lastExternalPreviewSignal: undefined,
         }));
         return;
       }
@@ -607,6 +666,8 @@ export function useDevServer(
         status: 'error',
         errorMessage: parsedMessage,
         externalPreview: false,
+        previewRevision: 0,
+        lastExternalPreviewSignal: undefined,
       }));
     } finally {
       setIsLoading(false);
@@ -619,6 +680,35 @@ export function useDevServer(
     await startServer();
   }, [state.status, state.externalPreview, isLoading, stopServer, startServer]);
 
+  useEffect(() => {
+    if (
+      !autoStartOnMount ||
+      !attemptId ||
+      !hasHydrated ||
+      isLoading ||
+      state.startDisabled ||
+      state.previewId ||
+      state.externalPreview ||
+      state.url ||
+      state.status !== 'idle'
+    ) {
+      return;
+    }
+
+    void startServer();
+  }, [
+    autoStartOnMount,
+    attemptId,
+    hasHydrated,
+    isLoading,
+    startServer,
+    state.startDisabled,
+    state.previewId,
+    state.externalPreview,
+    state.url,
+    state.status,
+  ]);
+
   return {
     status: state.status,
     url: state.url,
@@ -630,5 +720,6 @@ export function useDevServer(
     startDisabled: state.startDisabled,
     startDisabledReason: state.startDisabledReason,
     externalPreview: state.externalPreview,
+    previewRevision: state.previewRevision,
   };
 }

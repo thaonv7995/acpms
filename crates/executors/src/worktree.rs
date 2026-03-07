@@ -1,5 +1,6 @@
 use anyhow::{Context, Result};
 use std::path::{Path, PathBuf};
+use std::process::Output;
 use std::process::Stdio;
 use std::sync::Arc;
 use tokio::process::Command;
@@ -845,7 +846,52 @@ impl WorktreeManager {
     }
 
     pub async fn push_worktree(&self, worktree_path: &Path) -> Result<()> {
-        let output = Command::new("git")
+        let mut output = self
+            .run_push_worktree_command(worktree_path)
+            .await
+            .context("Failed to execute git push")?;
+
+        if !output.status.success() {
+            let stderr = String::from_utf8_lossy(&output.stderr).to_string();
+            if is_recoverable_push_failure(&stderr) {
+                let branch = self
+                    .current_branch_name(worktree_path)
+                    .await
+                    .unwrap_or_else(|_| "HEAD".to_string());
+                let _ = git_command_non_interactive()
+                    .current_dir(worktree_path)
+                    .arg("fetch")
+                    .arg("origin")
+                    .arg(&branch)
+                    .stdout(Stdio::piped())
+                    .stderr(Stdio::piped())
+                    .output()
+                    .await;
+
+                output = self
+                    .run_push_worktree_command(worktree_path)
+                    .await
+                    .context("Failed to retry git push")?;
+
+                if output.status.success() {
+                    return Ok(());
+                }
+
+                let retry_stderr = String::from_utf8_lossy(&output.stderr);
+                anyhow::bail!(
+                    "git push failed after retry: initial error: {}; retry error: {}",
+                    stderr.trim(),
+                    retry_stderr.trim()
+                );
+            }
+            anyhow::bail!("git push failed: {}", stderr);
+        }
+
+        Ok(())
+    }
+
+    async fn run_push_worktree_command(&self, worktree_path: &Path) -> Result<Output> {
+        Command::new("git")
             .current_dir(worktree_path)
             .arg("push")
             .arg("--no-verify")
@@ -858,14 +904,30 @@ impl WorktreeManager {
             .stderr(Stdio::piped())
             .output()
             .await
-            .context("Failed to execute git push")?;
+            .context("Failed to execute git push command")
+    }
+
+    async fn current_branch_name(&self, repo_path: &Path) -> Result<String> {
+        let output = Command::new("git")
+            .current_dir(repo_path)
+            .args(["rev-parse", "--abbrev-ref", "HEAD"])
+            .stdout(Stdio::piped())
+            .stderr(Stdio::piped())
+            .output()
+            .await
+            .context("Failed to read current git branch")?;
 
         if !output.status.success() {
             let stderr = String::from_utf8_lossy(&output.stderr);
-            anyhow::bail!("git push failed: {}", stderr);
+            anyhow::bail!("git rev-parse failed: {}", stderr.trim());
         }
 
-        Ok(())
+        let branch = String::from_utf8_lossy(&output.stdout).trim().to_string();
+        if branch.is_empty() {
+            anyhow::bail!("Current git branch is empty");
+        }
+
+        Ok(branch)
     }
 
     // ============================================================================
@@ -1159,6 +1221,16 @@ fn inject_pat_into_url(url: &str, pat: &str) -> String {
     }
 }
 
+fn is_recoverable_push_failure(stderr: &str) -> bool {
+    let normalized = stderr.to_ascii_lowercase();
+    normalized.contains("stale info")
+        || normalized.contains("fetch first")
+        || normalized.contains("failed to push some refs")
+        || normalized.contains("non-fast-forward")
+        || normalized.contains("remote rejected")
+        || normalized.contains("cannot lock ref")
+}
+
 fn parse_repo_identity(raw: &str) -> Option<(String, String)> {
     let trimmed = raw.trim();
     if trimmed.is_empty() {
@@ -1199,7 +1271,8 @@ fn parse_repo_identity(raw: &str) -> Option<(String, String)> {
 mod tests {
     use super::{
         format_repository_clone_log, format_repository_sync_log, inject_pat_into_url,
-        parse_tracking_branch, repo_url_matches, summarize_repository_source, WorktreeManager,
+        is_recoverable_push_failure, parse_tracking_branch, repo_url_matches,
+        summarize_repository_source, WorktreeManager,
     };
     use std::path::Path;
     use std::sync::Arc;
@@ -1385,5 +1458,21 @@ mod tests {
         );
         let current_branch = String::from_utf8_lossy(&output.stdout).trim().to_string();
         assert_eq!(current_branch, recreated.feature_branch);
+    }
+
+    #[test]
+    fn recoverable_push_failure_classifier_catches_common_git_drift_errors() {
+        assert!(is_recoverable_push_failure(
+            "failed to push some refs to origin because the remote contains work that you do not have locally (fetch first)"
+        ));
+        assert!(is_recoverable_push_failure(
+            "remote rejected: cannot lock ref 'refs/heads/feat/x': is at abc but expected def"
+        ));
+        assert!(is_recoverable_push_failure(
+            "stale info: remote branch updated during push"
+        ));
+        assert!(!is_recoverable_push_failure(
+            "authentication failed: invalid token"
+        ));
     }
 }

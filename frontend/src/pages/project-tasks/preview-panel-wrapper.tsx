@@ -8,12 +8,14 @@ interface PreviewPanelWrapperProps {
   taskId: string;
   attemptId: string;
   fallbackPreviewUrl?: string;
+  autoStartOnMount?: boolean;
 }
 
 export function PreviewPanelWrapper({
   taskId,
   attemptId,
   fallbackPreviewUrl,
+  autoStartOnMount = false,
 }: PreviewPanelWrapperProps) {
   const {
     status,
@@ -25,7 +27,8 @@ export function PreviewPanelWrapper({
     startDisabled,
     startDisabledReason,
     externalPreview,
-  } = useDevServer(taskId, attemptId, fallbackPreviewUrl);
+    previewRevision,
+  } = useDevServer(taskId, attemptId, fallbackPreviewUrl, autoStartOnMount);
 
   return (
     <PreviewPanel
@@ -33,6 +36,7 @@ export function PreviewPanelWrapper({
       status={status}
       errorMessage={errorMessage}
       externalPreview={externalPreview}
+      previewRevision={previewRevision}
       onStart={startServer}
       onStop={stopServer}
       onRestart={restartServer}

@@ -1,5 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import {
+  extractPreviewSignalFromAttemptLogs,
   extractPreviewUrlFromAttemptLogs,
   extractPreviewUrlFromText,
   isPreviewAlreadyStoppedMessage,
@@ -133,5 +134,30 @@ describe('useDevServer error helpers', () => {
         },
       ])
     ).toBe('http://127.0.0.1:4321');
+  });
+
+  it('returns a stable preview signal key for the latest preview log', () => {
+    expect(
+      extractPreviewSignalFromAttemptLogs([
+        {
+          id: '1',
+          attempt_id: 'attempt-1',
+          log_type: 'stdout',
+          content: 'PREVIEW_TARGET: http://127.0.0.1:3000',
+          created_at: '2026-03-06T08:00:00Z',
+        },
+        {
+          id: '2',
+          attempt_id: 'attempt-1',
+          log_type: 'stdout',
+          content:
+            '{"content":"Deploy summary\\nPREVIEW_TARGET: http://127.0.0.1:4321"}',
+          created_at: '2026-03-06T08:01:00Z',
+        },
+      ])
+    ).toEqual({
+      url: 'http://127.0.0.1:4321',
+      signalKey: '2:2026-03-06T08:01:00Z:http://127.0.0.1:4321',
+    });
   });
 });

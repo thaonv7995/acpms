@@ -8,12 +8,36 @@ interface PreviewPanelProps {
   status: DevServerStatus;
   errorMessage?: string;
   externalPreview?: boolean;
+  previewRevision?: number;
   onStart: () => void;
   onStop: () => void;
   onRestart: () => void;
   startDisabled?: boolean;
   startDisabledReason?: string;
   className?: string;
+}
+
+function buildIframeSrc(
+  devServerUrl?: string,
+  externalPreview?: boolean,
+  previewRevision?: number
+): string | undefined {
+  if (!devServerUrl) {
+    return undefined;
+  }
+
+  if (!externalPreview || !previewRevision) {
+    return devServerUrl;
+  }
+
+  try {
+    const url = new URL(devServerUrl);
+    url.searchParams.set('acpms_preview_rev', String(previewRevision));
+    return url.toString();
+  } catch {
+    const separator = devServerUrl.includes('?') ? '&' : '?';
+    return `${devServerUrl}${separator}acpms_preview_rev=${previewRevision}`;
+  }
 }
 
 /**
@@ -34,6 +58,7 @@ export function PreviewPanel({
   status,
   errorMessage,
   externalPreview = false,
+  previewRevision = 0,
   onStart,
   onStop,
   onRestart,
@@ -46,18 +71,20 @@ export function PreviewPanel({
   const [isIframeLoading, setIsIframeLoading] = useState(false);
   const iframeRef = useRef<HTMLIFrameElement>(null);
   const containerRef = useRef<HTMLDivElement>(null);
+  const iframeSrc = buildIframeSrc(devServerUrl, externalPreview, previewRevision);
 
   const isRunning = status === 'running';
   const hasUrl = Boolean(devServerUrl);
   const canShowPreview = hasUrl && (isRunning || externalPreview);
 
-  // Reload iframe when URL changes
+  // Reload iframe when the preview source changes. External preview may reuse
+  // the same URL across follow-ups, so previewRevision forces a refresh.
   useEffect(() => {
-    if (devServerUrl) {
+    if (iframeSrc) {
       setIframeKey((prev) => prev + 1);
       setIsIframeLoading(true);
     }
-  }, [devServerUrl]);
+  }, [iframeSrc]);
 
   const handleRefresh = () => {
     setIframeKey((prev) => prev + 1);
@@ -193,7 +220,7 @@ export function PreviewPanel({
             <iframe
               key={iframeKey}
               ref={iframeRef}
-              src={devServerUrl}
+              src={iframeSrc}
               onLoad={handleIframeLoad}
               onError={handleIframeError}
               sandbox="allow-same-origin allow-scripts allow-forms allow-popups allow-modals"

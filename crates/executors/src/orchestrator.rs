@@ -2334,7 +2334,7 @@ impl ExecutorOrchestrator {
                             // Preserve changes for manual review.
                             self.mark_task_in_review(task_id).await?;
                             let in_review_msg = if !branch_ready {
-                                "Task moved to review. Please approve to retry merge and complete."
+                                "Task moved to review. Repository sync hit a recoverable Git issue; your changes are preserved. Approve after fixing repository state, or send a follow-up to continue from the same attempt."
                             } else {
                                 "Task moved to review. Please approve to merge and complete."
                             };
@@ -6923,7 +6923,7 @@ IMPORTANT: Do not commit unrelated files. Verify changes work before committing.
                 self.log(
                     attempt_id,
                     "system",
-                    "Follow-up moved to review. Please approve to complete.",
+                    "Follow-up moved to review. Repository sync hit a recoverable Git issue; the branch and worktree were preserved so you can send another follow-up or approve after fixing repository state.",
                 )
                 .await?;
             } else {
@@ -6991,7 +6991,7 @@ IMPORTANT: Do not commit unrelated files. Verify changes work before committing.
                     self.log(
                         attempt_id,
                         "system",
-                        "Follow-up auto-merge was not completed. Task moved to InReview for manual approval.",
+                        "Follow-up auto-merge was not completed. The branch and worktree were preserved, so you can approve for manual merge or send another follow-up to continue.",
                     )
                     .await?;
                 }

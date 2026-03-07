@@ -1,21 +1,23 @@
 use acpms_db::models::{
-    CloudflareTunnel, PreviewDeployment, PreviewInfo, Project, ProjectType, SystemSettings,
-    TunnelStatus,
+    project_repo_relative_path, CloudflareTunnel, PreviewDeployment, PreviewInfo, Project,
+    ProjectType, SystemSettings, TunnelStatus,
 };
 use acpms_deployment::CloudflareClient;
 use acpms_services::{EncryptionService, SystemSettingsService};
 use anyhow::{Context, Result};
 use chrono::{DateTime, Duration, Utc};
 use serde::Serialize;
-use sqlx::PgPool;
+use sqlx::{PgPool, Row};
 use std::{
     collections::BTreeMap,
     fs,
     net::TcpListener,
     path::{Path, PathBuf},
     process::Command,
+    sync::Arc,
 };
 use tokio::time::{sleep, Duration as TokioDuration, Instant};
+use tokio::sync::RwLock;
 use tracing::{debug, error, info, warn};
 use uuid::Uuid;
 
@@ -27,6 +29,7 @@ pub struct PreviewManager {
     settings_service: SystemSettingsService,
     db: PgPool,
     preview_ttl_days: i64,
+    worktrees_path: Arc<RwLock<PathBuf>>,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -47,6 +50,12 @@ enum PreviewExposureMode {
     Local {
         host_port: u16,
     },
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum PreviewSourceKind {
+    Worktree,
+    Repository,
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -84,6 +93,7 @@ impl PreviewManager {
         settings_service: SystemSettingsService,
         db: PgPool,
         preview_ttl_days: Option<i64>,
+        worktrees_path: Arc<RwLock<PathBuf>>,
     ) -> Self {
         Self {
             cloudflare,
@@ -91,6 +101,7 @@ impl PreviewManager {
             settings_service,
             db,
             preview_ttl_days: preview_ttl_days.unwrap_or(7),
+            worktrees_path,
         }
     }
 
@@ -1006,20 +1017,31 @@ impl PreviewManager {
         .context("No active tunnel found for runtime startup")?;
         let local_only_exposure = is_local_preview_tunnel_id(&tunnel.tunnel_id);
 
-        let worktree_path = self
-            .resolve_attempt_worktree_path(attempt_id)
+        let (source_path, source_kind) = self
+            .resolve_attempt_preview_source_path(attempt_id)
             .await
-            .context("Unable to resolve attempt worktree path for preview runtime")?;
+            .context("Unable to resolve attempt source path for preview runtime")?;
 
-        if !worktree_path.exists() {
+        if matches!(source_kind, PreviewSourceKind::Repository) {
+            self.sync_repo_source_for_preview(&source_path)
+                .await
+                .with_context(|| {
+                    format!(
+                        "Failed to sync merged repository source for preview runtime: {}",
+                        source_path.display()
+                    )
+                })?;
+        }
+
+        if !source_path.exists() {
             anyhow::bail!(
-                "Worktree path does not exist for attempt {}: {}",
+                "Preview source path does not exist for attempt {}: {}",
                 attempt_id,
-                worktree_path.display()
+                source_path.display()
             );
         }
 
-        let runtime_dir = worktree_path
+        let runtime_dir = source_path
             .join(".acpms")
             .join("preview")
             .join(attempt_id.to_string());
@@ -1031,9 +1053,9 @@ impl PreviewManager {
         })?;
 
         let container_port = preview_dev_port();
-        let dev_command = resolve_preview_dev_command(&worktree_path, project_type, container_port)
+        let dev_command = resolve_preview_dev_command(&source_path, project_type, container_port)
             .context("Failed to resolve preview dev command")?;
-        let dev_image = resolve_preview_dev_image(&worktree_path, &dev_command);
+        let dev_image = resolve_preview_dev_image(&source_path, &dev_command);
         let compose_path = runtime_dir.join("docker-compose.preview.yml");
         let exposure = if local_only_exposure {
             let host_port = extract_local_preview_port(&tunnel.preview_url)
@@ -1060,7 +1082,7 @@ impl PreviewManager {
         };
 
         let compose_content = build_compose_content(
-            &worktree_path,
+            &source_path,
             &dev_image,
             &dev_command,
             container_port,
@@ -1071,7 +1093,7 @@ impl PreviewManager {
             .with_context(|| format!("Failed to write compose file: {}", compose_path.display()))?;
 
         let project_name = preview_docker_project_name(attempt_id);
-        self.mark_runtime_preparing(attempt_id, &project_name, &compose_path, &worktree_path)
+        self.mark_runtime_preparing(attempt_id, &project_name, &compose_path, &source_path)
             .await
             .context("Failed to persist runtime metadata before docker startup")?;
 
@@ -1142,9 +1164,9 @@ impl PreviewManager {
             .context("Failed to mark runtime as started")?;
 
         info!(
-            "Preview runtime started for attempt {} at worktree {}",
+            "Preview runtime started for attempt {} at source {}",
             attempt_id,
-            worktree_path.display()
+            source_path.display()
         );
         Ok(())
     }
@@ -1155,18 +1177,18 @@ impl PreviewManager {
             return Ok(());
         }
 
-        let worktree_path = match self.resolve_attempt_worktree_path(attempt_id).await {
-            Ok(path) => path,
+        let source_path = match self.resolve_attempt_preview_source_path(attempt_id).await {
+            Ok((path, _)) => path,
             Err(e) => {
                 warn!(
-                    "Skip runtime stop for attempt {}: cannot resolve worktree path ({})",
+                    "Skip runtime stop for attempt {}: cannot resolve preview source path ({})",
                     attempt_id, e
                 );
                 let _ = self
                     .record_runtime_error(
                         attempt_id,
                         &format!(
-                            "Skip runtime stop: cannot resolve worktree path for attempt {} ({})",
+                            "Skip runtime stop: cannot resolve preview source path for attempt {} ({})",
                             attempt_id, e
                         ),
                     )
@@ -1174,7 +1196,7 @@ impl PreviewManager {
                 return Ok(());
             }
         };
-        let runtime_dir = worktree_path
+        let runtime_dir = source_path
             .join(".acpms")
             .join("preview")
             .join(attempt_id.to_string());
@@ -1267,8 +1289,8 @@ impl PreviewManager {
             .map(|metadata| !is_local_preview_tunnel_id(&metadata.tunnel_id))
             .unwrap_or(true);
 
-        let worktree_path = match self.resolve_attempt_worktree_path(attempt_id).await {
-            Ok(path) => path,
+        let source_path = match self.resolve_attempt_preview_source_path(attempt_id).await {
+            Ok((path, _)) => path,
             Err(_) => {
                 return Ok(PreviewRuntimeStatus {
                     attempt_id,
@@ -1283,14 +1305,14 @@ impl PreviewManager {
                     started_at,
                     stopped_at,
                     message: Some(
-                        "Worktree path not found for attempt (execution_processes/metadata)"
+                        "Preview source path not found for attempt"
                             .to_string(),
                     ),
                 });
             }
         };
 
-        let runtime_dir = worktree_path
+        let runtime_dir = source_path
             .join(".acpms")
             .join("preview")
             .join(attempt_id.to_string());
@@ -1304,7 +1326,7 @@ impl PreviewManager {
             return Ok(PreviewRuntimeStatus {
                 attempt_id,
                 runtime_enabled,
-                worktree_path: Some(worktree_path.to_string_lossy().to_string()),
+                worktree_path: Some(source_path.to_string_lossy().to_string()),
                 compose_file_exists,
                 docker_project_name,
                 compose_file_path: Some(compose_file_path),
@@ -1321,7 +1343,7 @@ impl PreviewManager {
             return Ok(PreviewRuntimeStatus {
                 attempt_id,
                 runtime_enabled,
-                worktree_path: Some(worktree_path.to_string_lossy().to_string()),
+                worktree_path: Some(source_path.to_string_lossy().to_string()),
                 compose_file_exists,
                 docker_project_name,
                 compose_file_path: Some(compose_file_path),
@@ -1358,7 +1380,7 @@ impl PreviewManager {
                 Ok(PreviewRuntimeStatus {
                     attempt_id,
                     runtime_enabled,
-                    worktree_path: Some(worktree_path.to_string_lossy().to_string()),
+                    worktree_path: Some(source_path.to_string_lossy().to_string()),
                     compose_file_exists,
                     docker_project_name,
                     compose_file_path: Some(compose_file_path),
@@ -1375,7 +1397,7 @@ impl PreviewManager {
                 Ok(PreviewRuntimeStatus {
                     attempt_id,
                     runtime_enabled,
-                    worktree_path: Some(worktree_path.to_string_lossy().to_string()),
+                    worktree_path: Some(source_path.to_string_lossy().to_string()),
                     compose_file_exists,
                     docker_project_name,
                     compose_file_path: Some(compose_file_path),
@@ -1394,7 +1416,7 @@ impl PreviewManager {
             Err(error) => Ok(PreviewRuntimeStatus {
                 attempt_id,
                 runtime_enabled,
-                worktree_path: Some(worktree_path.to_string_lossy().to_string()),
+                worktree_path: Some(source_path.to_string_lossy().to_string()),
                 compose_file_exists,
                 docker_project_name,
                 compose_file_path: Some(compose_file_path),
@@ -1446,8 +1468,8 @@ impl PreviewManager {
             });
         }
 
-        let worktree_path = match self.resolve_attempt_worktree_path(attempt_id).await {
-            Ok(path) => path,
+        let source_path = match self.resolve_attempt_preview_source_path(attempt_id).await {
+            Ok((path, _)) => path,
             Err(_) => {
                 return Ok(PreviewRuntimeLogs {
                     attempt_id,
@@ -1458,14 +1480,14 @@ impl PreviewManager {
                     tail,
                     logs: String::new(),
                     message: Some(
-                        "Worktree path not found for attempt (execution_processes/metadata)"
+                        "Preview source path not found for attempt"
                             .to_string(),
                     ),
                 });
             }
         };
 
-        let runtime_dir = worktree_path
+        let runtime_dir = source_path
             .join(".acpms")
             .join("preview")
             .join(attempt_id.to_string());
@@ -1711,7 +1733,7 @@ impl PreviewManager {
         attempt_id: Uuid,
         project_name: &str,
         compose_file_path: &Path,
-        worktree_path: &Path,
+        source_path: &Path,
     ) -> Result<()> {
         sqlx::query(
             r#"
@@ -1730,7 +1752,7 @@ impl PreviewManager {
         .bind(attempt_id)
         .bind(project_name)
         .bind(compose_file_path.to_string_lossy().to_string())
-        .bind(worktree_path.to_string_lossy().to_string())
+        .bind(source_path.to_string_lossy().to_string())
         .bind(TunnelStatus::Creating)
         .execute(&self.db)
         .await
@@ -1801,7 +1823,53 @@ impl PreviewManager {
         Ok(())
     }
 
-    async fn resolve_attempt_worktree_path(&self, attempt_id: Uuid) -> Result<PathBuf> {
+    async fn resolve_attempt_preview_source_path(
+        &self,
+        attempt_id: Uuid,
+    ) -> Result<(PathBuf, PreviewSourceKind)> {
+        let row = sqlx::query(
+            r#"
+            SELECT
+                t.status::text AS task_status,
+                p.id AS project_id,
+                p.name AS project_name,
+                p.metadata AS project_metadata
+            FROM task_attempts ta
+            JOIN tasks t ON ta.task_id = t.id
+            JOIN projects p ON t.project_id = p.id
+            WHERE ta.id = $1
+            LIMIT 1
+            "#,
+        )
+        .bind(attempt_id)
+        .fetch_one(&self.db)
+        .await
+        .context("Failed to load task/project context for preview source resolution")?;
+
+        let task_status = row
+            .get::<String, _>("task_status")
+            .trim()
+            .to_ascii_lowercase();
+        let project_id = row.get("project_id");
+        let project_name: String = row.get("project_name");
+        let project_metadata: serde_json::Value = row.get("project_metadata");
+
+        if task_status != "done" {
+            if let Some(path) = self.find_existing_attempt_worktree_path(attempt_id).await? {
+                return Ok((path, PreviewSourceKind::Worktree));
+            }
+
+            anyhow::bail!(
+                "Review preview source is unavailable because the attempt worktree no longer exists"
+            );
+        }
+
+        let base = self.worktrees_path.read().await.clone();
+        let repo_rel = project_repo_relative_path(project_id, &project_metadata, &project_name);
+        Ok((base.join(repo_rel), PreviewSourceKind::Repository))
+    }
+
+    async fn find_existing_attempt_worktree_path(&self, attempt_id: Uuid) -> Result<Option<PathBuf>> {
         let execution_process_worktree = sqlx::query_scalar::<_, String>(
             r#"
             SELECT worktree_path
@@ -1818,7 +1886,10 @@ impl PreviewManager {
         .context("Failed to query execution_processes for worktree path")?;
 
         if let Some(path) = execution_process_worktree {
-            return Ok(PathBuf::from(path));
+            let path = PathBuf::from(path);
+            if path.exists() {
+                return Ok(Some(path));
+            }
         }
 
         let tunnel_worktree_path = sqlx::query_scalar::<_, Option<String>>(
@@ -1840,7 +1911,10 @@ impl PreviewManager {
         .filter(|path| !path.is_empty());
 
         if let Some(path) = tunnel_worktree_path {
-            return Ok(PathBuf::from(path));
+            let path = PathBuf::from(path);
+            if path.exists() {
+                return Ok(Some(path));
+            }
         }
 
         let attempt_metadata_worktree = sqlx::query_scalar::<_, Option<String>>(
@@ -1857,9 +1931,73 @@ impl PreviewManager {
         .context("Failed to query task_attempts metadata for worktree path")?
         .flatten();
 
-        attempt_metadata_worktree
+        Ok(attempt_metadata_worktree
             .map(PathBuf::from)
-            .context("No worktree_path found in execution_processes or task_attempts.metadata")
+            .filter(|path| path.exists()))
+    }
+
+    async fn sync_repo_source_for_preview(&self, repo_path: &Path) -> Result<()> {
+        if !repo_path.join(".git").exists() {
+            anyhow::bail!("Repository source is missing .git metadata");
+        }
+
+        let fetch_output = Command::new("git")
+            .current_dir(repo_path)
+            .args(["fetch", "--all"])
+            .output()
+            .context("Failed to execute git fetch --all for preview source sync")?;
+        if !fetch_output.status.success() {
+            anyhow::bail!(
+                "git fetch --all failed: {}",
+                String::from_utf8_lossy(&fetch_output.stderr).trim()
+            );
+        }
+
+        let origin_head_output = Command::new("git")
+            .current_dir(repo_path)
+            .args(["symbolic-ref", "refs/remotes/origin/HEAD"])
+            .output()
+            .context("Failed to detect origin default branch for preview source sync")?;
+        let default_ref = if origin_head_output.status.success() {
+            String::from_utf8_lossy(&origin_head_output.stdout)
+                .trim()
+                .to_string()
+        } else {
+            "refs/remotes/origin/main".to_string()
+        };
+        let branch_name = default_ref
+            .rsplit('/')
+            .next()
+            .filter(|name| !name.is_empty())
+            .unwrap_or("main");
+
+        let checkout_output = Command::new("git")
+            .current_dir(repo_path)
+            .args(["checkout", branch_name])
+            .output()
+            .context("Failed to checkout default branch for preview source sync")?;
+        if !checkout_output.status.success() {
+            anyhow::bail!(
+                "git checkout {} failed: {}",
+                branch_name,
+                String::from_utf8_lossy(&checkout_output.stderr).trim()
+            );
+        }
+
+        let pull_output = Command::new("git")
+            .current_dir(repo_path)
+            .args(["pull", "--ff-only", "origin", branch_name])
+            .output()
+            .context("Failed to execute git pull for preview source sync")?;
+        if !pull_output.status.success() {
+            anyhow::bail!(
+                "git pull --ff-only origin {} failed: {}",
+                branch_name,
+                String::from_utf8_lossy(&pull_output.stderr).trim()
+            );
+        }
+
+        Ok(())
     }
 }
 
