@@ -9,6 +9,82 @@ pub(super) struct PersistedStructuredOutputs {
     pub mr_description: Option<String>,
 }
 
+#[derive(Debug, Default, Clone, serde::Serialize, serde::Deserialize)]
+struct PreviewRuntimeControlContract {
+    #[serde(default)]
+    controllable: Option<bool>,
+    #[serde(default)]
+    runtime_type: Option<String>,
+    #[serde(default)]
+    container_name: Option<String>,
+    #[serde(default)]
+    compose_project_name: Option<String>,
+}
+
+#[derive(Debug, Default, Clone)]
+pub(super) struct ExtractedPreviewContract {
+    preview_target: Option<String>,
+    preview_url: Option<String>,
+    runtime_control: Option<serde_json::Value>,
+}
+
+fn normalize_preview_runtime_control_value(
+    raw: PreviewRuntimeControlContract,
+) -> Option<serde_json::Value> {
+    let runtime_type = raw
+        .runtime_type
+        .map(|value| value.trim().to_lowercase())
+        .filter(|value| !value.is_empty());
+    let container_name = raw
+        .container_name
+        .map(|value| value.trim().to_string())
+        .filter(|value| !value.is_empty());
+    let compose_project_name = raw
+        .compose_project_name
+        .map(|value| value.trim().to_string())
+        .filter(|value| !value.is_empty());
+
+    let has_docker_container = matches!(runtime_type.as_deref(), Some("docker_container"))
+        && container_name.is_some();
+    let has_compose_project =
+        matches!(runtime_type.as_deref(), Some("docker_compose_project"))
+            && compose_project_name.is_some();
+
+    let controllable = raw
+        .controllable
+        .unwrap_or(has_docker_container || has_compose_project);
+
+    if runtime_type.is_none() && container_name.is_none() && compose_project_name.is_none() {
+        return None;
+    }
+
+    let mut object = serde_json::Map::new();
+    object.insert(
+        "controllable".to_string(),
+        serde_json::Value::Bool(controllable),
+    );
+    if let Some(runtime_type) = runtime_type {
+        object.insert(
+            "runtime_type".to_string(),
+            serde_json::Value::String(runtime_type),
+        );
+    }
+    if let Some(container_name) = container_name {
+        object.insert(
+            "container_name".to_string(),
+            serde_json::Value::String(container_name),
+        );
+    }
+    if let Some(compose_project_name) = compose_project_name {
+        object.insert(
+            "compose_project_name".to_string(),
+            serde_json::Value::String(compose_project_name),
+        );
+    }
+
+    Some(serde_json::Value::Object(object))
+}
+
 impl ExecutorOrchestrator {
     pub(crate) async fn fetch_attempt_log_lines(
         &self,
@@ -31,13 +107,19 @@ impl ExecutorOrchestrator {
             .fetch_attempt_log_lines(attempt_id, "structured output extraction")
             .await?;
 
-        let (preview_target, preview_url, preview_target_source, preview_url_source) =
+        let (
+            preview_target,
+            preview_url,
+            preview_runtime_control,
+            preview_target_source,
+            preview_url_source,
+        ) =
             if let Some(wp) = worktree_path {
-                if let Ok(Some((target, file_url))) =
+                if let Ok(Some(contract)) =
                     self.extract_preview_from_file_contract(wp).await
                 {
-                    let file_url_present = file_url.is_some();
-                    let preview_url = file_url.or_else(|| extract_preview_url(&lines));
+                    let file_url_present = contract.preview_url.is_some();
+                    let preview_url = contract.preview_url.or_else(|| extract_preview_url(&lines));
                     let preview_url_source = if preview_url.is_some() {
                         if file_url_present {
                             "file_contract"
@@ -48,8 +130,9 @@ impl ExecutorOrchestrator {
                         "agent_output"
                     };
                     (
-                        Some(target),
+                        contract.preview_target,
                         preview_url,
+                        contract.runtime_control,
                         "file_contract",
                         preview_url_source,
                     )
@@ -57,6 +140,7 @@ impl ExecutorOrchestrator {
                     (
                         extract_preview_target(&lines),
                         extract_preview_url(&lines),
+                        None,
                         "agent_output",
                         "agent_output",
                     )
@@ -65,6 +149,7 @@ impl ExecutorOrchestrator {
                 (
                     extract_preview_target(&lines),
                     extract_preview_url(&lines),
+                    None,
                     "agent_output",
                     "agent_output",
                 )
@@ -128,6 +213,25 @@ impl ExecutorOrchestrator {
             patch.insert(
                 "preview_url_source".to_string(),
                 serde_json::Value::String(preview_url_source.to_string()),
+            );
+        }
+        if let Some(runtime_control) = &preview_runtime_control {
+            patch.insert(
+                "preview_runtime_control".to_string(),
+                runtime_control.clone(),
+            );
+            patch.insert(
+                "preview_runtime_control_source".to_string(),
+                serde_json::Value::String("file_contract".to_string()),
+            );
+            patch.insert(
+                "preview_runtime_state".to_string(),
+                serde_json::Value::String("active".to_string()),
+            );
+        } else if preview_target.is_some() || preview_url.is_some() {
+            patch.insert(
+                "preview_runtime_state".to_string(),
+                serde_json::Value::String("active".to_string()),
             );
         }
         if let Some(report) = &deployment_report {
@@ -466,12 +570,13 @@ impl ExecutorOrchestrator {
         Ok(extract_repo_url(&lines))
     }
 
-    /// Read PREVIEW_TARGET and PREVIEW_URL from `.acpms/preview-output.json` (file-based contract).
+    /// Read PREVIEW_TARGET / PREVIEW_URL plus optional runtime control metadata
+    /// from `.acpms/preview-output.json` (file-based contract).
     /// Same pattern as mr-output.json. File values override log extraction. Deletes file after reading.
     pub(super) async fn extract_preview_from_file_contract(
         &self,
         worktree_path: &std::path::Path,
-    ) -> Result<Option<(String, Option<String>)>> {
+    ) -> Result<Option<ExtractedPreviewContract>> {
         let path = worktree_path.join(".acpms/preview-output.json");
         let contents = match tokio::fs::read_to_string(&path).await {
             Ok(c) => c,
@@ -483,6 +588,8 @@ impl ExecutorOrchestrator {
         struct PreviewOutputContract {
             preview_target: Option<String>,
             preview_url: Option<String>,
+            #[serde(default)]
+            runtime_control: Option<PreviewRuntimeControlContract>,
         }
 
         let parsed: PreviewOutputContract = match serde_json::from_str(&contents) {
@@ -504,11 +611,20 @@ impl ExecutorOrchestrator {
             .map(|s| trim_repo_url_candidate(s.trim()))
             .filter(|s| !s.is_empty());
 
-        if let Some(t) = target {
-            Ok(Some((t, url)))
-        } else {
-            Ok(None)
+        let runtime_control =
+            parsed
+                .runtime_control
+                .and_then(normalize_preview_runtime_control_value);
+
+        if target.is_none() && url.is_none() && runtime_control.is_none() {
+            return Ok(None);
         }
+
+        Ok(Some(ExtractedPreviewContract {
+            preview_target: target,
+            preview_url: url,
+            runtime_control,
+        }))
     }
 
     /// Extract PREVIEW_TARGET from file contract first, then from logs. Persist to attempt metadata.
@@ -517,9 +633,14 @@ impl ExecutorOrchestrator {
         attempt_id: Uuid,
         worktree_path: Option<&std::path::Path>,
     ) -> Result<Option<String>> {
-        let (preview_target, preview_url, source) = if let Some(wp) = worktree_path {
-            if let Ok(Some((target, url))) = self.extract_preview_from_file_contract(wp).await {
-                (Some(target), url, "file_contract")
+        let (preview_target, preview_url, preview_runtime_control, source) = if let Some(wp) = worktree_path {
+            if let Ok(Some(contract)) = self.extract_preview_from_file_contract(wp).await {
+                (
+                    contract.preview_target,
+                    contract.preview_url,
+                    contract.runtime_control,
+                    "file_contract",
+                )
             } else {
                 let lines = self
                     .fetch_attempt_log_lines(attempt_id, "preview target extraction")
@@ -527,6 +648,7 @@ impl ExecutorOrchestrator {
                 (
                     extract_preview_target(&lines),
                     extract_preview_url(&lines),
+                    None,
                     "agent_output",
                 )
             }
@@ -537,6 +659,7 @@ impl ExecutorOrchestrator {
             (
                 extract_preview_target(&lines),
                 extract_preview_url(&lines),
+                None,
                 "agent_output",
             )
         };
@@ -566,6 +689,25 @@ impl ExecutorOrchestrator {
             metadata_patch.insert(
                 "preview_url_source".to_string(),
                 serde_json::Value::String(source.to_string()),
+            );
+        }
+        if let Some(runtime_control) = preview_runtime_control {
+            metadata_patch.insert(
+                "preview_runtime_control".to_string(),
+                runtime_control,
+            );
+            metadata_patch.insert(
+                "preview_runtime_control_source".to_string(),
+                serde_json::Value::String(source.to_string()),
+            );
+            metadata_patch.insert(
+                "preview_runtime_state".to_string(),
+                serde_json::Value::String("active".to_string()),
+            );
+        } else {
+            metadata_patch.insert(
+                "preview_runtime_state".to_string(),
+                serde_json::Value::String("active".to_string()),
             );
         }
 

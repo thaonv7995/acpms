@@ -7,7 +7,9 @@ use axum::{
     routing::{delete, get, post},
     Json, Router,
 };
+use chrono::Utc;
 use serde::{Deserialize, Serialize};
+use serde_json::Value;
 use tracing::error;
 use uuid::Uuid;
 
@@ -16,7 +18,13 @@ pub fn create_routes() -> Router<AppState> {
         // Preview management
         .route(
             "/attempts/:id/preview",
-            post(create_preview).get(get_preview_for_attempt),
+            post(create_preview)
+                .get(get_preview_for_attempt)
+                .delete(stop_preview_for_attempt),
+        )
+        .route(
+            "/attempts/:id/preview/control",
+            get(get_preview_control_for_attempt),
         )
         .route(
             "/attempts/:id/preview/readiness",
@@ -32,6 +40,19 @@ pub fn create_routes() -> Router<AppState> {
         )
         .route("/previews/:id", delete(cleanup_preview))
         .route("/previews", get(list_previews))
+}
+
+#[derive(Debug, Serialize)]
+struct PreviewControlResponse {
+    attempt_id: Uuid,
+    preview_available: bool,
+    controllable: bool,
+    dismissible: bool,
+    action: String,
+    runtime_type: Option<String>,
+    control_source: Option<String>,
+    container_name: Option<String>,
+    compose_project_name: Option<String>,
 }
 
 /// Create a preview environment for a task attempt
@@ -166,6 +187,30 @@ async fn get_preview_for_attempt(
 
     let preview = get_existing_preview(&state, attempt_id).await?;
     Ok(Json(preview))
+}
+
+async fn get_preview_control_for_attempt(
+    auth_user: AuthUser,
+    State(state): State<AppState>,
+    Path(attempt_id): Path<Uuid>,
+) -> Result<Json<PreviewControlResponse>, ApiError> {
+    let attempt_context = load_attempt_context(&state, attempt_id).await?;
+
+    RbacChecker::check_permission(
+        auth_user.id,
+        attempt_context.project_id,
+        Permission::ViewProject,
+        &state.db,
+    )
+    .await?;
+
+    let managed_preview_exists = get_existing_preview(&state, attempt_id).await?.is_some();
+
+    Ok(Json(build_preview_control_response(
+        attempt_id,
+        &attempt_context.metadata,
+        managed_preview_exists,
+    )))
 }
 
 /// Get preview readiness for an attempt (project type + project settings + runtime capability).
@@ -367,6 +412,68 @@ async fn cleanup_preview(
     Ok(())
 }
 
+async fn stop_preview_for_attempt(
+    auth_user: AuthUser,
+    State(state): State<AppState>,
+    Path(attempt_id): Path<Uuid>,
+) -> Result<(), ApiError> {
+    let attempt_context = load_attempt_context(&state, attempt_id).await?;
+
+    RbacChecker::check_permission(
+        auth_user.id,
+        attempt_context.project_id,
+        Permission::ManageProject,
+        &state.db,
+    )
+    .await?;
+
+    if get_existing_preview(&state, attempt_id).await?.is_some() {
+        let resources = state
+            .preview_manager
+            .mark_preview_deleted(attempt_id)
+            .await
+            .map_err(|e| ApiError::Internal(e.to_string()))?;
+
+        if let Some((tunnel_id, dns_record_id)) = resources {
+            let pm = state.preview_manager.clone();
+            tokio::spawn(async move {
+                pm.cleanup_preview_resources(attempt_id, tunnel_id, dns_record_id)
+                    .await;
+            });
+        }
+
+        mark_attempt_preview_stopped(&state, attempt_id).await?;
+        return Ok(());
+    }
+
+    let control = parse_preview_runtime_control(&attempt_context.metadata).ok_or_else(|| {
+        ApiError::BadRequest("Preview is not controllable via ACPMS".to_string())
+    })?;
+
+    if !control.controllable {
+        return Err(ApiError::BadRequest(
+            "Preview is not controllable via ACPMS".to_string(),
+        ));
+    }
+
+    let runtime_type = control.runtime_type.clone().ok_or_else(|| {
+        ApiError::BadRequest("Preview runtime_type is missing from control contract".to_string())
+    })?;
+
+    state
+        .preview_manager
+        .stop_preview_runtime_with_contract(
+            &runtime_type,
+            control.container_name.as_deref(),
+            control.compose_project_name.as_deref(),
+        )
+        .await
+        .map_err(|e| ApiError::Internal(e.to_string()))?;
+
+    mark_attempt_preview_stopped(&state, attempt_id).await?;
+    Ok(())
+}
+
 fn is_preview_supported_project_type(project_type: ProjectType) -> bool {
     matches!(
         project_type,
@@ -387,6 +494,188 @@ fn project_type_label(project_type: ProjectType) -> &'static str {
 
 fn preview_start_lock_key(attempt_id: Uuid) -> String {
     format!("preview_start:{attempt_id}")
+}
+
+#[derive(Debug, Clone)]
+struct PreviewRuntimeControlMetadata {
+    controllable: bool,
+    runtime_type: Option<String>,
+    container_name: Option<String>,
+    compose_project_name: Option<String>,
+    control_source: Option<String>,
+}
+
+fn parse_preview_runtime_control(metadata: &Value) -> Option<PreviewRuntimeControlMetadata> {
+    let control = metadata.get("preview_runtime_control")?.as_object()?;
+    let runtime_type = control
+        .get("runtime_type")
+        .and_then(Value::as_str)
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+        .map(ToString::to_string);
+    let container_name = control
+        .get("container_name")
+        .and_then(Value::as_str)
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+        .map(ToString::to_string);
+    let compose_project_name = control
+        .get("compose_project_name")
+        .and_then(Value::as_str)
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+        .map(ToString::to_string);
+
+    let controllable = control
+        .get("controllable")
+        .and_then(Value::as_bool)
+        .unwrap_or_else(|| {
+            (matches!(runtime_type.as_deref(), Some("docker_container"))
+                && container_name.is_some())
+                || (matches!(runtime_type.as_deref(), Some("docker_compose_project"))
+                    && compose_project_name.is_some())
+        });
+
+    Some(PreviewRuntimeControlMetadata {
+        controllable,
+        runtime_type,
+        container_name,
+        compose_project_name,
+        control_source: metadata
+            .get("preview_runtime_control_source")
+            .and_then(Value::as_str)
+            .map(ToString::to_string),
+    })
+}
+
+fn preview_signal_present(metadata: &Value) -> bool {
+    metadata
+        .get("preview_target")
+        .and_then(Value::as_str)
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+        .is_some()
+        || metadata
+            .get("preview_url_agent")
+            .or_else(|| metadata.get("preview_url"))
+            .and_then(Value::as_str)
+            .map(str::trim)
+            .filter(|value| !value.is_empty())
+            .is_some()
+}
+
+fn preview_runtime_stopped(metadata: &Value) -> bool {
+    matches!(
+        metadata.get("preview_runtime_state").and_then(Value::as_str),
+        Some("stopped")
+    )
+}
+
+fn build_preview_control_response(
+    attempt_id: Uuid,
+    metadata: &Value,
+    managed_preview_exists: bool,
+) -> PreviewControlResponse {
+    if managed_preview_exists {
+        return PreviewControlResponse {
+            attempt_id,
+            preview_available: true,
+            controllable: true,
+            dismissible: false,
+            action: "stop".to_string(),
+            runtime_type: Some("managed_preview".to_string()),
+            control_source: Some("preview_manager".to_string()),
+            container_name: None,
+            compose_project_name: None,
+        };
+    }
+
+    if preview_runtime_stopped(metadata) {
+        return PreviewControlResponse {
+            attempt_id,
+            preview_available: false,
+            controllable: false,
+            dismissible: false,
+            action: "none".to_string(),
+            runtime_type: None,
+            control_source: None,
+            container_name: None,
+            compose_project_name: None,
+        };
+    }
+
+    let preview_available = preview_signal_present(metadata);
+    if !preview_available {
+        return PreviewControlResponse {
+            attempt_id,
+            preview_available: false,
+            controllable: false,
+            dismissible: false,
+            action: "none".to_string(),
+            runtime_type: None,
+            control_source: None,
+            container_name: None,
+            compose_project_name: None,
+        };
+    }
+
+    if let Some(control) = parse_preview_runtime_control(metadata) {
+        if control.controllable {
+            return PreviewControlResponse {
+                attempt_id,
+                preview_available: true,
+                controllable: true,
+                dismissible: false,
+                action: "stop".to_string(),
+                runtime_type: control.runtime_type,
+                control_source: control.control_source,
+                container_name: control.container_name,
+                compose_project_name: control.compose_project_name,
+            };
+        }
+    }
+
+    PreviewControlResponse {
+        attempt_id,
+        preview_available: true,
+        controllable: false,
+        dismissible: true,
+        action: "dismiss".to_string(),
+        runtime_type: None,
+        control_source: metadata
+            .get("preview_target_source")
+            .or_else(|| metadata.get("preview_url_source"))
+            .and_then(Value::as_str)
+            .map(ToString::to_string),
+        container_name: None,
+        compose_project_name: None,
+    }
+}
+
+async fn mark_attempt_preview_stopped(
+    state: &AppState,
+    attempt_id: Uuid,
+) -> Result<(), ApiError> {
+    let stopped_at = Utc::now().to_rfc3339();
+    let patch = serde_json::json!({
+        "preview_runtime_state": "stopped",
+        "preview_runtime_stopped_at": stopped_at,
+    });
+
+    sqlx::query(
+        r#"
+        UPDATE task_attempts
+        SET metadata = COALESCE(metadata, '{}'::jsonb) || $2::jsonb
+        WHERE id = $1
+        "#,
+    )
+    .bind(attempt_id)
+    .bind(patch)
+    .execute(&state.db)
+    .await
+    .map_err(|e| ApiError::Internal(e.to_string()))?;
+
+    Ok(())
 }
 
 fn missing_cloudflare_config_fields(settings: &SystemSettingsResponse) -> Vec<&'static str> {
@@ -435,6 +724,7 @@ struct AttemptContext {
     task_title: String,
     project_type: ProjectType,
     preview_enabled: bool,
+    metadata: Value,
 }
 
 #[derive(Debug, Serialize)]
@@ -463,7 +753,8 @@ async fn load_attempt_context(
             (
                 COALESCE((p.settings->>'auto_deploy')::boolean, false)
                 OR COALESCE((p.settings->>'preview_enabled')::boolean, true)
-            ) AS preview_enabled
+            ) AS preview_enabled,
+            COALESCE(ta.metadata, '{}'::jsonb) AS metadata
         FROM task_attempts ta
         JOIN tasks t ON t.id = ta.task_id
         JOIN projects p ON p.id = t.project_id

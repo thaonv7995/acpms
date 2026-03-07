@@ -1250,6 +1250,38 @@ impl PreviewManager {
         Ok(())
     }
 
+    /// Stop a preview runtime described by persisted agent contract metadata.
+    pub async fn stop_preview_runtime_with_contract(
+        &self,
+        runtime_type: &str,
+        container_name: Option<&str>,
+        compose_project_name: Option<&str>,
+    ) -> Result<()> {
+        if !is_docker_runtime_enabled() {
+            return Ok(());
+        }
+
+        match runtime_type {
+            "docker_container" => {
+                let container_name = container_name
+                    .map(str::trim)
+                    .filter(|value| !value.is_empty())
+                    .context("Missing container_name for docker_container preview control")?;
+                stop_docker_container_by_name(container_name)
+            }
+            "docker_compose_project" => {
+                let compose_project_name = compose_project_name
+                    .map(str::trim)
+                    .filter(|value| !value.is_empty())
+                    .context(
+                        "Missing compose_project_name for docker_compose_project preview control",
+                    )?;
+                stop_docker_compose_project_by_name(compose_project_name)
+            }
+            other => anyhow::bail!("Unsupported preview runtime_type '{}'", other),
+        }
+    }
+
     /// Get preview Docker runtime status for an attempt.
     pub async fn get_preview_runtime_status(
         &self,
@@ -1996,6 +2028,123 @@ impl PreviewManager {
 
         Ok(())
     }
+}
+
+fn stop_docker_container_by_name(container_name: &str) -> Result<()> {
+    let output = Command::new(preview_docker_command())
+        .arg("rm")
+        .arg("-f")
+        .arg(container_name)
+        .output()
+        .with_context(|| format!("Failed to execute docker rm -f for {}", container_name))?;
+
+    if output.status.success() {
+        return Ok(());
+    }
+
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    if stderr.to_lowercase().contains("no such container") {
+        return Ok(());
+    }
+
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    anyhow::bail!(
+        "docker rm -f failed for {} (status: {:?})\nstdout: {}\nstderr: {}",
+        container_name,
+        output.status.code(),
+        stdout,
+        stderr
+    );
+}
+
+fn stop_docker_compose_project_by_name(project_name: &str) -> Result<()> {
+    let list_output = Command::new(preview_docker_command())
+        .arg("ps")
+        .arg("-aq")
+        .arg("--filter")
+        .arg(format!("label=com.docker.compose.project={}", project_name))
+        .output()
+        .with_context(|| {
+            format!(
+                "Failed to list docker containers for compose project {}",
+                project_name
+            )
+        })?;
+
+    if !list_output.status.success() {
+        let stderr = String::from_utf8_lossy(&list_output.stderr);
+        let stdout = String::from_utf8_lossy(&list_output.stdout);
+        anyhow::bail!(
+            "docker ps failed for compose project {} (status: {:?})\nstdout: {}\nstderr: {}",
+            project_name,
+            list_output.status.code(),
+            stdout,
+            stderr
+        );
+    }
+
+    let container_ids = String::from_utf8_lossy(&list_output.stdout)
+        .lines()
+        .map(str::trim)
+        .filter(|line| !line.is_empty())
+        .map(ToString::to_string)
+        .collect::<Vec<_>>();
+
+    if container_ids.is_empty() {
+        return Ok(());
+    }
+
+    let output = Command::new(preview_docker_command())
+        .arg("rm")
+        .arg("-f")
+        .args(&container_ids)
+        .output()
+        .with_context(|| {
+            format!(
+                "Failed to execute docker rm -f for compose project {}",
+                project_name
+            )
+        })?;
+
+    if !output.status.success() {
+        let stderr = String::from_utf8_lossy(&output.stderr);
+        let stdout = String::from_utf8_lossy(&output.stdout);
+        anyhow::bail!(
+            "docker rm -f failed for compose project {} (status: {:?})\nstdout: {}\nstderr: {}",
+            project_name,
+            output.status.code(),
+            stdout,
+            stderr
+        );
+    }
+
+    let network_output = Command::new(preview_docker_command())
+        .arg("network")
+        .arg("ls")
+        .arg("-q")
+        .arg("--filter")
+        .arg(format!("label=com.docker.compose.project={}", project_name))
+        .output();
+
+    if let Ok(network_output) = network_output {
+        if network_output.status.success() {
+            let network_ids = String::from_utf8_lossy(&network_output.stdout)
+                .lines()
+                .map(str::trim)
+                .filter(|line| !line.is_empty())
+                .map(ToString::to_string)
+                .collect::<Vec<_>>();
+            if !network_ids.is_empty() {
+                let _ = Command::new(preview_docker_command())
+                    .arg("network")
+                    .arg("rm")
+                    .args(&network_ids)
+                    .output();
+            }
+        }
+    }
+
+    Ok(())
 }
 
 fn preview_docker_project_name(attempt_id: Uuid) -> String {

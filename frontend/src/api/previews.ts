@@ -51,6 +51,18 @@ export interface PreviewRuntimeLogs {
     message: string | null;
 }
 
+export interface PreviewControlInfo {
+    attempt_id: string;
+    preview_available: boolean;
+    controllable: boolean;
+    dismissible: boolean;
+    action: 'stop' | 'dismiss' | 'none';
+    runtime_type: string | null;
+    control_source: string | null;
+    container_name: string | null;
+    compose_project_name: string | null;
+}
+
 async function parsePreviewPayload<T>(response: Response): Promise<T> {
     if (!response.ok) {
         try {
@@ -113,6 +125,15 @@ export async function getPreview(attemptId: string): Promise<PreviewInfo | null>
     return parsePreviewPayload<PreviewInfo | null>(response);
 }
 
+export async function getPreviewControl(
+    attemptId: string
+): Promise<PreviewControlInfo> {
+    const response = await authenticatedFetch(
+        `${API_PREFIX}/attempts/${attemptId}/preview/control`
+    );
+    return parsePreviewPayload<PreviewControlInfo>(response);
+}
+
 export async function getPreviewReadiness(attemptId: string): Promise<PreviewReadiness> {
     const response = await authenticatedFetch(
         `${API_PREFIX}/attempts/${attemptId}/preview/readiness`
@@ -143,5 +164,15 @@ export async function deletePreview(previewId: string): Promise<void> {
     const response = await authenticatedFetch(`${API_PREFIX}/previews/${previewId}`, {
         method: 'DELETE',
     });
+    await parsePreviewPayload<void>(response);
+}
+
+export async function stopPreviewForAttempt(attemptId: string): Promise<void> {
+    const response = await authenticatedFetch(
+        `${API_PREFIX}/attempts/${attemptId}/preview`,
+        {
+            method: 'DELETE',
+        }
+    );
     await parsePreviewPayload<void>(response);
 }

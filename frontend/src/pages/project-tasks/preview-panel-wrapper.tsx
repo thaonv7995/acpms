@@ -23,11 +23,14 @@ export function PreviewPanelWrapper({
     errorMessage,
     startServer,
     stopServer,
+    dismissPreview,
     restartServer,
     startDisabled,
     startDisabledReason,
     externalPreview,
     previewRevision,
+    canStopPreview,
+    dismissOnly,
   } = useDevServer(taskId, attemptId, fallbackPreviewUrl, autoStartOnMount);
 
   return (
@@ -39,9 +42,13 @@ export function PreviewPanelWrapper({
       previewRevision={previewRevision}
       onStart={startServer}
       onStop={stopServer}
+      onDismiss={dismissPreview}
       onRestart={restartServer}
+      onRebuild={restartServer}
       startDisabled={startDisabled}
       startDisabledReason={startDisabledReason}
+      canStopPreview={canStopPreview}
+      dismissOnly={dismissOnly}
     />
   );
 }

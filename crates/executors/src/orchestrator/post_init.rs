@@ -766,6 +766,11 @@ Project type: {}
 1. Fix deployment-related files and configs (Dockerfile, compose files, startup scripts, env wiring).
 2. Ensure the app can be deployed for preview/runtime.
 3. Start preview runtime and output `PREVIEW_TARGET: http://127.0.0.1:<port>` in your final message.
+   If you launch preview via Docker, also write `.acpms/preview-output.json` with
+   `preview_target` and `runtime_control` metadata, for example:
+   `{{"preview_target":"http://127.0.0.1:8080","runtime_control":{{"controllable":true,"runtime_type":"docker_container","container_name":"my-preview"}}}}`
+   or
+   `{{"preview_target":"http://127.0.0.1:8080","runtime_control":{{"controllable":true,"runtime_type":"docker_compose_project","compose_project_name":"my-preview-project"}}}}`
 4. Re-run the failing deployment command(s) before finishing.
 5. Commit and push fixes to the same branch/repository.
 6. Summarize root cause and deployment fixes in final output.
@@ -1722,7 +1727,8 @@ Project type: {}
             } else {
                 "Preview delivery is enabled but agent did not output PREVIEW_TARGET. \
                 Deploy preview requires: start the app (e.g. docker compose up -d or npm run dev) \
-                and output PREVIEW_TARGET: http://127.0.0.1:<port> or create .acpms/preview-output.json. \
+                and output PREVIEW_TARGET: http://127.0.0.1:<port> or create .acpms/preview-output.json \
+                with preview_target and runtime_control metadata for stoppable Docker preview. \
                 If you cannot provide PREVIEW_TARGET, you MUST output DEPLOYMENT_FAILURE_REASON: <root cause> \
                 (e.g. app failed to start, port conflict, docker compose error, Cloudflare not configured)."
                     .to_string()

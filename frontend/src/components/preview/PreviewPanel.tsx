@@ -1,7 +1,20 @@
 import { useState, useRef, useEffect } from 'react';
-import { RefreshCw, Maximize2, Minimize2, AlertCircle, Loader2 } from 'lucide-react';
+import {
+  ExternalLink,
+  Hammer,
+  Loader2,
+  Maximize2,
+  Minimize2,
+  Play,
+  RefreshCw,
+  RotateCw,
+  Square,
+  CheckCircle2,
+  AlertCircle,
+  X,
+} from 'lucide-react';
 import { Button } from '@/components/ui/button';
-import { DevServerControls, DevServerStatus } from './DevServerControls';
+import type { DevServerStatus } from './DevServerControls';
 
 interface PreviewPanelProps {
   devServerUrl?: string;
@@ -11,9 +24,13 @@ interface PreviewPanelProps {
   previewRevision?: number;
   onStart: () => void;
   onStop: () => void;
+  onDismiss: () => void;
   onRestart: () => void;
+  onRebuild?: () => void;
   startDisabled?: boolean;
   startDisabledReason?: string;
+  canStopPreview?: boolean;
+  dismissOnly?: boolean;
   className?: string;
 }
 
@@ -61,9 +78,13 @@ export function PreviewPanel({
   previewRevision = 0,
   onStart,
   onStop,
+  onDismiss,
   onRestart,
+  onRebuild,
   startDisabled = false,
   startDisabledReason,
+  canStopPreview = false,
+  dismissOnly = false,
   className = '',
 }: PreviewPanelProps) {
   const [isFullscreen, setIsFullscreen] = useState(false);
@@ -74,8 +95,42 @@ export function PreviewPanel({
   const iframeSrc = buildIframeSrc(devServerUrl, externalPreview, previewRevision);
 
   const isRunning = status === 'running';
+  const isStarting = status === 'starting';
+  const isStopping = status === 'stopping';
+  const hasError = status === 'error';
   const hasUrl = Boolean(devServerUrl);
   const canShowPreview = hasUrl && (isRunning || externalPreview);
+  const canManageRuntime = !externalPreview;
+  const effectiveRebuild = onRebuild ?? onRestart;
+
+  const statusIcon = (() => {
+    if (hasError) {
+      return <AlertCircle className="w-4 h-4 text-destructive shrink-0" />;
+    }
+    if (isStarting || isStopping) {
+      return <Loader2 className="w-4 h-4 animate-spin text-muted-foreground shrink-0" />;
+    }
+    if (canShowPreview || isRunning) {
+      return <CheckCircle2 className="w-4 h-4 text-green-600 shrink-0" />;
+    }
+    return <Play className="w-4 h-4 text-muted-foreground shrink-0" />;
+  })();
+
+  const statusText = (() => {
+    if (devServerUrl) {
+      return devServerUrl;
+    }
+    if (hasError) {
+      return errorMessage || 'Preview failed to start';
+    }
+    if (isStarting) {
+      return 'Starting preview...';
+    }
+    if (isStopping) {
+      return 'Stopping preview...';
+    }
+    return startDisabledReason || 'Preview is not running';
+  })();
 
   // Reload iframe when the preview source changes. External preview may reuse
   // the same URL across follow-ups, so previewRevision forces a refresh.
@@ -89,6 +144,11 @@ export function PreviewPanel({
   const handleRefresh = () => {
     setIframeKey((prev) => prev + 1);
     setIsIframeLoading(true);
+  };
+
+  const handleOpen = () => {
+    if (!iframeSrc) return;
+    window.open(iframeSrc, '_blank', 'noopener,noreferrer');
   };
 
   const handleFullscreen = () => {
@@ -123,52 +183,123 @@ export function PreviewPanel({
       ref={containerRef}
       className={`flex flex-col h-full bg-background ${className}`}
     >
-      {/* Dev Server Controls */}
-      <DevServerControls
-        status={status}
-        url={devServerUrl}
-        errorMessage={errorMessage}
-        externalPreview={externalPreview}
-        onStart={onStart}
-        onStop={onStop}
-        onRestart={onRestart}
-        startDisabled={startDisabled}
-        startDisabledReason={startDisabledReason}
-      />
-
-      {/* Preview Toolbar (only when running) */}
-      {canShowPreview && (
-        <div className="flex items-center justify-between px-4 py-2 border-b border-border bg-muted/50">
-          <div className="text-xs text-muted-foreground font-mono truncate">
-            {devServerUrl}
+      {/* Preview Action Bar */}
+      {(canShowPreview || canManageRuntime) && (
+        <div className="flex items-center justify-between gap-3 px-3 py-1.5 border-b border-border bg-muted/50">
+          <div className="min-w-0 flex-1 flex items-center gap-2">
+            {statusIcon}
+            <div
+              className={`text-xs truncate leading-5 ${
+                devServerUrl ? 'text-muted-foreground font-mono' : hasError ? 'text-destructive' : 'text-muted-foreground'
+              }`}
+            >
+              {statusText}
+            </div>
           </div>
-          <div className="flex items-center gap-1">
+          <div className="flex items-center gap-1 shrink-0">
+            {!canShowPreview && canManageRuntime && (
+              <Button
+                onClick={onStart}
+                size="icon"
+                variant="outline"
+                className="h-8 w-8 text-emerald-400 hover:text-emerald-300 hover:bg-emerald-500/10"
+                disabled={isStarting || isStopping || startDisabled}
+                title={startDisabledReason || 'Start preview'}
+                aria-label="Start preview"
+              >
+                {isStarting ? (
+                  <Loader2 className="w-4 h-4 animate-spin" />
+                ) : (
+                  <Play className="w-4 h-4" />
+                )}
+              </Button>
+            )}
+            {canShowPreview && (
+              <Button
+                onClick={handleOpen}
+                size="icon"
+                variant="ghost"
+                className="h-8 w-8 text-muted-foreground hover:text-foreground hover:bg-muted"
+                title="Open preview in a new tab"
+                aria-label="Open preview in a new tab"
+              >
+                <ExternalLink className="w-4 h-4" />
+              </Button>
+            )}
             <Button
               onClick={handleRefresh}
-              size="sm"
+              size="icon"
               variant="ghost"
-              className="gap-2"
-              disabled={isIframeLoading}
+              className="h-8 w-8 text-sky-400 hover:text-sky-300 hover:bg-sky-500/10"
+              disabled={!canShowPreview || isIframeLoading}
+              title="Reload the current preview view"
+              aria-label="Refresh preview"
             >
               <RefreshCw className={`w-4 h-4 ${isIframeLoading ? 'animate-spin' : ''}`} />
-              Reload
             </Button>
+            {canManageRuntime && canShowPreview && (
+              <>
+                <Button
+                  onClick={onRestart}
+                  size="icon"
+                  variant="ghost"
+                  className="h-8 w-8 text-amber-400 hover:text-amber-300 hover:bg-amber-500/10"
+                  disabled={!isRunning || isStarting || isStopping}
+                  title="Restart the running preview service"
+                  aria-label="Restart preview runtime"
+                >
+                  <RotateCw className="w-4 h-4" />
+                </Button>
+                <Button
+                  onClick={effectiveRebuild}
+                  size="icon"
+                  variant="ghost"
+                  className="h-8 w-8 text-cyan-400 hover:text-cyan-300 hover:bg-cyan-500/10"
+                  disabled={!isRunning || isStarting || isStopping}
+                  title="Rebuild preview from the latest source"
+                  aria-label="Rebuild preview from the latest source"
+                >
+                  <Hammer className="w-4 h-4" />
+                </Button>
+              </>
+            )}
+            {canStopPreview && (
+              <Button
+                onClick={onStop}
+                size="icon"
+                variant="ghost"
+                className="h-8 w-8 text-rose-400 hover:text-rose-300 hover:bg-rose-500/10"
+                disabled={isStopping}
+                title="Stop preview"
+                aria-label="Stop preview"
+              >
+                <Square className="w-4 h-4" />
+              </Button>
+            )}
+            {!canStopPreview && dismissOnly && canShowPreview && (
+              <Button
+                onClick={onDismiss}
+                size="icon"
+                variant="ghost"
+                className="h-8 w-8 text-muted-foreground hover:text-foreground hover:bg-muted"
+                title="Dismiss preview"
+                aria-label="Dismiss preview"
+              >
+                <X className="w-4 h-4" />
+              </Button>
+            )}
             <Button
               onClick={handleFullscreen}
-              size="sm"
+              size="icon"
               variant="ghost"
-              className="gap-2"
+              className="h-8 w-8 text-muted-foreground hover:text-foreground hover:bg-muted"
+              title={isFullscreen ? 'Exit fullscreen' : 'Enter fullscreen'}
+              aria-label={isFullscreen ? 'Exit fullscreen' : 'Enter fullscreen'}
             >
               {isFullscreen ? (
-                <>
-                  <Minimize2 className="w-4 h-4" />
-                  Exit Fullscreen
-                </>
+                <Minimize2 className="w-4 h-4" />
               ) : (
-                <>
-                  <Maximize2 className="w-4 h-4" />
-                  Fullscreen
-                </>
+                <Maximize2 className="w-4 h-4" />
               )}
             </Button>
           </div>
@@ -185,23 +316,11 @@ export function PreviewPanel({
               <h3 className="text-lg font-semibold text-foreground mb-2">
                 No Preview Available
               </h3>
-              <p className="text-sm text-muted-foreground mb-4">
+              <p className="text-sm text-muted-foreground">
                 {!isRunning
-                  ? 'Start the dev server to see a live preview of your changes.'
-                  : 'Waiting for dev server URL...'}
+                  ? 'Use the action bar above to start a preview runtime for this task.'
+                  : 'Waiting for the preview URL...'}
               </p>
-              {!isRunning && !externalPreview && (
-                <Button
-                  onClick={onStart}
-                  size="sm"
-                  className="gap-2"
-                  disabled={startDisabled}
-                  title={startDisabledReason}
-                >
-                  <Loader2 className="w-4 h-4" />
-                  Start Dev Server
-                </Button>
-              )}
             </div>
           </div>
         ) : (

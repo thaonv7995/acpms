@@ -2228,6 +2228,7 @@ fn builtin_skill_content(skill_id: &str) -> Option<&'static str> {
         "cloudflare-tunnel-setup-guide" => Some(
             r#"Guide for Cloudflare tunnel preview. Required System Settings: Account ID, API Token, Zone ID, Base Domain.
 - Output PREVIEW_TARGET: http://127.0.0.1:<port> when preview needed.
+- If preview runs in Docker, write `.acpms/preview-output.json` with `preview_target` and `runtime_control`.
 - When tunnel fails: tell user to ensure all 4 fields in System Settings (/settings)."#,
         ),
         "deploy-cloudflare-pages" => Some(
@@ -2243,6 +2244,7 @@ fn builtin_skill_content(skill_id: &str) -> Option<&'static str> {
         "setup-cloudflare-tunnel" => Some(
             r#"Prepare preview tunnel details for web/api.
 - Produce PREVIEW_TARGET for runtime endpoint.
+- If preview runtime is controllable via Docker, emit `.acpms/preview-output.json` with `runtime_control`.
 - If public URL is available, output PREVIEW_URL."#,
         ),
         "deploy-precheck-cloudflare" => Some(
