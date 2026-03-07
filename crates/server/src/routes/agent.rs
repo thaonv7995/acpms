@@ -1364,21 +1364,18 @@ const CODEX_NPX_AUTH_DEVICE_ARGS: &[&str] = &["-y", "@openai/codex", "login", "-
 const CLAUDE_AUTH_LOGIN_ARGS: &[&str] = &["auth", "login"];
 const CLAUDE_NPX_AUTH_LOGIN_ARGS: &[&str] = &["-y", "@anthropic-ai/claude-code", "auth", "login"];
 #[cfg(test)]
-const CLAUDE_SCRIPT_AUTH_LOGIN_ARGS: &[&str] = &["-q", "/dev/null", "claude", "auth", "login"];
+const CLAUDE_SCRIPT_AUTH_LOGIN_ARGS: &[&str] = &["-q", "-c", "claude auth login", "/dev/null"];
 #[cfg(test)]
 const CLAUDE_NPX_SCRIPT_AUTH_LOGIN_ARGS: &[&str] = &[
     "-q",
+    "-c",
+    "npx -y @anthropic-ai/claude-code auth login",
     "/dev/null",
-    "npx",
-    "-y",
-    "@anthropic-ai/claude-code",
-    "auth",
-    "login",
 ];
 #[cfg(test)]
-const GEMINI_SCRIPT_ARGS: &[&str] = &["-q", "/dev/null", "gemini"];
+const GEMINI_SCRIPT_ARGS: &[&str] = &["-q", "-c", "gemini", "/dev/null"];
 #[cfg(test)]
-const GEMINI_NPX_SCRIPT_ARGS: &[&str] = &["-q", "/dev/null", "npx", "-y", "@google/gemini-cli"];
+const GEMINI_NPX_SCRIPT_ARGS: &[&str] = &["-q", "-c", "npx -y @google/gemini-cli", "/dev/null"];
 const CURSOR_AUTH_LOGIN_ARGS: &[&str] = &["login"];
 const CLAUDE_OAUTH_URL_PREFIXES: [&str; 2] = [
     "https://claude.ai/oauth/authorize",
@@ -1389,14 +1386,19 @@ fn owned_args(args: &[&str]) -> Vec<String> {
     args.iter().map(|arg| (*arg).to_string()).collect()
 }
 
+/// Wrap command+args for `script` (GNU util-linux on Debian uses -c "cmd"; BSD uses separate args).
+/// Use -c "full command" so it works on both Debian/GNU and macOS/BSD.
 fn wrap_with_script_args(command: &str, args: &[String]) -> Vec<String> {
-    let mut wrapped = vec![
+    let full_cmd = std::iter::once(command.to_string())
+        .chain(args.iter().cloned())
+        .collect::<Vec<_>>()
+        .join(" ");
+    vec![
         "-q".to_string(),
+        "-c".to_string(),
+        full_cmd,
         "/dev/null".to_string(),
-        command.to_string(),
-    ];
-    wrapped.extend(args.iter().cloned());
-    wrapped
+    ]
 }
 
 async fn resolve_claude_auth_args(use_npx: bool, npx_cmd: Option<&str>) -> &'static [&'static str] {
@@ -1854,29 +1856,34 @@ async fn run_command_probe_owned(
     run_command_probe(cmd, &arg_refs, timeout_secs).await
 }
 
+/// Build script args for Gemini auth. Use -c "full command" for GNU script (Debian) compatibility.
 async fn resolve_gemini_auth_script_args(
     gemini_cmd: Option<&str>,
     npx_cmd: Option<&str>,
 ) -> Vec<String> {
-    let mut args = vec!["-q".to_string(), "/dev/null".to_string()];
-    if let Some(cmd) = gemini_cmd {
-        args.push(cmd.to_string());
+    let cmd_parts: Vec<String> = if let Some(cmd) = gemini_cmd {
+        let mut parts = vec![cmd.to_string()];
         if gemini_supports_auth_subcommand(Some(cmd), None).await {
-            args.push("auth".to_string());
+            parts.push("auth".to_string());
         }
-        return args;
-    }
-
-    if let Some(npx) = npx_cmd {
-        args.push(npx.to_string());
-        args.push("-y".to_string());
-        args.push("@google/gemini-cli".to_string());
+        parts
+    } else if let Some(npx) = npx_cmd {
+        let mut parts = vec![npx.to_string(), "-y".to_string(), "@google/gemini-cli".to_string()];
         if gemini_supports_auth_subcommand(None, Some(npx)).await {
-            args.push("auth".to_string());
+            parts.push("auth".to_string());
         }
-    }
+        parts
+    } else {
+        return vec!["-q".to_string(), "-c".to_string(), "gemini".to_string(), "/dev/null".to_string()];
+    };
 
-    args
+    let full_cmd = cmd_parts.join(" ");
+    vec![
+        "-q".to_string(),
+        "-c".to_string(),
+        full_cmd,
+        "/dev/null".to_string(),
+    ]
 }
 
 async fn gemini_supports_auth_subcommand(gemini_cmd: Option<&str>, npx_cmd: Option<&str>) -> bool {
