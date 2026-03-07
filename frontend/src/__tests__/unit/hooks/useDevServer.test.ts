@@ -1,5 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import {
+  extractPreviewUrlFromAttemptLogs,
+  extractPreviewUrlFromText,
   isPreviewAlreadyStoppedMessage,
   isPreviewReadinessBlockingMessage,
   mapPreviewErrorMessage,
@@ -87,5 +89,39 @@ describe('useDevServer error helpers', () => {
     expect(
       mapPreviewErrorMessage('Preview not found for this attempt')
     ).toBe('Preview is already stopped for this attempt.');
+  });
+
+  it('extracts PREVIEW_TARGET from plain-text output', () => {
+    expect(
+      extractPreviewUrlFromText(
+        'Deployment ready\nPREVIEW_TARGET:\nhttp://127.0.0.1:4321\n'
+      )
+    ).toBe('http://127.0.0.1:4321');
+
+    expect(
+      extractPreviewUrlFromText('Expected format: PREVIEW_TARGET: http://127.0.0.1:<port>')
+    ).toBeUndefined();
+  });
+
+  it('extracts the latest PREVIEW_TARGET from attempt logs', () => {
+    expect(
+      extractPreviewUrlFromAttemptLogs([
+        {
+          id: '1',
+          attempt_id: 'attempt-1',
+          log_type: 'stdout',
+          content: 'PREVIEW_TARGET: http://127.0.0.1:3000',
+          created_at: '2026-03-06T08:00:00Z',
+        },
+        {
+          id: '2',
+          attempt_id: 'attempt-1',
+          log_type: 'stdout',
+          content:
+            '{"content":"Deploy summary\\nPREVIEW_TARGET: http://127.0.0.1:4321"}',
+          created_at: '2026-03-06T08:01:00Z',
+        },
+      ])
+    ).toBe('http://127.0.0.1:4321');
   });
 });

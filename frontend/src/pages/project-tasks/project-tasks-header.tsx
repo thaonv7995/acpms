@@ -20,6 +20,7 @@ interface ProjectTasksHeaderProps {
   onModeChange: (mode: LayoutMode) => void;
   onBackToTask: () => void;
   onClose: () => void;
+  showPreviewToggle?: boolean;
   previewModeDisabled?: boolean;
   previewModeDisabledReason?: string;
   downloadArtifactUrl?: string;
@@ -58,6 +59,7 @@ export function ProjectTasksHeader({
   onModeChange,
   onBackToTask,
   onClose,
+  showPreviewToggle = true,
   previewModeDisabled = false,
   previewModeDisabledReason,
   downloadArtifactUrl,
@@ -88,6 +90,7 @@ export function ProjectTasksHeader({
             task={selectedTask}
             attempt={selectedAttempt}
             onClose={onClose}
+            showPreviewToggle={showPreviewToggle}
             previewDisabled={previewModeDisabled}
             previewDisabledReason={previewModeDisabledReason}
             downloadArtifactUrl={downloadArtifactUrl}

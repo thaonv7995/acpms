@@ -7,11 +7,13 @@ import { PreviewPanel } from '../../components/preview/PreviewPanel';
 interface PreviewPanelWrapperProps {
   taskId: string;
   attemptId: string;
+  fallbackPreviewUrl?: string;
 }
 
 export function PreviewPanelWrapper({
   taskId,
   attemptId,
+  fallbackPreviewUrl,
 }: PreviewPanelWrapperProps) {
   const {
     status,
@@ -22,13 +24,15 @@ export function PreviewPanelWrapper({
     restartServer,
     startDisabled,
     startDisabledReason,
-  } = useDevServer(taskId, attemptId);
+    externalPreview,
+  } = useDevServer(taskId, attemptId, fallbackPreviewUrl);
 
   return (
     <PreviewPanel
       devServerUrl={url}
       status={status}
       errorMessage={errorMessage}
+      externalPreview={externalPreview}
       onStart={startServer}
       onStop={stopServer}
       onRestart={restartServer}

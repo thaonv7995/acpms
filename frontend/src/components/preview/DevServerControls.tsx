@@ -12,6 +12,7 @@ interface DevServerControlsProps {
   onRestart: () => void;
   startDisabled?: boolean;
   startDisabledReason?: string;
+  externalPreview?: boolean;
   className?: string;
 }
 
@@ -36,6 +37,7 @@ export function DevServerControls({
   onRestart,
   startDisabled = false,
   startDisabledReason,
+  externalPreview = false,
   className = '',
 }: DevServerControlsProps) {
   const isStarting = status === 'starting';
@@ -59,6 +61,11 @@ export function DevServerControls({
   };
 
   const getStatusText = () => {
+    if (externalPreview) {
+      return url
+        ? `Agent-reported preview target on ${url}`
+        : 'Agent-reported preview target available';
+    }
     switch (status) {
       case 'starting':
         return 'Starting dev server...';
@@ -84,7 +91,7 @@ export function DevServerControls({
       </div>
 
       {/* URL Display (when running) */}
-      {isRunning && url && (
+      {(isRunning || externalPreview) && url && (
         <div className="flex items-center gap-2">
           <input
             type="text"
@@ -103,49 +110,51 @@ export function DevServerControls({
       )}
 
       {/* Control Buttons */}
-      <div className="flex items-center gap-2">
-        <Button
-          onClick={onStart}
-          disabled={isStarting || isRunning || isStopping || startDisabled}
-          size="sm"
-          variant="default"
-          className="gap-2"
-          title={startDisabledReason}
-        >
-          {isStarting ? (
-            <Loader2 className="w-4 h-4 animate-spin" />
-          ) : (
-            <Play className="w-4 h-4" />
-          )}
-          {startButtonLabel}
-        </Button>
+      {!externalPreview && (
+        <div className="flex items-center gap-2">
+          <Button
+            onClick={onStart}
+            disabled={isStarting || isRunning || isStopping || startDisabled}
+            size="sm"
+            variant="default"
+            className="gap-2"
+            title={startDisabledReason}
+          >
+            {isStarting ? (
+              <Loader2 className="w-4 h-4 animate-spin" />
+            ) : (
+              <Play className="w-4 h-4" />
+            )}
+            {startButtonLabel}
+          </Button>
 
-        <Button
-          onClick={onStop}
-          disabled={!isRunning || isStopping}
-          size="sm"
-          variant="outline"
-          className="gap-2"
-        >
-          {isStopping ? (
-            <Loader2 className="w-4 h-4 animate-spin" />
-          ) : (
-            <Square className="w-4 h-4" />
-          )}
-          Stop
-        </Button>
+          <Button
+            onClick={onStop}
+            disabled={!isRunning || isStopping}
+            size="sm"
+            variant="outline"
+            className="gap-2"
+          >
+            {isStopping ? (
+              <Loader2 className="w-4 h-4 animate-spin" />
+            ) : (
+              <Square className="w-4 h-4" />
+            )}
+            Stop
+          </Button>
 
-        <Button
-          onClick={onRestart}
-          disabled={!isRunning || isStarting || isStopping}
-          size="sm"
-          variant="outline"
-          className="gap-2"
-        >
-          <RotateCw className="w-4 h-4" />
-          Restart
-        </Button>
-      </div>
+          <Button
+            onClick={onRestart}
+            disabled={!isRunning || isStarting || isStopping}
+            size="sm"
+            variant="outline"
+            className="gap-2"
+          >
+            <RotateCw className="w-4 h-4" />
+            Restart
+          </Button>
+        </div>
+      )}
     </div>
   );
 }

@@ -31,6 +31,7 @@ export function useAttemptData(
       .map((attempt) => ({
         id: attempt.id,
         task_id: attempt.task_id,
+        metadata: attempt.metadata as Record<string, unknown>,
         branch: (attempt.metadata as { branch?: string })?.branch,
         status: attempt.status.toLowerCase() as TaskAttempt['status'],
         started_at: attempt.started_at ?? undefined,
@@ -89,6 +90,7 @@ export function useAttemptData(
     return {
       id: attempt.id,
       task_id: attempt.task_id,
+      metadata: attempt.metadata as Record<string, unknown>,
       branch: (attempt.metadata as { branch?: string })?.branch,
       status: attempt.status.toLowerCase() as TaskAttempt['status'],
       started_at: attempt.started_at ?? undefined,

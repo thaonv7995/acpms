@@ -13,6 +13,18 @@ const MAX_VALIDATION_OUTPUT_CHARS: usize = 12_000;
 const MAX_VALIDATION_FIX_ROUNDS: usize = 2;
 const MAX_DEPLOY_VALIDATION_COMMAND_TIMEOUT: Duration = Duration::from_secs(8 * 60);
 
+fn preview_delivery_enabled(
+    task_metadata: &serde_json::Value,
+    project_settings: &ProjectSettings,
+) -> bool {
+    task_metadata
+        .get("execution")
+        .and_then(|v| v.get("auto_deploy"))
+        .and_then(|v| v.as_bool())
+        .or_else(|| task_metadata.get("auto_deploy").and_then(|v| v.as_bool()))
+        .unwrap_or(project_settings.auto_deploy || project_settings.preview_enabled)
+}
+
 fn architecture_is_empty(config: &serde_json::Value) -> bool {
     config
         .get("nodes")
@@ -88,6 +100,50 @@ fn push_architecture_node(
         .any(|node| node.get("id").and_then(|value| value.as_str()) == Some(id));
     if !exists {
         nodes.push(architecture_node(id, label, node_type));
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::preview_delivery_enabled;
+    use acpms_db::models::ProjectSettings;
+    use serde_json::json;
+
+    #[test]
+    fn preview_delivery_enabled_accepts_preview_enabled_alias() {
+        let settings = ProjectSettings {
+            auto_deploy: false,
+            preview_enabled: true,
+            ..ProjectSettings::default()
+        };
+
+        assert!(preview_delivery_enabled(&json!({}), &settings));
+        assert!(preview_delivery_enabled(
+            &json!({"execution": {"auto_deploy": true}}),
+            &settings
+        ));
+    }
+
+    #[test]
+    fn preview_delivery_enabled_respects_explicit_disable() {
+        let settings = ProjectSettings {
+            auto_deploy: false,
+            preview_enabled: true,
+            ..ProjectSettings::default()
+        };
+
+        assert!(!preview_delivery_enabled(
+            &json!({"execution": {"auto_deploy": false}}),
+            &settings
+        ));
+        assert!(!preview_delivery_enabled(
+            &json!({"auto_deploy": false}),
+            &ProjectSettings {
+                auto_deploy: false,
+                preview_enabled: false,
+                ..ProjectSettings::default()
+            }
+        ));
     }
 }
 
@@ -1501,20 +1557,10 @@ Project type: {}
             .fetch_project_settings(task_snapshot.project_id)
             .await
             .unwrap_or_default();
-        let auto_deploy_enabled = task_snapshot
-            .metadata
-            .get("execution")
-            .and_then(|v| v.get("auto_deploy"))
-            .and_then(|v| v.as_bool())
-            .or_else(|| {
-                task_snapshot
-                    .metadata
-                    .get("auto_deploy")
-                    .and_then(|v| v.as_bool())
-            })
-            .unwrap_or(project_settings.auto_deploy);
+        let preview_delivery_enabled =
+            preview_delivery_enabled(&task_snapshot.metadata, &project_settings);
 
-        if !auto_deploy_enabled {
+        if !preview_delivery_enabled {
             return Ok(None);
         }
 
@@ -1525,7 +1571,7 @@ Project type: {}
                     attempt_id,
                     "stderr",
                     &format!(
-                        "Auto-deploy enabled but project context unavailable; skipping deploy validation: {}",
+                        "Preview delivery enabled but project context unavailable; skipping deploy validation: {}",
                         err
                     ),
                 )
@@ -1540,7 +1586,7 @@ Project type: {}
         self.log(
             attempt_id,
             "system",
-            "Auto-deploy is enabled. Running agent-driven deployment validation...",
+            "Preview delivery is enabled. Running agent-driven deployment validation...",
         )
         .await?;
 
@@ -1578,12 +1624,12 @@ Project type: {}
                 .or_else(|| super::extract_labeled_value(&lines, "deployment_failure_reason"));
             let msg = if let Some(reason) = &agent_reason {
                 format!(
-                    "Auto-deploy failed: Agent reported — {}. \
+                    "Preview delivery failed: Agent reported — {}. \
                     (Agent must output DEPLOYMENT_FAILURE_REASON when PREVIEW_TARGET cannot be provided.)",
                     reason.trim()
                 )
             } else {
-                "Auto-deploy is enabled but agent did not output PREVIEW_TARGET. \
+                "Preview delivery is enabled but agent did not output PREVIEW_TARGET. \
                 Deploy preview requires: start the app (e.g. docker compose up -d or npm run dev) \
                 and output PREVIEW_TARGET: http://127.0.0.1:<port> or create .acpms/preview-output.json. \
                 If you cannot provide PREVIEW_TARGET, you MUST output DEPLOYMENT_FAILURE_REASON: <root cause> \

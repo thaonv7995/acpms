@@ -7,6 +7,7 @@ import {
   getPreviewReadiness,
   getPreviewRuntimeStatus,
 } from '@/api/previews';
+import { getAttemptLogs, type AgentLog } from '@/api/taskAttempts';
 import { ApiError } from '@/api/client';
 
 interface DevServerState {
@@ -16,6 +17,7 @@ interface DevServerState {
   previewId?: string;
   startDisabled: boolean;
   startDisabledReason?: string;
+  externalPreview: boolean;
 }
 
 interface UseDevServerReturn {
@@ -28,6 +30,7 @@ interface UseDevServerReturn {
   isLoading: boolean;
   startDisabled: boolean;
   startDisabledReason?: string;
+  externalPreview: boolean;
 }
 
 const PREVIEW_READINESS_BLOCKERS = [
@@ -36,6 +39,10 @@ const PREVIEW_READINESS_BLOCKERS = [
   'preview is disabled in project settings',
   'preview not supported for project type',
 ];
+
+const PREVIEW_TARGET_REGEX = /\bpreview_target\b\s*[:=]\s*(https?:\/\/\S+)/i;
+const PREVIEW_URL_REGEX = /\bpreview_url\b\s*[:=]\s*(https?:\/\/\S+)/i;
+const ANSI_ESCAPE_REGEX = /\u001b\[[0-9;?]*[ -/]*[@-~]/g;
 
 export function isPreviewReadinessBlockingMessage(message: string): boolean {
   const normalized = message.toLowerCase();
@@ -181,6 +188,107 @@ function parseApiError(error: unknown, fallback: string): string {
   return mapPreviewErrorMessage(fallback);
 }
 
+function stripAnsiSequences(text: string): string {
+  return text.replace(ANSI_ESCAPE_REGEX, '');
+}
+
+function normalizePreviewUrlCandidate(candidate: string): string | undefined {
+  const normalized = candidate.trim().replace(/[),.;\]]+$/g, '');
+  if (!normalized) {
+    return undefined;
+  }
+  if (/[<{][^>]*port[^>]*[>}]/i.test(normalized)) {
+    return undefined;
+  }
+  return normalized;
+}
+
+export function extractPreviewUrlFromText(text: string): string | undefined {
+  const sanitized = stripAnsiSequences(text);
+
+  for (const regex of [PREVIEW_TARGET_REGEX, PREVIEW_URL_REGEX]) {
+    const match = sanitized.match(regex);
+    const candidate = match?.[1];
+    if (!candidate) {
+      continue;
+    }
+
+    const normalized = normalizePreviewUrlCandidate(candidate);
+    if (normalized) {
+      return normalized;
+    }
+  }
+
+  return undefined;
+}
+
+function extractPreviewUrlFromStructuredLog(value: unknown): string | undefined {
+  if (typeof value === 'string') {
+    return extractPreviewUrlFromText(value);
+  }
+  if (!value || typeof value !== 'object') {
+    return undefined;
+  }
+
+  const record = value as Record<string, unknown>;
+  for (const key of ['content', 'message', 'text']) {
+    const field = record[key];
+    if (typeof field !== 'string') {
+      continue;
+    }
+    const extracted = extractPreviewUrlFromText(field);
+    if (extracted) {
+      return extracted;
+    }
+  }
+
+  return undefined;
+}
+
+export function extractPreviewUrlFromAttemptLogs(logs: AgentLog[]): string | undefined {
+  for (let index = logs.length - 1; index >= 0; index -= 1) {
+    const content = logs[index]?.content;
+    if (typeof content !== 'string' || content.length === 0) {
+      continue;
+    }
+
+    const direct = extractPreviewUrlFromText(content);
+    if (direct) {
+      return direct;
+    }
+
+    try {
+      const parsed = JSON.parse(content) as unknown;
+      const extracted = extractPreviewUrlFromStructuredLog(parsed);
+      if (extracted) {
+        return extracted;
+      }
+    } catch {
+      // Ignore plain-text logs that are not JSON.
+    }
+  }
+
+  return undefined;
+}
+
+function buildExternalPreviewState(
+  baseState: DevServerState,
+  previewUrl: string,
+  readinessReason?: string
+): DevServerState {
+  return {
+    ...baseState,
+    status: 'running',
+    url: previewUrl,
+    errorMessage: undefined,
+    previewId: undefined,
+    startDisabled: true,
+    startDisabledReason:
+      readinessReason || 'Preview is available via the agent-reported PREVIEW_TARGET.',
+    externalPreview: true,
+  };
+}
+
 /**
  * useDevServer - Hook for managing dev server state via backend preview APIs.
  *
@@ -190,7 +298,11 @@ function parseApiError(error: unknown, fallback: string): string {
  * @example
  * const { status, url, startServer, stopServer } = useDevServer(taskId, attemptId);
  */
-export function useDevServer(taskId: string, attemptId?: string): UseDevServerReturn {
+export function useDevServer(
+  taskId: string,
+  attemptId?: string,
+  fallbackPreviewUrl?: string
+): UseDevServerReturn {
   const [state, setState] = useState<DevServerState>({
     status: 'idle',
     url: undefined,
@@ -198,6 +310,7 @@ export function useDevServer(taskId: string, attemptId?: string): UseDevServerRe
     previewId: undefined,
     startDisabled: false,
     startDisabledReason: undefined,
+    externalPreview: false,
   });
   const [isLoading, setIsLoading] = useState(false);
 
@@ -210,6 +323,7 @@ export function useDevServer(taskId: string, attemptId?: string): UseDevServerRe
       previewId: undefined,
       startDisabled: false,
       startDisabledReason: undefined,
+      externalPreview: false,
     });
     if (!attemptId) {
       return;
@@ -218,21 +332,35 @@ export function useDevServer(taskId: string, attemptId?: string): UseDevServerRe
     let cancelled = false;
     setIsLoading(true);
 
-    Promise.all([getPreviewReadiness(attemptId), getPreview(attemptId)])
-      .then(([readiness, preview]) => {
+    const logsPromise = fallbackPreviewUrl
+      ? Promise.resolve([] as AgentLog[])
+      : getAttemptLogs(attemptId).catch(() => [] as AgentLog[]);
+
+    Promise.all([getPreviewReadiness(attemptId), getPreview(attemptId), logsPromise])
+      .then(([readiness, preview, logs]) => {
         if (cancelled) return;
 
         const readinessBlocked = !readiness.ready;
         const readinessReason = readiness.reason || undefined;
+        const agentPreviewUrl =
+          fallbackPreviewUrl || extractPreviewUrlFromAttemptLogs(logs);
 
         setState((prev) => {
           const baseState: DevServerState = {
             ...prev,
             startDisabled: readinessBlocked,
             startDisabledReason: readinessReason,
+            externalPreview: false,
           };
 
           if (!preview || prev.status === 'starting') {
+            if (agentPreviewUrl) {
+              return buildExternalPreviewState(
+                baseState,
+                agentPreviewUrl,
+                readinessReason
+              );
+            }
             return baseState;
           }
 
@@ -242,6 +370,7 @@ export function useDevServer(taskId: string, attemptId?: string): UseDevServerRe
             url: preview.preview_url,
             errorMessage: undefined,
             previewId: preview.id,
+            externalPreview: false,
           };
         });
       })
@@ -250,6 +379,7 @@ export function useDevServer(taskId: string, attemptId?: string): UseDevServerRe
         setState((prev) => ({
           ...prev,
           errorMessage: parseApiError(error, 'Failed to load preview status'),
+          externalPreview: false,
         }));
       })
       .finally(() => {
@@ -261,11 +391,68 @@ export function useDevServer(taskId: string, attemptId?: string): UseDevServerRe
     return () => {
       cancelled = true;
     };
-  }, [taskId, attemptId]);
+  }, [taskId, attemptId, fallbackPreviewUrl]);
+
+  // Poll attempt logs while the agent is still running so PREVIEW_TARGET can
+  // surface without requiring a manual page refresh.
+  useEffect(() => {
+    if (!attemptId || fallbackPreviewUrl || state.externalPreview || state.previewId) {
+      return;
+    }
+
+    let cancelled = false;
+
+    const syncPreviewTargetFromLogs = async () => {
+      try {
+        const logs = await getAttemptLogs(attemptId);
+        if (cancelled) {
+          return;
+        }
+
+        const previewUrl = extractPreviewUrlFromAttemptLogs(logs);
+        if (!previewUrl) {
+          return;
+        }
+
+        setState((prev) => {
+          if (prev.externalPreview || prev.previewId) {
+            return prev;
+          }
+          if (prev.status === 'starting' || prev.status === 'stopping') {
+            return prev;
+          }
+
+          return buildExternalPreviewState(
+            prev,
+            previewUrl,
+            prev.startDisabledReason
+          );
+        });
+      } catch {
+        // Ignore transient log fetch errors while the attempt is still running.
+      }
+    };
+
+    void syncPreviewTargetFromLogs();
+    const intervalId = window.setInterval(() => {
+      void syncPreviewTargetFromLogs();
+    }, 5000);
+
+    return () => {
+      cancelled = true;
+      window.clearInterval(intervalId);
+    };
+  }, [
+    attemptId,
+    fallbackPreviewUrl,
+    state.externalPreview,
+    state.previewId,
+    state.status,
+  ]);
 
   // Poll runtime status while preview is running to detect crashed runtime.
   useEffect(() => {
-    if (!attemptId || state.status !== 'running') {
+    if (!attemptId || state.status !== 'running' || state.externalPreview) {
       return;
     }
 
@@ -304,7 +491,7 @@ export function useDevServer(taskId: string, attemptId?: string): UseDevServerRe
       cancelled = true;
       window.clearInterval(intervalId);
     };
-  }, [attemptId, state.status]);
+  }, [attemptId, state.status, state.externalPreview]);
 
   const startServer = useCallback(async () => {
     if (state.status === 'running' || isLoading) return;
@@ -325,6 +512,7 @@ export function useDevServer(taskId: string, attemptId?: string): UseDevServerRe
         previewId: undefined,
         startDisabled: true,
         startDisabledReason: 'Attempt ID is required to start preview',
+        externalPreview: false,
       });
       return;
     }
@@ -341,6 +529,7 @@ export function useDevServer(taskId: string, attemptId?: string): UseDevServerRe
         previewId: preview.id,
         startDisabled: false,
         startDisabledReason: undefined,
+        externalPreview: false,
       });
     } catch (error) {
       const parsedMessage = parseApiError(error, 'Failed to start preview');
@@ -353,6 +542,7 @@ export function useDevServer(taskId: string, attemptId?: string): UseDevServerRe
         previewId: undefined,
         startDisabled: blockedByReadiness,
         startDisabledReason: blockedByReadiness ? parsedMessage : undefined,
+        externalPreview: false,
       });
     } finally {
       setIsLoading(false);
@@ -366,6 +556,15 @@ export function useDevServer(taskId: string, attemptId?: string): UseDevServerRe
         ...prev,
         status: 'error',
         errorMessage: 'Attempt ID is required to stop preview',
+      }));
+      return;
+    }
+
+    if (state.externalPreview) {
+      setState((prev) => ({
+        ...prev,
+        status: 'running',
+        errorMessage: 'This preview URL is managed by the agent, not by the local preview runtime.',
       }));
       return;
     }
@@ -385,6 +584,7 @@ export function useDevServer(taskId: string, attemptId?: string): UseDevServerRe
         previewId: undefined,
         startDisabled: state.startDisabled,
         startDisabledReason: state.startDisabledReason,
+        externalPreview: false,
       });
     } catch (error) {
       const parsedMessage = parseApiError(error, 'Failed to stop preview');
@@ -395,6 +595,7 @@ export function useDevServer(taskId: string, attemptId?: string): UseDevServerRe
           url: undefined,
           errorMessage: undefined,
           previewId: undefined,
+          externalPreview: false,
         }));
         return;
       }
@@ -402,17 +603,18 @@ export function useDevServer(taskId: string, attemptId?: string): UseDevServerRe
         ...prev,
         status: 'error',
         errorMessage: parsedMessage,
+        externalPreview: false,
       }));
     } finally {
       setIsLoading(false);
     }
-  }, [state.status, state.previewId, isLoading, attemptId]);
+  }, [state.status, state.previewId, state.externalPreview, isLoading, attemptId]);
 
   const restartServer = useCallback(async () => {
-    if (state.status !== 'running' || isLoading) return;
+    if (state.status !== 'running' || isLoading || state.externalPreview) return;
     await stopServer();
     await startServer();
-  }, [state.status, isLoading, stopServer, startServer]);
+  }, [state.status, state.externalPreview, isLoading, stopServer, startServer]);
 
   return {
     status: state.status,
@@ -424,5 +626,6 @@ export function useDevServer(taskId: string, attemptId?: string): UseDevServerRe
     isLoading,
     startDisabled: state.startDisabled,
     startDisabledReason: state.startDisabledReason,
+    externalPreview: state.externalPreview,
   };
 }

@@ -7,6 +7,7 @@ interface PreviewPanelProps {
   devServerUrl?: string;
   status: DevServerStatus;
   errorMessage?: string;
+  externalPreview?: boolean;
   onStart: () => void;
   onStop: () => void;
   onRestart: () => void;
@@ -32,6 +33,7 @@ export function PreviewPanel({
   devServerUrl,
   status,
   errorMessage,
+  externalPreview = false,
   onStart,
   onStop,
   onRestart,
@@ -47,7 +49,7 @@ export function PreviewPanel({
 
   const isRunning = status === 'running';
   const hasUrl = Boolean(devServerUrl);
-  const canShowPreview = isRunning && hasUrl;
+  const canShowPreview = hasUrl && (isRunning || externalPreview);
 
   // Reload iframe when URL changes
   useEffect(() => {
@@ -99,6 +101,7 @@ export function PreviewPanel({
         status={status}
         url={devServerUrl}
         errorMessage={errorMessage}
+        externalPreview={externalPreview}
         onStart={onStart}
         onStop={onStop}
         onRestart={onRestart}
@@ -160,7 +163,7 @@ export function PreviewPanel({
                   ? 'Start the dev server to see a live preview of your changes.'
                   : 'Waiting for dev server URL...'}
               </p>
-              {!isRunning && (
+              {!isRunning && !externalPreview && (
                 <Button
                   onClick={onStart}
                   size="sm"

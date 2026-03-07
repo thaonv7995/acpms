@@ -17,6 +17,7 @@ interface AttemptHeaderActionsProps {
   onModeChange?: (mode: LayoutMode) => void;
   task: KanbanTask;
   attempt?: TaskAttempt | null;
+  showPreviewToggle?: boolean;
   previewDisabled?: boolean;
   previewDisabledReason?: string;
   downloadArtifactUrl?: string;
@@ -35,6 +36,7 @@ export function AttemptHeaderActions({
   onModeChange,
   task,
   attempt,
+  showPreviewToggle = true,
   previewDisabled = false,
   previewDisabledReason,
   downloadArtifactUrl,
@@ -96,15 +98,17 @@ export function AttemptHeaderActions({
               }}
               className="inline-flex gap-1"
             >
-              <ToggleGroupItem
-                value="preview"
-                aria-label="Preview"
-                active={mode === 'preview'}
-                disabled={previewDisabled}
-                title={previewDisabledReason}
-              >
-                <Eye className="h-4 w-4" />
-              </ToggleGroupItem>
+              {showPreviewToggle && (
+                <ToggleGroupItem
+                  value="preview"
+                  aria-label="Preview"
+                  active={mode === 'preview'}
+                  disabled={previewDisabled}
+                  title={previewDisabledReason}
+                >
+                  <Eye className="h-4 w-4" />
+                </ToggleGroupItem>
+              )}
               <ToggleGroupItem
                 value="diffs"
                 aria-label="Diffs"

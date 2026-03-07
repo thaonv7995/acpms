@@ -8,6 +8,7 @@ export interface TaskAttempt {
   executor?: string;
   variant?: string;
   branch?: string;
+  metadata?: Record<string, unknown>;
   status: AttemptStatus;
   started_at?: string;
   completed_at?: string;

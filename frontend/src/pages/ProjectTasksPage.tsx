@@ -32,7 +32,6 @@ import { useAttemptData } from './project-tasks/use-attempt-data';
 import { useKeyboardShortcuts } from './project-tasks/use-keyboard-shortcuts';
 import { ProjectTasksHeader } from './project-tasks/project-tasks-header';
 import { PreviewPanelWrapper } from './project-tasks/preview-panel-wrapper';
-import { usePreviewReadiness } from '../hooks/usePreviewReadiness';
 import { createTaskAttempt, cancelAttempt, getTaskAttempts, getAttempt } from '../api/taskAttempts';
 import { deleteTask } from '../api/tasks';
 
@@ -95,6 +94,22 @@ function getPrimaryArtifactDownload(
   }
 
   return null;
+}
+
+function getAttemptPreviewUrl(metadata?: Record<string, unknown>): string | undefined {
+  if (!metadata) return undefined;
+
+  const previewUrlAgent = metadata.preview_url_agent;
+  if (typeof previewUrlAgent === 'string' && previewUrlAgent.trim().length > 0) {
+    return previewUrlAgent;
+  }
+
+  const previewTarget = metadata.preview_target;
+  if (typeof previewTarget === 'string' && previewTarget.trim().length > 0) {
+    return previewTarget;
+  }
+
+  return undefined;
 }
 
 function triggerArtifactDownload(url: string): void {
@@ -291,15 +306,16 @@ export function ProjectTasksPage() {
   const usesArtifactDownloads = previewDeliveryKind === 'artifact_download';
   const displayMode: LayoutMode =
     supportsLivePreview || mode !== 'preview' ? mode : null;
-  const { readiness: previewReadiness } = usePreviewReadiness(
-    supportsLivePreview ? selectedAttempt?.id : undefined
-  );
   const projectPreviewEnabled = Boolean(
     selectedProject?.settings?.auto_deploy || selectedProject?.settings?.preview_enabled
   );
   const primaryArtifactDownload = useMemo(
     () => getPrimaryArtifactDownload(selectedTask?.metadata),
     [selectedTask?.metadata]
+  );
+  const selectedAttemptPreviewUrl = useMemo(
+    () => getAttemptPreviewUrl(selectedAttempt?.metadata),
+    [selectedAttempt?.metadata]
   );
   const isLatestAttemptSelected = Boolean(
     selectedAttempt?.id &&
@@ -794,6 +810,7 @@ export function ProjectTasksPage() {
       <PreviewPanelWrapper
         taskId={selectedTask.id}
         attemptId={selectedAttempt.id}
+        fallbackPreviewUrl={selectedAttemptPreviewUrl}
       />
     ) : null;
 
@@ -807,8 +824,9 @@ export function ProjectTasksPage() {
       onModeChange={handleModeChange}
       onBackToTask={handleBackToTaskWithContext}
       onClose={handleClosePanel}
-      previewModeDisabled={Boolean(selectedAttempt && previewReadiness && !previewReadiness.ready)}
-      previewModeDisabledReason={previewReadiness?.reason || undefined}
+      showPreviewToggle={supportsLivePreview}
+      previewModeDisabled={false}
+      previewModeDisabledReason={undefined}
       downloadArtifactUrl={artifactDownloadUrl}
       downloadArtifactLabel={primaryArtifactDownload?.label}
       downloadDisabled={Boolean(usesArtifactDownloads && artifactDownloadDisabledReason)}
