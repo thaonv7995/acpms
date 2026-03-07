@@ -64,17 +64,7 @@ function processBlockEntries(entries: TimelineEntry[]): DisplayItem[] {
   );
 
   const flushThinking = () => {
-    if (thinkingBuffer.length === 1) {
-      result.push({
-        type: 'entry',
-        entry: {
-          type: 'thinking',
-          id: thinkingBuffer[0].id,
-          content: thinkingBuffer[0].content,
-          timestamp: '',
-        } as TimelineEntry,
-      });
-    } else if (thinkingBuffer.length > 1) {
+    if (thinkingBuffer.length > 0) {
       result.push({
         type: 'thinking_group',
         entries: thinkingBuffer.map((e, i) => ({

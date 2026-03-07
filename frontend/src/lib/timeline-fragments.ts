@@ -12,6 +12,7 @@ export function combineTextFragments(entries: TimelineEntry[]): TimelineEntry[] 
   let textBuffer: string[] = [];
   let bufferStart: TimelineEntry | null = null;
   let bufferSource: string | null = null;
+  let bufferType: TimelineEntry['type'] | null = null;
   let bufferLastTimestampMs: number | null = null;
 
   const suffixPrefixOverlap = (prev: string, next: string): number => {
@@ -72,7 +73,11 @@ export function combineTextFragments(entries: TimelineEntry[]): TimelineEntry[] 
 
   const joinFragments = (fragments: string[]): string => {
     if (fragments.length <= 1) return fragments[0] || '';
-    if (bufferSource === 'sdk' || bufferSource === 'normalized') {
+    if (
+      bufferType === 'thinking' ||
+      bufferSource === 'sdk' ||
+      bufferSource === 'normalized'
+    ) {
       return fragments.join('');
     }
 
@@ -102,8 +107,11 @@ export function combineTextFragments(entries: TimelineEntry[]): TimelineEntry[] 
       entry.type === 'assistant_message' &&
       entry.content &&
       (entry.source === 'stdout' || entry.source === 'sdk' || entry.source === 'normalized' || !entry.source);
+    const isMergeableThinking =
+      entry.type === 'thinking' &&
+      entry.content;
 
-    if (isMergeableAssistant) {
+    if (isMergeableAssistant || isMergeableThinking) {
       if (isStdoutTranscriptMarker(entry.content)) {
         if (textBuffer.length > 0 && bufferStart) {
           result.push({
@@ -114,6 +122,7 @@ export function combineTextFragments(entries: TimelineEntry[]): TimelineEntry[] 
         textBuffer = [];
         bufferStart = null;
         bufferSource = null;
+        bufferType = null;
         bufferLastTimestampMs = null;
         result.push(entry);
         continue;
@@ -122,9 +131,10 @@ export function combineTextFragments(entries: TimelineEntry[]): TimelineEntry[] 
       if (!bufferStart) {
         bufferStart = entry;
         bufferSource = entry.source || null;
+        bufferType = entry.type;
         bufferLastTimestampMs = Date.parse(entry.timestamp);
       }
-      if (bufferSource === entry.source) {
+      if (bufferSource === (entry.source || null) && bufferType === entry.type) {
         const nextTimestampMs = Date.parse(entry.timestamp);
         const hasValidTimes =
           Number.isFinite(bufferLastTimestampMs) && Number.isFinite(nextTimestampMs);
@@ -132,7 +142,10 @@ export function combineTextFragments(entries: TimelineEntry[]): TimelineEntry[] 
           ? Math.abs(nextTimestampMs - bufferLastTimestampMs)
           : 0;
 
-        const isContinuousStream = bufferSource === 'sdk' || bufferSource === 'normalized';
+        const isContinuousStream =
+          entry.type === 'thinking' ||
+          bufferSource === 'sdk' ||
+          bufferSource === 'normalized';
 
         if (!isContinuousStream && hasValidTimes && timeGapMs > 2000) {
           if (textBuffer.length > 0 && bufferStart) {
@@ -144,6 +157,7 @@ export function combineTextFragments(entries: TimelineEntry[]): TimelineEntry[] 
           textBuffer = [entry.content];
           bufferStart = entry;
           bufferSource = entry.source || null;
+          bufferType = entry.type;
           bufferLastTimestampMs = nextTimestampMs;
         } else {
           if (isContinuousStream) {
@@ -162,6 +176,7 @@ export function combineTextFragments(entries: TimelineEntry[]): TimelineEntry[] 
                 textBuffer = [entry.content];
                 bufferStart = entry;
                 bufferSource = entry.source || null;
+                bufferType = entry.type;
               } else {
                 textBuffer[lastIndex] = merged.content;
               }
@@ -181,6 +196,7 @@ export function combineTextFragments(entries: TimelineEntry[]): TimelineEntry[] 
         textBuffer = [entry.content];
         bufferStart = entry;
         bufferSource = entry.source || null;
+        bufferType = entry.type;
         bufferLastTimestampMs = Date.parse(entry.timestamp);
       }
     } else {
@@ -193,6 +209,7 @@ export function combineTextFragments(entries: TimelineEntry[]): TimelineEntry[] 
       textBuffer = [];
       bufferStart = null;
       bufferSource = null;
+      bufferType = null;
       bufferLastTimestampMs = null;
       result.push(entry);
     }

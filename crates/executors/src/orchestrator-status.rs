@@ -254,13 +254,7 @@ impl StatusManager {
             return prev.to_string();
         }
 
-        // Heuristic: treat leading whitespace as token continuation.
-        let needs_separator = !prev.ends_with('\n') && !next.starts_with('\n');
-        if needs_separator && !next.starts_with(' ') && !next.starts_with('\t') {
-            format!("{}\n{}", prev, next)
-        } else {
-            format!("{}{}", prev, next)
-        }
+        format!("{}{}", prev, next)
     }
 
     async fn append_assistant_message(
@@ -1046,5 +1040,26 @@ impl StatusManager {
 
         // Default: treat stdout as assistant message content for the timeline.
         Self::append_assistant_message(db_pool, broadcast_tx, attempt_id, content).await
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::StatusManager;
+
+    #[test]
+    fn join_assistant_fragments_keeps_inline_token_spacing() {
+        assert_eq!(
+            StatusManager::join_assistant_fragments("All", " tasks"),
+            "All tasks"
+        );
+    }
+
+    #[test]
+    fn join_assistant_fragments_does_not_insert_newlines_between_tokens() {
+        assert_eq!(
+            StatusManager::join_assistant_fragments("All", "tasks"),
+            "Alltasks"
+        );
     }
 }

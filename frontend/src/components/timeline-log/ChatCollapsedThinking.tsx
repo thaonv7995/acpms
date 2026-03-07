@@ -34,7 +34,7 @@ export function ChatCollapsedThinking({
   return (
     <div className={cn('flex flex-col', className)}>
       <div
-        className="flex items-center gap-2 text-sm text-muted-foreground cursor-pointer"
+        className="flex items-center gap-2 text-xs text-muted-foreground/75 cursor-pointer"
         onClick={onToggle}
         onMouseEnter={() => setIsHovered(true)}
         onMouseLeave={() => setIsHovered(false)}
@@ -59,7 +59,7 @@ export function ChatCollapsedThinking({
       {expanded && (
         <div className="ml-6 pt-2 flex flex-col gap-2">
           {entries.map((entry) => (
-            <div key={entry.expansionKey} className="text-sm text-muted-foreground pl-4">
+            <div key={entry.expansionKey} className="text-xs text-muted-foreground/75 pl-4">
               {renderMarkdown(entry.content)}
             </div>
           ))}

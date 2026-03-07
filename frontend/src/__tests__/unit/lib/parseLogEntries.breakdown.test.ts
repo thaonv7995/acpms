@@ -64,4 +64,110 @@ describe('parseLogEntries breakdown formatting', () => {
     expect(entries[0].content).toContain('Type: Test · Priority: High');
     expect(entries[0].content).not.toContain('BREAKDOWN_TASK {');
   });
+
+  it('repairs fragmented Claude summary layout into readable paragraphs', () => {
+    const rawLogs = [
+      {
+        id: 'claude-summary-1',
+        log_type: 'normalized',
+        timestamp: '2026-03-07T08:49:33.000Z',
+        content: JSON.stringify({
+          entry_type: { type: 'assistant_message' },
+          content:
+            "All\ntasks\ncomplete\n.\nHere\n's the\nsummary:\n\nInit\n\nTask Report\n\nPref\nlight &\nEnvironment\n\n•\n**GITLAB _PA T**: Present\n\nGit\nLab Repository\n\n•\nURL: https://gitlab.t\nha\nonv\n.online/t\nhaonv/landing\n-page-9898",
+          timestamp: '2026-03-07T08:49:33.000Z',
+        }),
+      },
+    ];
+
+    const entries = parseLogEntries(rawLogs);
+    expect(entries).toHaveLength(1);
+    expect(entries[0].type).toBe('assistant_message');
+    expect(entries[0].content).toContain("All tasks complete. Here's the summary:");
+    expect(entries[0].content).toContain('Init Task Report');
+    expect(entries[0].content).toContain('Preflight & Environment');
+    expect(entries[0].content).toContain('GitLab Repository');
+    expect(entries[0].content).toContain('https://gitlab.thaonv.online/thaonv/landing-page-9898');
+  });
+
+  it('rebuilds fragmented Claude markdown summary into headings and bullets', () => {
+    const rawLogs = [
+      {
+        id: 'claude-summary-2',
+        log_type: 'normalized',
+        timestamp: '2026-03-07T08:49:33.000Z',
+        content: JSON.stringify({
+          entry_type: { type: 'assistant_message' },
+          content:
+            "All\ntasks\ncomplete\n.\nHere\n's the\nsummary:\n---\n## Init\nTask Report\n###\nPref\nlight &\nEnvironment\n- **\nGITLAB\n_PA\nT**: Present\n- **GITLAB\n_URL\n**: Present (`\nhttps://gitlab.t\nha\non\nv\n.online\n`)\n### GitLab Repository\n- **Status\n**: Already\nexists\n(\nHTTP\n200)\n- **URL**: `\nhttps://gitlab.thaonv\n.online/t\nhaonv/landing\n-page-\n9\n898\n`\n- **Visibility\n**: private",
+          timestamp: '2026-03-07T08:49:33.000Z',
+        }),
+      },
+    ];
+
+    const entries = parseLogEntries(rawLogs);
+    expect(entries).toHaveLength(1);
+    expect(entries[0].type).toBe('assistant_message');
+    expect(entries[0].content).toContain("All tasks complete. Here's the summary:");
+    expect(entries[0].content).toContain('## Init Task Report');
+    expect(entries[0].content).toContain('### Preflight & Environment');
+    expect(entries[0].content).toContain('- **GITLAB_PAT**: Present');
+    expect(entries[0].content).toContain('- **GITLAB_URL**: Present (`https://gitlab.thaonv.online`)');
+    expect(entries[0].content).toContain('### GitLab Repository');
+    expect(entries[0].content).toContain('- **Status**: Already exists (HTTP 200)');
+    expect(entries[0].content).toContain('https://gitlab.thaonv.online/thaonv/landing-page-9898');
+  });
+
+  it('merges and repairs fragmented thinking deltas', () => {
+    const rawLogs = [
+      {
+        id: 'thinking-1',
+        log_type: 'normalized',
+        timestamp: '2026-03-07T08:40:00.000Z',
+        content: JSON.stringify({
+          entry_type: { type: 'thinking' },
+          content: 'Pref',
+          timestamp: '2026-03-07T08:40:00.000Z',
+        }),
+      },
+      {
+        id: 'thinking-2',
+        log_type: 'normalized',
+        timestamp: '2026-03-07T08:40:00.050Z',
+        content: JSON.stringify({
+          entry_type: { type: 'thinking' },
+          content: 'light',
+          timestamp: '2026-03-07T08:40:00.050Z',
+        }),
+      },
+      {
+        id: 'thinking-3',
+        log_type: 'normalized',
+        timestamp: '2026-03-07T08:40:00.100Z',
+        content: JSON.stringify({
+          entry_type: { type: 'thinking' },
+          content: '\n•\nchecks:\n-\nNo refs\nmanifest\n.json -\nno\nreferences\nto check',
+          timestamp: '2026-03-07T08:40:00.100Z',
+        }),
+      },
+      {
+        id: 'thinking-4',
+        log_type: 'normalized',
+        timestamp: '2026-03-07T08:40:00.150Z',
+        content: JSON.stringify({
+          entry_type: { type: 'thinking' },
+          content: '\n•\nNo .\nac\np\nms\nrefs\ndirectory',
+          timestamp: '2026-03-07T08:40:00.150Z',
+        }),
+      },
+    ];
+
+    const entries = parseLogEntries(rawLogs);
+    expect(entries).toHaveLength(1);
+    expect(entries[0].type).toBe('thinking');
+    expect(entries[0].content).toContain('Preflight');
+    expect(entries[0].content).toContain('- checks:');
+    expect(entries[0].content).toContain('No refs manifest.json - no references to check');
+    expect(entries[0].content).toContain('No .acpms refs directory');
+  });
 });

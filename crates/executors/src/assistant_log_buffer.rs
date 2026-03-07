@@ -44,15 +44,21 @@ pub fn process_agent_text_for_tool_calls(text: &str) -> (String, Option<serde_js
     let mut content_parts = Vec::new();
     let mut metadata = None;
     for line in lines {
-        if let Some(m) = parse_tool_call_metadata(line) {
+        let trimmed = line.trim();
+        if let Some(m) = parse_tool_call_metadata(trimmed) {
             metadata = Some(m);
-        } else if let Some(m) = extract_tool_call_from_streaming_text(line) {
+        } else if let Some(m) = extract_tool_call_from_streaming_text(trimmed) {
             metadata = Some(m);
         } else {
             content_parts.push(line);
         }
     }
-    let content = content_parts.join("\n").trim().to_string();
+    let content = content_parts.join("\n");
+    let content = if content.trim().is_empty() {
+        String::new()
+    } else {
+        content
+    };
     (content, metadata)
 }
 
@@ -87,11 +93,10 @@ impl AgentTextBuffer {
     /// Flush remaining buffer as content (no tool call). Call when stream ends.
     pub fn flush(&mut self) -> Option<(String, Option<serde_json::Value>)> {
         let content = std::mem::take(&mut self.buffer);
-        let trimmed = content.trim().to_string();
-        if trimmed.is_empty() {
+        if content.trim().is_empty() {
             return None;
         }
-        Some((trimmed, None))
+        Some((content, None))
     }
 
     /// Emit a partial text chunk even when there is no trailing newline.
@@ -100,42 +105,45 @@ impl AgentTextBuffer {
     /// newline terminators. We keep possible tool-call JSON fragments in the buffer
     /// to avoid breaking metadata extraction.
     pub fn pop_partial_text_for_display(&mut self) -> Option<(String, Option<serde_json::Value>)> {
-        let trimmed = self.buffer.trim();
-        if trimmed.is_empty() {
-            self.buffer.clear();
+        if self.buffer.is_empty() {
+            return None;
+        }
+        if self.buffer.trim().is_empty() {
             return None;
         }
 
         for prefix in supported_tool_prefixes() {
-            if let Some(start) = trimmed.find(prefix) {
-                if start == 0 {
+            let trimmed_start = self.buffer.trim_start();
+            let leading_ws_len = self.buffer.len().saturating_sub(trimmed_start.len());
+            if let Some(start_rel) = trimmed_start.find(prefix) {
+                let start = leading_ws_len + start_rel;
+                if self.buffer[..start].trim().is_empty() {
                     // The buffer starts with an incomplete tool-call candidate; keep it.
                     return None;
                 }
 
                 // Emit safe text before tool-call fragment and keep fragment buffered.
-                let content_before = trimmed[..start].trim().to_string();
-                self.buffer = trimmed[start..].to_string();
-                if content_before.is_empty() {
+                let content_before = self.buffer[..start].to_string();
+                self.buffer = self.buffer[start..].to_string();
+                if content_before.trim().is_empty() {
                     return None;
                 }
                 return Some((content_before, None));
             }
         }
 
-        let content = trimmed.to_string();
-        self.buffer.clear();
+        let content = std::mem::take(&mut self.buffer);
         Some((content, None))
     }
 
     fn try_take_complete_line(&mut self) -> Option<(String, Option<serde_json::Value>)> {
         if let Some(pos) = self.buffer.find('\n') {
-            let line = self.buffer[..pos].trim().to_string();
+            let line = self.buffer[..pos].to_string();
             self.buffer = self.buffer[pos + 1..].to_string();
-            if line.is_empty() {
+            if line.trim().is_empty() {
                 return self.try_take_complete_line();
             }
-            if parse_tool_call_metadata(&line).is_some() {
+            if parse_tool_call_metadata(line.trim()).is_some() {
                 self.buffer = format!("{}\n{}", line, self.buffer);
                 return None;
             }
@@ -183,6 +191,26 @@ mod tests {
     }
 
     #[test]
+    fn pop_partial_text_for_display_preserves_leading_spaces() {
+        let mut buffer = AgentTextBuffer::new();
+        buffer.push(" hello");
+
+        let out = buffer.pop_partial_text_for_display();
+        assert_eq!(out, Some((" hello".to_string(), None)));
+    }
+
+    #[test]
+    fn pop_partial_text_for_display_keeps_whitespace_until_text_arrives() {
+        let mut buffer = AgentTextBuffer::new();
+        buffer.push(" ");
+        assert_eq!(buffer.pop_partial_text_for_display(), None);
+
+        buffer.push("world");
+        let out = buffer.pop_partial_text_for_display();
+        assert_eq!(out, Some((" world".to_string(), None)));
+    }
+
+    #[test]
     fn pop_partial_text_for_display_keeps_tool_call_fragment() {
         let mut buffer = AgentTextBuffer::new();
         buffer.push(r#"{"tool":"create_task","args":{"title":"Do A""#);
@@ -197,7 +225,7 @@ mod tests {
         buffer.push(r#"Here is the plan {"tool":"create_task","args":{"title":"Do A""#);
 
         let out = buffer.pop_partial_text_for_display();
-        assert_eq!(out, Some(("Here is the plan".to_string(), None)));
+        assert_eq!(out, Some(("Here is the plan ".to_string(), None)));
     }
 
     #[test]

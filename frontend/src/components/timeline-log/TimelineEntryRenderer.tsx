@@ -8,7 +8,6 @@ import type {
 import {
   AlertTriangle,
   Bot,
-  Brain,
   CheckCircle2,
   ChevronDown,
   ChevronRight,
@@ -420,7 +419,7 @@ function LogLine({
  * Markdown content renderer. Vibe Kanban style: direct render, no animation.
  * Real-time feel comes from backend sending incremental updates.
  */
-function MarkdownContent({ content }: { content: string }) {
+function MarkdownContent({ content, className }: { content: string; className?: string }) {
   return (
     <div
       className={cn(
@@ -433,7 +432,8 @@ function MarkdownContent({ content }: { content: string }) {
         '[&_li>p]:inline [&_li>p]:m-0 [&_li>p]:leading-6',
         '[&_h1]:m-0 [&_h2]:m-0 [&_h3]:m-0',
         '[&_h1]:text-sm [&_h2]:text-sm [&_h3]:text-sm',
-        '[&_h1]:font-semibold [&_h2]:font-semibold [&_h3]:font-semibold'
+        '[&_h1]:font-semibold [&_h2]:font-semibold [&_h3]:font-semibold',
+        className
       )}
     >
       <ReactMarkdown
@@ -472,6 +472,23 @@ function MarkdownContent({ content }: { content: string }) {
         }}
       />
     </div>
+  );
+}
+
+function ThinkingMarkdownContent({ content }: { content: string }) {
+  return (
+    <MarkdownContent
+      content={content}
+      className={cn(
+        'text-xs leading-5 text-muted-foreground/80 italic',
+        '[&_p]:leading-5',
+        '[&_li]:leading-5',
+        '[&_li>p]:leading-5',
+        '[&_h1]:text-xs [&_h2]:text-xs [&_h3]:text-xs',
+        '[&_pre]:text-xs [&_pre]:leading-5',
+        '[&_code]:text-[11px] [&_code]:text-muted-foreground/90'
+      )}
+    />
   );
 }
 
@@ -832,13 +849,17 @@ function OperationGroupRows({ group }: { group: OperationGroup & { hideAvatarAnd
 
 /** Inline single thinking (Vibe Kanban ChatThinkingMessage style) */
 function ThinkingInline({ content }: { content: string }) {
+  const [expanded, setExpanded] = useState(false);
+
   return (
-    <div className="flex items-start gap-2 text-sm text-muted-foreground">
-      <Brain className="shrink-0 pt-0.5 h-4 w-4" />
-      <div className="flex-1 min-w-0">
-        <MarkdownContent content={compactMarkdown(redactSensitiveContent(content))} />
-      </div>
-    </div>
+    <ChatCollapsedThinking
+      entries={[{ content, expansionKey: 'thinking-inline' }]}
+      expanded={expanded}
+      onToggle={() => setExpanded((value) => !value)}
+      renderMarkdown={(thinkingContent) => (
+        <ThinkingMarkdownContent content={compactMarkdown(redactSensitiveContent(thinkingContent))} />
+      )}
+    />
   );
 }
 
@@ -858,7 +879,7 @@ export function ThinkingGroupRenderer({
       expanded={expanded}
       onToggle={onToggle}
       renderMarkdown={(content) => (
-        <MarkdownContent content={compactMarkdown(redactSensitiveContent(content))} />
+        <ThinkingMarkdownContent content={compactMarkdown(redactSensitiveContent(content))} />
       )}
     />
   );

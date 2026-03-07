@@ -433,67 +433,42 @@ pub fn build_skill_metadata_patch(
 }
 
 pub fn format_loaded_skills_log_line(context: &SkillInstructionContext) -> String {
-    let skipped_active = context
-        .resolved_skill_chain
-        .iter()
-        .filter(|skill_id| {
-            !context
-                .loaded_active_skills
-                .iter()
-                .any(|loaded| loaded == *skill_id)
-        })
-        .cloned()
-        .collect::<Vec<_>>();
-    let mut lines = vec![format!(
-        "I loaded playbooks for {}.",
-        summarize_active_skill_scope(&context.loaded_active_skills)
+    let mut parts = vec![format!(
+        "Loaded skills: {}",
+        summarize_skill_ids_for_log(&context.loaded_active_skills, 6)
     )];
-
-    if !skipped_active.is_empty() {
-        lines.push(format!(
-            "I left out {} to stay within the prompt budget.",
-            format_humanized_skill_list(&skipped_active)
-        ));
-    }
 
     match context.knowledge_status {
         SkillKnowledgeStatus::Ready => {
             if context.suggested_skills.is_empty() {
-                lines.push("I did not preload any extra reference skills.".to_string());
+                parts.push("suggested: none".to_string());
             } else {
-                lines.push(format!(
-                    "I also found {}.",
-                    summarize_suggested_skills(&context.suggested_skills)
+                let suggested_ids = context
+                    .suggested_skills
+                    .iter()
+                    .map(|skill| skill.skill_id.clone())
+                    .collect::<Vec<_>>();
+                parts.push(format!(
+                    "suggested: {}",
+                    summarize_skill_ids_for_log(&suggested_ids, MAX_RAG_SUGGESTIONS)
                 ));
             }
         }
         SkillKnowledgeStatus::NoMatches => {
-            lines.push(format_knowledge_status_sentence(
-                "I did not attach any extra reference skills",
-                context.knowledge_detail.as_deref(),
-            ));
+            parts.push("suggested: none".to_string());
         }
         SkillKnowledgeStatus::Disabled => {
-            lines.push(format_knowledge_status_sentence(
-                "Global knowledge search is disabled for this run",
-                context.knowledge_detail.as_deref(),
-            ));
+            parts.push("knowledge: disabled".to_string());
         }
         SkillKnowledgeStatus::Pending => {
-            lines.push(format_knowledge_status_sentence(
-                "Global knowledge search is still warming up",
-                context.knowledge_detail.as_deref(),
-            ));
+            parts.push("knowledge: pending".to_string());
         }
         SkillKnowledgeStatus::Failed => {
-            lines.push(format_knowledge_status_sentence(
-                "Global knowledge search failed for this attempt",
-                context.knowledge_detail.as_deref(),
-            ));
+            parts.push("knowledge: failed".to_string());
         }
     }
 
-    lines.join(" ")
+    parts.join("; ")
 }
 
 fn build_rag_query(task: &Task) -> String {
@@ -1327,227 +1302,22 @@ fn contains_any(haystack: &HashSet<&str>, needles: &[&str]) -> bool {
     needles.iter().any(|needle| haystack.contains(needle))
 }
 
-fn normalize_log_detail(detail: &str) -> String {
-    const MAX_DETAIL_CHARS: usize = 160;
-
-    let collapsed = detail.split_whitespace().collect::<Vec<_>>().join(" ");
-    let mut chars = collapsed.chars();
-    let shortened: String = chars.by_ref().take(MAX_DETAIL_CHARS).collect();
-    if chars.next().is_some() {
-        format!("{shortened}...")
-    } else {
-        shortened
-    }
-}
-
-fn summarize_active_skill_scope(skill_ids: &[String]) -> String {
-    let mut scopes = Vec::new();
-    let mut covered = HashSet::new();
-
-    if skill_ids.iter().any(|skill_id| {
-        matches!(
-            skill_id.as_str(),
-            "task-preflight-check"
-                | "env-and-secrets-validate"
-                | "verify-test-build"
-                | "db-migration-safety"
-        )
-    }) {
-        scopes.push("preflight checks".to_string());
-        covered.extend([
-            "task-preflight-check",
-            "env-and-secrets-validate",
-            "verify-test-build",
-            "db-migration-safety",
-        ]);
+fn summarize_skill_ids_for_log(skill_ids: &[String], max_visible: usize) -> String {
+    if skill_ids.is_empty() {
+        return "none".to_string();
     }
 
-    if skill_ids.iter().any(|skill_id| {
-        matches!(
-            skill_id.as_str(),
-            "code-implement"
-                | "init-read-references"
-                | "init-web-scaffold"
-                | "init-api-scaffold"
-                | "init-mobile-scaffold"
-                | "init-extension-scaffold"
-                | "init-desktop-scaffold"
-                | "init-microservice-scaffold"
-                | "init-project-bootstrap"
-                | "init-project-context-file"
-                | "init-source-repository"
-                | "retry-triage-and-recovery"
-        )
-    }) {
-        scopes.push("implementation guidance".to_string());
-        covered.extend([
-            "code-implement",
-            "init-read-references",
-            "init-web-scaffold",
-            "init-api-scaffold",
-            "init-mobile-scaffold",
-            "init-extension-scaffold",
-            "init-desktop-scaffold",
-            "init-microservice-scaffold",
-            "init-project-bootstrap",
-            "init-project-context-file",
-            "init-source-repository",
-            "retry-triage-and-recovery",
-        ]);
-    }
-
-    if skill_ids.iter().any(|skill_id| {
-        matches!(
-            skill_id.as_str(),
-            "build-artifact"
-                | "preview-artifact-desktop"
-                | "preview-artifact-mobile"
-                | "preview-artifact-extension"
-        )
-    }) {
-        scopes.push("build and preview readiness".to_string());
-        covered.extend([
-            "build-artifact",
-            "preview-artifact-desktop",
-            "preview-artifact-mobile",
-            "preview-artifact-extension",
-        ]);
-    }
-
-    if skill_ids.iter().any(|skill_id| {
-        matches!(
-            skill_id.as_str(),
-            "cloudflare-config-validate"
-                | "cloudflare-tunnel-setup-guide"
-                | "deploy-precheck-cloudflare"
-                | "setup-cloudflare-tunnel"
-                | "deploy-ssh-remote"
-                | "post-deploy-smoke-and-healthcheck"
-                | "update-deployment-metadata"
-                | "deploy-cancel-stop-cleanup"
-        )
-    }) {
-        scopes.push("deployment readiness".to_string());
-        covered.extend([
-            "cloudflare-config-validate",
-            "cloudflare-tunnel-setup-guide",
-            "deploy-precheck-cloudflare",
-            "setup-cloudflare-tunnel",
-            "deploy-ssh-remote",
-            "post-deploy-smoke-and-healthcheck",
-            "update-deployment-metadata",
-            "deploy-cancel-stop-cleanup",
-        ]);
-    }
-
-    if skill_ids.iter().any(|skill_id| {
-        matches!(
-            skill_id.as_str(),
-            "gitlab-branch-and-commit"
-                | "gitlab-merge-request"
-                | "gitlab-issue-sync"
-                | "review-handoff"
-                | "gitlab-rebase-conflict-resolution"
-        )
-    }) {
-        scopes.push("Git and review handoff".to_string());
-        covered.extend([
-            "gitlab-branch-and-commit",
-            "gitlab-merge-request",
-            "gitlab-issue-sync",
-            "review-handoff",
-            "gitlab-rebase-conflict-resolution",
-        ]);
-    }
-
-    if skill_ids.iter().any(|skill_id| {
-        matches!(
-            skill_id.as_str(),
-            "release-note-and-delivery-summary" | "final-report"
-        )
-    }) {
-        scopes.push("final reporting".to_string());
-        covered.extend(["release-note-and-delivery-summary", "final-report"]);
-    }
-
-    let extras = skill_ids
+    let visible = skill_ids
         .iter()
-        .filter(|skill_id| !covered.contains(skill_id.as_str()))
+        .take(max_visible)
         .cloned()
         .collect::<Vec<_>>();
-    if !extras.is_empty() {
-        scopes.push(format!(
-            "extra guidance for {}",
-            format_humanized_skill_list(&extras)
-        ));
-    }
+    let remaining = skill_ids.len().saturating_sub(visible.len());
 
-    if scopes.is_empty() {
-        "the core task context".to_string()
+    if remaining == 0 {
+        visible.join(", ")
     } else {
-        join_natural_language(&scopes)
-    }
-}
-
-fn summarize_suggested_skills(skills: &[SuggestedSkill]) -> String {
-    let entries = skills
-        .iter()
-        .map(|skill| {
-            format!(
-                "{} from {} ({:.0}% match)",
-                skill.skill_id,
-                skill.origin,
-                skill.score * 100.0
-            )
-        })
-        .collect::<Vec<_>>();
-
-    if entries.len() == 1 {
-        format!("1 relevant reference skill: {}", entries[0])
-    } else {
-        format!(
-            "{} relevant reference skills: {}",
-            entries.len(),
-            join_natural_language(&entries)
-        )
-    }
-}
-
-fn format_humanized_skill_list(skill_ids: &[String]) -> String {
-    let labels = skill_ids
-        .iter()
-        .map(|skill_id| humanize_skill_id(skill_id))
-        .collect::<Vec<_>>();
-    join_natural_language(&labels)
-}
-
-fn humanize_skill_id(skill_id: &str) -> String {
-    skill_id.replace(['-', '_'], " ")
-}
-
-fn join_natural_language(items: &[String]) -> String {
-    match items.len() {
-        0 => "nothing".to_string(),
-        1 => items[0].clone(),
-        2 => format!("{} and {}", items[0], items[1]),
-        _ => {
-            let mut out = items[..items.len() - 1].join(", ");
-            out.push_str(", and ");
-            out.push_str(&items[items.len() - 1]);
-            out
-        }
-    }
-}
-
-fn format_knowledge_status_sentence(prefix: &str, detail: Option<&str>) -> String {
-    let detail = detail
-        .map(normalize_log_detail)
-        .map(|detail| detail.trim_end_matches(['.', '!', '?']).to_string())
-        .unwrap_or_default();
-    if detail.is_empty() {
-        format!("{prefix}.")
-    } else {
-        format!("{prefix}: {detail}.")
+        format!("{} +{} more", visible.join(", "), remaining)
     }
 }
 
@@ -2928,7 +2698,7 @@ mod tests {
 
         assert_eq!(
             line,
-            "I loaded playbooks for preflight checks and implementation guidance. I left out final report to stay within the prompt budget. I also found 1 relevant reference skill: openai-docs from community-openai (92% match)."
+            "Loaded skills: task-preflight-check, code-implement; suggested: openai-docs"
         );
     }
 
@@ -2950,7 +2720,7 @@ mod tests {
 
         assert_eq!(
             line,
-            "I loaded playbooks for preflight checks. Global knowledge search is still warming up: Global skill knowledge index is still building. This should stay one line."
+            "Loaded skills: task-preflight-check; knowledge: pending"
         );
     }
 
