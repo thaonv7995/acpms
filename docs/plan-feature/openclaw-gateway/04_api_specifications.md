@@ -42,6 +42,96 @@ The mirrored routes must be represented in:
 *   `GET /api/openclaw/openapi.json`
 *   `GET /api/openclaw/swagger-ui`
 
+### 1.4 Bootstrap Guide Endpoint
+
+The gateway also exposes one OpenClaw-specific bootstrap endpoint outside the mirrored `/api/openclaw/v1/*` surface:
+
+*   **Endpoint**: `POST /api/openclaw/guide-for-openclaw`
+*   **Purpose**: Give OpenClaw an instance-specific setup guide immediately after the ACPMS credentials are pasted into OpenClaw.
+*   **Auth**: Requires `Authorization: Bearer <OPENCLAW_API_KEY>`
+*   **Behavior**:
+    *   validates the gateway API key
+    *   returns an `instruction_prompt` telling OpenClaw what ACPMS is, what role OpenClaw has, and how it must operate
+    *   returns the ACPMS endpoint map (`base`, `openapi`, stream URLs, webhook verification header names, etc.)
+    *   optionally accepts OpenClaw connection metadata and persists it
+
+Example request:
+
+```json
+{
+  "openclaw_instance": {
+    "name": "OpenClaw Production",
+    "version": "1.0.0",
+    "base_url": "https://openclaw.example.com"
+  },
+  "connection": {
+    "webhook_receiver_url": "https://openclaw.example.com/api/acpms-events",
+    "supports_webhooks": true,
+    "supports_sse": true,
+    "supports_websocket": true
+  },
+  "reporting": {
+    "primary_user": {
+      "display_name": "Alice",
+      "timezone": "Asia/Ho_Chi_Minh",
+      "preferred_language": "vi"
+    },
+    "channels": [
+      {
+        "type": "telegram",
+        "target": "@alice_ops"
+      },
+      {
+        "type": "slack",
+        "target": "#acpms-alerts"
+      }
+    ]
+  }
+}
+```
+
+Example response shape:
+
+```json
+{
+  "success": true,
+  "code": "0000",
+  "message": "OpenClaw bootstrap guide generated successfully",
+  "data": {
+    "instruction_prompt": "You are OpenClaw connected to ACPMS as a Super Admin integration...",
+    "core_missions": [
+      "Load ACPMS information and report it to the primary human user",
+      "Analyze user requirements using ACPMS context",
+      "Propose solutions and execution plans",
+      "Create tasks or requirements in ACPMS when appropriate",
+      "Run and monitor task attempts after confirmation or according to autonomy policy"
+    ],
+    "acpms_endpoints": {
+      "base_endpoint_url": "https://api.example.com/api/openclaw/v1",
+      "openapi_url": "https://api.example.com/api/openclaw/openapi.json",
+      "guide_url": "https://api.example.com/api/openclaw/guide-for-openclaw",
+      "websocket_base_url": "wss://api.example.com/api/openclaw/ws"
+    },
+    "operating_model": {
+      "role": "operations_assistant",
+      "human_reporting_required": true,
+      "preferred_reporting_channels": ["telegram", "slack"]
+    },
+    "connection_status": {
+      "webhook_registered": true,
+      "missing_steps": []
+    },
+    "setup_steps": [
+      "Load the OpenAPI contract",
+      "Store the webhook secret for signature verification",
+      "Configure Telegram or Slack reporting for the primary user",
+      "Use ACPMS context when analyzing user requirements",
+      "Use the mirrored /api/openclaw/v1 routes for all ACPMS operations"
+    ]
+  }
+}
+```
+
 ---
 
 ## 2. Exposed Capability Groups
@@ -152,8 +242,9 @@ The following examples illustrate the mirroring rule:
 Even under the “full internal API” goal, a few categories are intentionally outside the main mirrored contract:
 
 1.  **User Auth Bootstrap**: Login/register/refresh/logout flows are not needed because OpenClaw uses its dedicated bearer token.
-2.  **Browser Redirect Callbacks**: Human-interactive OAuth callback endpoints remain browser-oriented.
-3.  **Raw Scrape/Debug Endpoints**: Non-OpenAPI operational endpoints such as raw Prometheus scrapes can be exposed separately if desired, but they are not part of the main mirrored OpenClaw contract by default.
+2.  **Gateway Bootstrap Endpoint**: `POST /api/openclaw/guide-for-openclaw` is intentionally custom to help OpenClaw self-configure.
+3.  **Browser Redirect Callbacks**: Human-interactive OAuth callback endpoints remain browser-oriented.
+4.  **Raw Scrape/Debug Endpoints**: Non-OpenAPI operational endpoints such as raw Prometheus scrapes can be exposed separately if desired, but they are not part of the main mirrored OpenClaw contract by default.
 
 ---
 

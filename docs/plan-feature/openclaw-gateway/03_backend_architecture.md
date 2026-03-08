@@ -17,6 +17,7 @@ crates/server/src/routes/
 │   ├── mod.rs          // Gateway route registration and mirroring
 │   ├── auth.rs         // Bearer token validation + synthetic Super Admin identity
 │   ├── audit.rs        // Audit metadata, request tracing, actor annotations
+│   ├── guide.rs        // Bootstrap guide endpoint for OpenClaw self-configuration
 │   ├── mirror.rs       // Helpers for mounting mirrored REST/SSE/WS routes
 │   └── openapi.rs      // OpenClaw-specific OpenAPI export and security scheme
 ```
@@ -86,6 +87,22 @@ Even with the goal of exposing the full internal admin surface, a few routes sho
 1.  **Gateway Bootstrap/Auth Endpoints**: `/auth/login`, `/auth/register`, refresh/logout flows are unnecessary because OpenClaw authenticates with its dedicated API key.
 2.  **Browser Callback Endpoints**: Human-interactive OAuth callbacks (for example browser redirect handlers) remain browser-oriented and should not be re-modeled as OpenClaw admin tools.
 3.  **Non-OpenAPI Scrape Endpoints**: Raw operational scrape endpoints such as Prometheus text metrics can be exposed separately, but they are not part of the main mirrored OpenAPI contract unless explicitly wrapped.
+
+The key gateway-specific bootstrap endpoint is:
+
+*   `POST /api/openclaw/guide-for-openclaw`
+
+This endpoint is intentionally **not** a mirrored internal route. Its purpose is to help OpenClaw bootstrap itself after the installer-provided credentials are pasted into OpenClaw.
+
+### 3.4 Bootstrap Guide Endpoint
+
+The bootstrap endpoint should:
+
+1.  authenticate with the same `OPENCLAW_API_KEY`
+2.  return a long-form `instruction_prompt` explaining OpenClaw's mission, operating boundaries, and ACPMS connection rules
+3.  describe which ACPMS endpoints, auth headers, stream types, and Webhook verification rules OpenClaw must use
+4.  optionally accept OpenClaw metadata such as `openclaw_instance_name`, `openclaw_base_url`, and `webhook_receiver_url`
+5.  persist the receiver URL/config if provided so that the ACPMS -> OpenClaw Webhook path is completed during bootstrap
 
 ## 4. OpenAPI / Swagger Integration (`utoipa`)
 

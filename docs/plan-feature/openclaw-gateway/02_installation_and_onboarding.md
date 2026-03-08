@@ -42,12 +42,20 @@ At the end of the installation process, the `print_success_report()` function wi
  
  Base Endpoint URL : https://api.yourdomain.com/api/openclaw/v1
  OpenAPI (Swagger) : https://api.yourdomain.com/api/openclaw/openapi.json
+ Guide Endpoint    : https://api.yourdomain.com/api/openclaw/guide-for-openclaw
  API Key (Bearer)  : oc_live_5x8a9b2c3d4e5f6g7h8i9j0k
  Webhook Secret    : wh_sec_a1b2c3d4e5f6g7h8i9j0k1l2
  
  Note: Keep these credentials secure. The API key grants Super Admin-equivalent access.
 ================================================================================
 ```
+
+OpenClaw should use these values in this order:
+
+1.  Store the `API Key (Bearer)` as the default authorization secret for ACPMS.
+2.  Call the `Guide Endpoint` first to retrieve the instance-specific bootstrap instructions.
+3.  Fetch the `OpenAPI (Swagger)` document to discover the mirrored ACPMS tool surface.
+4.  Store the `Webhook Secret` so OpenClaw can verify signed ACPMS Webhook payloads.
 
 ## 2. Disabling or Resetting Credentials
 

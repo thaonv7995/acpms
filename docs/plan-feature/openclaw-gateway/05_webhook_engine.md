@@ -12,7 +12,7 @@ To avoid OpenClaw aggressively polling mirrored status endpoints such as `GET /a
 
 ## 3. Webhook Registration Configuration
 
-Currently, for v1 simplicity, instead of dynamic registrations, the target Webhook URL can be stored in the configurations (or via a simple Settings UI later).
+Currently, for v1 simplicity, instead of dynamic registrations, the target Webhook URL can be stored in the configurations (or via a simple Settings UI later). A preferred future path is to let `POST /api/openclaw/guide-for-openclaw` accept and persist OpenClaw's `webhook_receiver_url` during bootstrap.
 *   `OPENCLAW_WEBHOOK_URL=https://openclaw.system/api/agentic-events`
 
 ## 4. Security: HMAC-SHA256 Signature Validation
