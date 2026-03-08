@@ -143,6 +143,25 @@ struct OpenClawEventCursorExpiredData {
     oldest_available_event_id: Option<i64>,
 }
 
+struct OpenClawEventStreamDisconnectGuard {
+    after_cursor: Option<i64>,
+    replay_count: usize,
+    user_agent: Option<String>,
+    forwarded_for: Option<String>,
+}
+
+impl Drop for OpenClawEventStreamDisconnectGuard {
+    fn drop(&mut self) {
+        tracing::info!(
+            after_cursor = self.after_cursor,
+            replay_count = self.replay_count,
+            user_agent = self.user_agent.as_deref().unwrap_or("-"),
+            forwarded_for = self.forwarded_for.as_deref().unwrap_or("-"),
+            "OpenClaw event stream disconnected"
+        );
+    }
+}
+
 fn header_value(headers: &HeaderMap, name: &str) -> Option<String> {
     headers
         .get(name)
@@ -495,6 +514,8 @@ pub async fn events_stream(
     Query(params): Query<OpenClawEventStreamParams>,
 ) -> Result<Response, crate::error::ApiError> {
     let after_cursor = parse_resume_cursor(&headers, &params)?;
+    let user_agent = header_value(&headers, "user-agent");
+    let forwarded_for = header_value(&headers, "x-forwarded-for");
 
     if let Some(after) = after_cursor {
         if let Some(oldest) = state
@@ -504,6 +525,13 @@ pub async fn events_stream(
             .map_err(|error| crate::error::ApiError::Internal(error.to_string()))?
         {
             if after < oldest.saturating_sub(1) {
+                tracing::warn!(
+                    after_cursor = after,
+                    oldest_available_event_id = oldest,
+                    user_agent = user_agent.as_deref().unwrap_or("-"),
+                    forwarded_for = forwarded_for.as_deref().unwrap_or("-"),
+                    "OpenClaw event stream cursor expired"
+                );
                 return Ok(event_cursor_expired_response(after, Some(oldest)));
             }
         }
@@ -519,17 +547,32 @@ pub async fn events_stream(
     } else {
         Vec::new()
     };
+    tracing::info!(
+        after_cursor = after_cursor,
+        replay_count = replay_events.len(),
+        user_agent = user_agent.as_deref().unwrap_or("-"),
+        forwarded_for = forwarded_for.as_deref().unwrap_or("-"),
+        "OpenClaw event stream opened"
+    );
     let last_sent_id = Arc::new(AtomicI64::new(
         replay_events
             .last()
             .map(|event| event.sequence_id)
             .unwrap_or(after_cursor.unwrap_or(0)),
     ));
+    let disconnect_guard = Arc::new(OpenClawEventStreamDisconnectGuard {
+        after_cursor,
+        replay_count: replay_events.len(),
+        user_agent,
+        forwarded_for,
+    });
 
     let replay_stream = futures::stream::iter(replay_events.into_iter().map(to_sse_event));
     let live_stream = BroadcastStream::new(live_rx).filter_map(move |message| {
         let last_sent_id = last_sent_id.clone();
+        let disconnect_guard = disconnect_guard.clone();
         async move {
+            let _disconnect_guard = disconnect_guard;
             match message {
                 Ok(event) if event.sequence_id > last_sent_id.load(Ordering::Relaxed) => {
                     last_sent_id.store(event.sequence_id, Ordering::Relaxed);

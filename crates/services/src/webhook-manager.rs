@@ -1,8 +1,10 @@
 use crate::webhook_event_handlers::WebhookEventHandlers;
+use crate::OpenClawGatewayEventService;
 use acpms_executors::webhook_job::WebhookJob;
 use anyhow::{Context, Result};
 use sqlx::{FromRow, PgPool};
 use std::time::Duration;
+use std::sync::Arc;
 use tokio::time::sleep;
 use uuid::Uuid;
 
@@ -24,6 +26,11 @@ impl WebhookManager {
             handlers: WebhookEventHandlers::new(db.clone()),
             db,
         }
+    }
+
+    pub fn with_openclaw_events(mut self, openclaw_event_service: Arc<OpenClawGatewayEventService>) -> Self {
+        self.handlers = self.handlers.with_openclaw_events(openclaw_event_service);
+        self
     }
 
     /// Queue a webhook event for asynchronous processing

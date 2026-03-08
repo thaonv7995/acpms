@@ -107,7 +107,39 @@ pub async fn require_openclaw_auth(
     mut request: Request<axum::body::Body>,
     next: Next,
 ) -> Result<Response, ApiError> {
-    let auth_user = authenticate_openclaw_request(&state, request.headers()).await?;
+    let path = request.uri().path().to_string();
+    let user_agent = request
+        .headers()
+        .get(header::USER_AGENT)
+        .and_then(|value| value.to_str().ok())
+        .map(str::to_string);
+    let forwarded_for = request
+        .headers()
+        .get("x-forwarded-for")
+        .and_then(|value| value.to_str().ok())
+        .map(str::to_string);
+
+    let auth_user = match authenticate_openclaw_request(&state, request.headers()).await {
+        Ok(auth_user) => auth_user,
+        Err(error) => {
+            tracing::warn!(
+                path,
+                user_agent = user_agent.as_deref().unwrap_or("-"),
+                forwarded_for = forwarded_for.as_deref().unwrap_or("-"),
+                error = %error,
+                "OpenClaw gateway authentication failed"
+            );
+            return Err(error);
+        }
+    };
+
+    tracing::info!(
+        path,
+        user_agent = user_agent.as_deref().unwrap_or("-"),
+        forwarded_for = forwarded_for.as_deref().unwrap_or("-"),
+        actor_user_id = %auth_user.id,
+        "OpenClaw gateway request authenticated"
+    );
     request.extensions_mut().insert(auth_user);
     Ok(next.run(request).await)
 }

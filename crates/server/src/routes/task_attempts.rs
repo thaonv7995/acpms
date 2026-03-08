@@ -2469,6 +2469,15 @@ pub async fn cancel_attempt(
         .execute(&pool)
         .await
         .map_err(|e| ApiError::Internal(format!("Failed to revert task status: {}", e)))?;
+    openclaw::emit_task_status_changed(
+        &state,
+        task.project_id,
+        task.id,
+        task.status,
+        revert_status,
+        "routes.task_attempts.cancel_attempt.revert_status",
+    )
+    .await;
 
     // Broadcast status update so timeline/kanban can react without polling.
     let _ = state.broadcast_tx.send(AgentEvent::Status(StatusMessage {
@@ -3454,6 +3463,15 @@ pub async fn get_branch_status(
             .bind(task.id)
             .execute(&pool)
             .await;
+        openclaw::emit_task_status_changed(
+            &state,
+            task.project_id,
+            task.id,
+            task.status,
+            TaskStatus::Done,
+            "routes.task_attempts.get_attempt_diff.mr_merged_sync",
+        )
+        .await;
 
         // Cleanup worktree (merged on GitLab, no longer needed)
         if let Err(e) = state.orchestrator.cleanup_worktree_public(attempt_id).await {
@@ -3830,6 +3848,15 @@ pub async fn approve_attempt(
             .execute(&pool)
             .await
             .map_err(|e| ApiError::Internal(format!("Failed to update task status: {}", e)))?;
+        openclaw::emit_task_status_changed(
+            &state,
+            task.project_id,
+            task.id,
+            task.status,
+            TaskStatus::Done,
+            "routes.task_attempts.approve_attempt.merge_success",
+        )
+        .await;
     }
 
     // Run diff capture + S3 upload + worktree cleanup in background to avoid blocking response.
@@ -3964,6 +3991,15 @@ pub async fn reject_attempt(
         .execute(&pool)
         .await
         .map_err(|e| ApiError::Internal(format!("Failed to update task status: {}", e)))?;
+    openclaw::emit_task_status_changed(
+        &state,
+        task.project_id,
+        task.id,
+        task.status,
+        TaskStatus::Todo,
+        "routes.task_attempts.reject_attempt.revert_to_todo",
+    )
+    .await;
 
     // Run diff capture + S3 upload + cleanup in background (avoids blocking response).
     if let Some(worktree_path_str) = attempt

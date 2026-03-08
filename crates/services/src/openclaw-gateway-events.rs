@@ -391,3 +391,19 @@ struct AttemptRefs {
     task_id: Uuid,
     error_message: Option<String>,
 }
+
+#[cfg(test)]
+mod tests {
+    use super::build_webhook_signature;
+
+    #[test]
+    fn build_webhook_signature_matches_expected_hex() {
+        let signature = build_webhook_signature("secret", br#"{"hello":"world"}"#)
+            .expect("signature should be generated");
+
+        assert_eq!(
+            signature,
+            "2677ad3e7c090b2fa2c0fb13020d66d5420879b8316eb356a2d60fb9073bc778"
+        );
+    }
+}

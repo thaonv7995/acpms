@@ -129,6 +129,14 @@ pub async fn create_test_app_state(pool: PgPool) -> AppState {
         .expect("Failed to create orchestrator")
         .with_skill_knowledge(acpms_executors::SkillKnowledgeHandle::disabled()),
     );
+    let openclaw_gateway = Arc::new(OpenClawGatewayConfig::from_env());
+    let openclaw_event_service = Arc::new(
+        OpenClawGatewayEventService::new(pool.clone(), openclaw_gateway.event_retention_hours)
+            .with_optional_webhook(
+                openclaw_gateway.webhook_url.clone(),
+                openclaw_gateway.webhook_secret.clone(),
+            ),
+    );
 
     // Initialize Services (GitLabService returns Result)
     let gitlab_service =
@@ -136,10 +144,13 @@ pub async fn create_test_app_state(pool: PgPool) -> AppState {
     let gitlab_sync_service = Arc::new(GitLabSyncService::new(
         pool.clone(),
         (*gitlab_service).clone(),
-    ));
+    )
+    .with_openclaw_events(openclaw_event_service.clone()));
     let user_service = UserService::new(pool.clone());
     let sprint_service = SprintService::new(pool.clone());
-    let webhook_manager = Arc::new(WebhookManager::new(pool.clone()));
+    let webhook_manager = Arc::new(
+        WebhookManager::new(pool.clone()).with_openclaw_events(openclaw_event_service.clone()),
+    );
 
     // GitLabOAuthService - set test env vars if not already set
     if std::env::var("GITLAB_CLIENT_ID").is_err() {
@@ -200,15 +211,6 @@ pub async fn create_test_app_state(pool: PgPool) -> AppState {
         broadcast_tx.clone(),
         pool.clone(),
     ));
-    let openclaw_gateway = Arc::new(OpenClawGatewayConfig::from_env());
-    let openclaw_event_service = Arc::new(
-        OpenClawGatewayEventService::new(pool.clone(), openclaw_gateway.event_retention_hours)
-            .with_optional_webhook(
-                openclaw_gateway.webhook_url.clone(),
-                openclaw_gateway.webhook_secret.clone(),
-            ),
-    );
-
     let mut state = AppState {
         worktrees_path: worktrees_path.clone(),
         db: pool,

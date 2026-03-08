@@ -1690,16 +1690,27 @@ async fn main() -> anyhow::Result<()> {
     // Initialize encryption service
     let encryption_key = std::env::var("ENCRYPTION_KEY").context("ENCRYPTION_KEY must be set")?;
     let encryption_service = Arc::new(EncryptionService::new(&encryption_key)?);
+    let openclaw_gateway = Arc::new(OpenClawGatewayConfig::from_env());
+    let openclaw_event_service = Arc::new(
+        OpenClawGatewayEventService::new(pool.clone(), openclaw_gateway.event_retention_hours)
+            .with_optional_webhook(
+                openclaw_gateway.webhook_url.clone(),
+                openclaw_gateway.webhook_secret.clone(),
+            ),
+    );
 
     // Initialize Services
     let gitlab_service = Arc::new(GitLabService::new(pool.clone())?);
     let gitlab_sync_service = Arc::new(GitLabSyncService::new(
         pool.clone(),
         (*gitlab_service).clone(),
-    ));
+    )
+    .with_openclaw_events(openclaw_event_service.clone()));
     let user_service = UserService::new(pool.clone());
     let sprint_service = SprintService::new(pool.clone());
-    let webhook_manager = Arc::new(WebhookManager::new(pool.clone()));
+    let webhook_manager = Arc::new(
+        WebhookManager::new(pool.clone()).with_openclaw_events(openclaw_event_service.clone()),
+    );
     let gitlab_oauth_service = Arc::new(GitLabOAuthService::from_env(pool.clone())?);
     let webhook_admin_service = Arc::new(WebhookAdminService::new(pool.clone()));
 
@@ -1848,15 +1859,6 @@ async fn main() -> anyhow::Result<()> {
             .with_storage(storage_service.clone()),
     );
     tracing::info!("JSON Patch streaming infrastructure initialized");
-    let openclaw_gateway = Arc::new(OpenClawGatewayConfig::from_env());
-    let openclaw_event_service = Arc::new(
-        OpenClawGatewayEventService::new(pool.clone(), openclaw_gateway.event_retention_hours)
-            .with_optional_webhook(
-                openclaw_gateway.webhook_url.clone(),
-                openclaw_gateway.webhook_secret.clone(),
-            ),
-    );
-
     // Create AppState
     let mut state = AppState {
         worktrees_path: worktrees_path,

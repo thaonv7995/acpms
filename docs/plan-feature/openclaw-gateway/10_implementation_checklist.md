@@ -10,17 +10,20 @@ Implementation status after the first code delivery:
     *   `/api/openclaw/openapi.json`
     *   durable `openclaw_gateway_events` replay store
     *   `GET /api/openclaw/v1/events/stream`
+    *   mirrored `/api/openclaw/ws/*` root WebSocket surface
+    *   structured `EventCursorExpired` conflict payload for stale cursors
     *   attempt lifecycle event bridge from existing `AgentEvent` broadcast
     *   `task.status_changed` emission for the main task/attempt/review flows
+    *   `task.status_changed` emission for GitLab sync/webhook merge completion paths
+    *   optional outbound webhook delivery with HMAC-SHA256 signing
     *   `install.sh` enable prompt, secret generation, prompt file, and ready-to-send OpenClaw handoff prompt
+    *   structured audit logging for OpenClaw auth failures and event-stream connect/disconnect
 *   **Partially implemented**:
     *   custom OpenClaw OpenAPI entries are present, but not yet modeled with full `utoipa` path annotations
-    *   event expiry returns `409 Conflict`, but not yet with a dedicated machine-readable `EventCursorExpired` code
-    *   lifecycle emission is wired for the primary flows, but not yet for every possible status mutation path across the whole system
+    *   lifecycle emission is wired for the main ACPMS and GitLab merge flows, but not yet for every possible status mutation path across the whole system
 *   **Still open**:
-    *   optional webhook dispatch compatibility
-    *   richer unit/integration coverage for replay/order/expiry/live delivery
-    *   operational metrics and structured audit logs for the stream
+    *   operational metrics for the stream and webhook transport
+    *   a few higher-order replay/live-delivery integration scenarios
     *   unifying installer prompt rendering and bootstrap-guide rendering from one canonical shared builder
 
 ## 1. Goal
@@ -190,7 +193,7 @@ Retention:
 
 - [x] Add a retention policy, for example `OPENCLAW_EVENT_RETENTION_HOURS=168`.
 - [x] Add a cleanup job that deletes expired rows in bounded batches.
-- [ ] Document behavior when a client asks for a cursor older than the retained window.
+- [x] Document behavior when a client asks for a cursor older than the retained window.
 
 Implementation note:
 
@@ -205,7 +208,7 @@ Implementation note:
   - reading replay ranges after a cursor
   - publishing live events to a `broadcast::Sender`
 - [x] Keep this service separate from HTTP route code.
-- [ ] Reuse the service from both the global SSE endpoint and optional Webhook dispatch logic.
+- [x] Reuse the service from both the global SSE endpoint and optional Webhook dispatch logic.
 
 Required service methods:
 
@@ -299,7 +302,7 @@ Implementation note:
   - `high_priority_report_events`
   - `recommended_reporting_template`
 - [x] Keep the bootstrap response aligned with the OpenClaw operating-rule doc.
-- [ ] Ensure the rule payload distinguishes:
+- [x] Ensure the rule payload distinguishes:
   - read/report-only actions
   - analysis/proposal actions
   - work-creation actions
@@ -315,8 +318,8 @@ Implementation note:
 
 ### 4.9 Phase 9: Optional Webhook Compatibility
 
-- [ ] Keep the event payload schema identical between SSE and Webhook delivery where possible.
-- [ ] Reuse the same event service as the source for Webhook dispatch.
+- [x] Keep the event payload schema identical between SSE and Webhook delivery where possible.
+- [x] Reuse the same event service as the source for Webhook dispatch.
 - [x] Do not require `webhook_receiver_url` for bootstrap success.
 - [x] Report `webhook_registered=false` without treating it as a setup failure in stream-first mode.
 
@@ -344,7 +347,7 @@ These rules should be implemented exactly to avoid ambiguous client behavior.
 
 - [x] Use `sequence_id` as the canonical replay cursor.
 - [x] Serialize it as a string in SSE `id:` so it is safe for `Last-Event-ID`.
-- [ ] Document that the cursor is opaque from the client point of view even if it is numerically ordered.
+- [x] Document that the cursor is opaque from the client point of view even if it is numerically ordered.
 
 ### 5.2 Initial Connection
 
@@ -359,13 +362,13 @@ These rules should be implemented exactly to avoid ambiguous client behavior.
 
 ### 5.4 Retention Failure
 
-- [ ] If the earliest retained row is newer than the requested cursor, return a structured conflict error.
-- [ ] The error should instruct OpenClaw to resync by re-reading ACPMS state and then reopening the stream without a stale cursor.
+- [x] If the earliest retained row is newer than the requested cursor, return a structured conflict error.
+- [x] The error should instruct OpenClaw to resync by re-reading ACPMS state and then reopening the stream without a stale cursor.
 
 ## 6. Security and Auditing Checklist
 
 - [x] Reuse `Authorization: Bearer <OPENCLAW_API_KEY>` for the event stream.
-- [ ] Audit stream connect/disconnect events with request metadata.
+- [x] Audit stream connect/disconnect events with request metadata.
 - [x] Redact sensitive fields before event persistence.
 - [x] Ensure event payloads do not leak raw process environment, access tokens, or secret values.
 - [ ] Rate-limit stream connection churn if needed, but do not rate-limit a healthy long-lived connection aggressively.
@@ -374,8 +377,8 @@ These rules should be implemented exactly to avoid ambiguous client behavior.
 
 ### 7.1 Unit Tests
 
-- [ ] Event serialization/deserialization
-- [ ] Cursor parsing and validation
+- [x] Event serialization/deserialization
+- [x] Cursor parsing and validation
 - [ ] Replay query ordering
 - [ ] Retention cutoff cleanup
 - [ ] Installer prompt rendering from runtime config
@@ -383,13 +386,13 @@ These rules should be implemented exactly to avoid ambiguous client behavior.
 
 ### 7.2 Integration Tests
 
-- [ ] Unauthorized stream request returns `401`
-- [ ] Disabled gateway returns `403`
+- [x] Unauthorized stream request returns `401`
+- [x] Disabled gateway returns `403`
 - [x] `guide-for-openclaw` returns required runtime fields for stream-first mode
 - [ ] Installer-generated prompt and bootstrap response stay field-consistent
 - [ ] Connect with no cursor and receive live event
 - [ ] Reconnect with `Last-Event-ID` and receive missed events
-- [ ] Expired cursor returns structured conflict error
+- [x] Expired cursor returns structured conflict error
 - [ ] Attempt start -> completion emits expected global events in order
 - [ ] `attempt.needs_input` appears on the global stream and can be resolved via `POST /attempts/{id}/input`
 - [ ] Attempt log stream still works independently from the global event stream
@@ -444,7 +447,7 @@ These rules should be implemented exactly to avoid ambiguous client behavior.
 ### 9.4 Event Producers
 
 - [x] Orchestrator lifecycle hooks
-- [ ] Task service status hooks
+- [x] Task service status hooks
 - [x] HITL hooks
 - [ ] Optional deployment/review hooks
 
@@ -476,4 +479,5 @@ Actual implementation progress so far:
 3.  **Completed**: `GET /api/openclaw/v1/events/stream`
 4.  **Completed (main flows)**: attempt lifecycle + task status emission wiring
 5.  **Completed (first pass)**: installer handoff prompt and saved prompt file
-6.  **Remaining**: webhook compatibility, richer tests, metrics/auditing, and canonical shared prompt builder
+6.  **Completed**: optional webhook compatibility, cursor-expiry handling, richer auth/expiry/WS tests, and additional GitLab merge task-status coverage
+7.  **Remaining**: stream/webhook metrics, fuller manual replay/live-delivery verification, and a canonical shared prompt builder for installer + guide rendering
