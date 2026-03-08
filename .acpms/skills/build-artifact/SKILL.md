@@ -47,7 +47,7 @@ Do not report artifact success from:
 | `web` | `dist/`, `.next/`, or framework-specific static/server build output | Must match the preview/deploy path actually used by the repo |
 | `api` / `microservice` | built server binary, packaged runtime tree, OpenAPI output, or container-ready runtime | Prefer the artifact used by the real runtime path, not a placeholder build |
 | `desktop` | packaged app bundle, installer, or release directory | Useful for artifact preview, not live web preview |
-| `mobile` | build output or packaged app artifact | Only if mobile build is in scope and the environment supports it |
+| `mobile` | dev bundle, simulator-ready output, or packaged app artifact | Prefer the preview surface the environment can actually support |
 | `extension` | zipped extension, unpacked bundle, or browser-loadable output directory | Must match the preview/download contract |
 
 ## Build Command Selection
@@ -96,6 +96,10 @@ Optional but recommended:
   - entry binary or server bundle exists
   - container runtime can reference the built output
   - generated API docs/spec output exists if the repo expects it
+- For mobile builds, confirm the output matches the intended preview surface:
+  - Expo/dev bundle metadata exists when using dev bundle preview
+  - Android artifact exists for installable QA preview
+  - iOS artifact is only reported when signing/export really succeeded
 - For packaged artifacts, confirm the main bundle/file exists
 - For deploy-targeted output, verify the path is the one the next deploy skill expects
 
@@ -105,6 +109,8 @@ Optional but recommended:
 | Multiple build targets exist | Build only the target relevant to the current flow and report which one was selected. |
 | API preview/deploy runs from a containerized service | Build the output that the container really uses, not only a library/test artifact. |
 | API has helper services but app build is stateless | Build the app artifact and let compose/runtime skills handle support services separately. |
+| Mobile app preview is simulator/dev-bundle based | Prefer the bundle/build path that matches that preview mode instead of forcing a full release package. |
+| Mobile release artifact requires unavailable signing or platform tooling | Report the limitation honestly rather than claiming a releasable artifact exists. |
 | Build succeeds but output path is missing | Treat it as a failed artifact build. |
 | Build tooling is missing | Stop and report the missing setup requirement. |
 | Output exists but is obviously stale or wrong | Rebuild or fail explicitly; do not hand off a bad artifact. |
@@ -138,6 +144,15 @@ Build Artifact Summary
 - artifact_paths:
   - target/release/api-server
 - artifact_notes: API runtime binary used by Docker preview and deploy
+```
+
+```md
+Build Artifact Summary
+- build_status: success
+- build_command: npx expo export
+- artifact_paths:
+  - dist/
+- artifact_notes: Expo dev bundle/export used for mobile preview
 ```
 
 ## Bad Output Example
