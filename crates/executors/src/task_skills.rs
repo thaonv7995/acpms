@@ -2184,6 +2184,8 @@ fn builtin_skill_content(skill_id: &str) -> Option<&'static str> {
         ),
         "init-project-bootstrap" => Some(
             r#"Bootstrap initial project structure using selected stack.
+- If stack is not explicitly specified, infer it from the product shape instead of forcing one default framework.
+- If ACPMS preview/deploy expects Docker or the app needs helper services, scaffold Docker runtime files during init.
 - Keep setup minimal and reproducible.
 - Run baseline validation and summarize generated artifacts."#,
         ),
@@ -2193,10 +2195,19 @@ fn builtin_skill_content(skill_id: &str) -> Option<&'static str> {
 - Include key commands and workflows for future AI agents."#,
         ),
         "init-web-scaffold" => Some(
-            r#"Web app scaffold: package.json, build tools (Vite/Next.js), TypeScript, README, .gitignore, .env.example, ESLint/Prettier, src/, public/, routing. Use Project Details for name/description."#,
+            r#"Web app scaffold: choose stack from app shape, not from a hard-coded default.
+- Landing page/marketing site: keep stack lightweight.
+- SPA/dashboard/internal tool: prefer a client-first stack.
+- SSR/SEO-heavy site: prefer an SSR-capable stack.
+- Imported existing repo: preserve the existing viable stack.
+- If ACPMS preview uses Docker or helper services are needed, include Dockerfile and docker-compose.yml from init.
+- Deliver package.json, appropriate build tools, README, .gitignore, .env.example, src/, public/, routing/layout, and Docker runtime files only when the chosen stack/runtime needs them. Use Project Details for name/description."#,
         ),
         "init-api-scaffold" => Some(
-            r#"API scaffold: init project (Cargo/package/requirements), web framework, README, .gitignore, Docker, routes, middleware, health check, /api/v1/, CRUD template. Use Project Details for name/description."#,
+            r#"API scaffold: init project (Cargo/package/requirements), web framework, README, .gitignore, routes, middleware, health check, /api/v1/, CRUD template.
+- Include Dockerfile when ACPMS preview/deploy expects Docker runtime.
+- Include docker-compose.yml when helper services such as DB/cache/queue are part of the baseline runtime.
+- Use Project Details for name/description."#,
         ),
         "init-mobile-scaffold" => Some(
             r#"Mobile scaffold: React Native/Expo/Flutter, platform config, README, .gitignore, Info.plist, AndroidManifest, src/lib/, navigation, screens. Use Project Details for name/description."#,
@@ -2208,7 +2219,9 @@ fn builtin_skill_content(skill_id: &str) -> Option<&'static str> {
             r#"Desktop scaffold: Electron/Tauri, main/renderer, README, .gitignore, IPC, packaging, code signing. Use Project Details for name/description."#,
         ),
         "init-microservice-scaffold" => Some(
-            r#"Microservice scaffold: go.mod/Cargo.toml, Dockerfile, docker-compose, health/ready/live, metrics, logging, cmd/, api/, configs/. Use Project Details for name/description."#,
+            r#"Microservice scaffold: go.mod/Cargo.toml, Dockerfile, health/ready/live, metrics, logging, cmd/, api/, configs/.
+- Include docker-compose.yml when the service depends on supporting services or local orchestration.
+- Use Project Details for name/description."#,
         ),
         "init-import-analyze" => Some(
             r#"Analyze imported repository: explore directory structure, identify services/components, evaluate tech stack.

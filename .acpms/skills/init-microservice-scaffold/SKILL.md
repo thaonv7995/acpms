@@ -28,8 +28,11 @@ complexity on day one.
 2. Create the service entrypoint and configuration handling.
 3. Add health endpoints and structured logging baseline.
 4. Add containerization files and local run defaults.
-5. Stub metrics or observability entrypoints when appropriate.
-6. Leave the service runnable and health-checkable.
+5. If the service depends on supporting infrastructure, add
+   `docker-compose.yml` that starts the service with those dependencies instead
+   of leaving the runtime ambiguous.
+6. Stub metrics or observability entrypoints when appropriate.
+7. Leave the service runnable and health-checkable.
 
 ## Required Baseline
 - service entrypoint
@@ -43,6 +46,7 @@ complexity on day one.
 |---|---|
 | Communication pattern is unclear | Start with a health endpoint and simplest external interface |
 | Database need is unclear | Leave config hooks, avoid schema overcommit |
+| Supporting services are required for the baseline runtime | Include `docker-compose.yml` from init, not as a later deploy-only patch. |
 | Observability stack is unspecified | Add lightweight health/logging baseline first |
 
 ## Output Contract
