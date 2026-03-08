@@ -1,12 +1,25 @@
 use axum::{
-    extract::State,
+    extract::{Query, State},
     http::HeaderMap,
-    response::Json,
+    response::{
+        sse::{Event, KeepAlive, Sse},
+        Json,
+    },
     routing::{get, post},
     Router,
 };
+use futures::StreamExt;
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
+use std::{
+    convert::Infallible,
+    sync::{
+        atomic::{AtomicI64, Ordering},
+        Arc,
+    },
+    time::Duration,
+};
+use tokio_stream::wrappers::BroadcastStream;
 
 use crate::{
     api::{openapi_spec::build_openclaw_openapi_json, ApiResponse},
@@ -114,6 +127,11 @@ pub struct OpenClawNextCall {
     pub method: String,
     pub path: String,
     pub purpose: String,
+}
+
+#[derive(Debug, Deserialize)]
+pub struct OpenClawEventStreamParams {
+    pub after: Option<String>,
 }
 
 fn header_value(headers: &HeaderMap, name: &str) -> Option<String> {
@@ -361,8 +379,98 @@ pub async fn openapi_json(_auth_user: AuthUser) -> Json<Value> {
     Json(build_openclaw_openapi_json())
 }
 
+fn parse_resume_cursor(
+    headers: &HeaderMap,
+    params: &OpenClawEventStreamParams,
+) -> Result<Option<i64>, crate::error::ApiError> {
+    let header_cursor = header_value(headers, "last-event-id");
+    if header_cursor.is_some() && params.after.is_some() {
+        return Err(crate::error::ApiError::BadRequest(
+            "Provide either Last-Event-ID or ?after=, not both".to_string(),
+        ));
+    }
+
+    let raw = header_cursor.or_else(|| params.after.clone());
+    raw.map(|value| {
+        value
+            .parse::<i64>()
+            .map_err(|_| crate::error::ApiError::BadRequest("Invalid event cursor".to_string()))
+    })
+    .transpose()
+}
+
+fn to_sse_event(event: acpms_services::OpenClawGatewayEvent) -> Result<Event, Infallible> {
+    let data = serde_json::to_string(&event).unwrap_or_else(|_| "{}".to_string());
+    Ok(Event::default()
+        .id(event.sequence_id.to_string())
+        .event(event.event_type)
+        .data(data))
+}
+
+pub async fn events_stream(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+    _auth_user: AuthUser,
+    Query(params): Query<OpenClawEventStreamParams>,
+) -> Result<Sse<impl futures::Stream<Item = Result<Event, Infallible>>>, crate::error::ApiError> {
+    let after_cursor = parse_resume_cursor(&headers, &params)?;
+
+    if let Some(after) = after_cursor {
+        if let Some(oldest) = state
+            .openclaw_event_service
+            .oldest_sequence_id()
+            .await
+            .map_err(|error| crate::error::ApiError::Internal(error.to_string()))?
+        {
+            if after < oldest.saturating_sub(1) {
+                return Err(crate::error::ApiError::Conflict(
+                    "Event cursor expired".to_string(),
+                ));
+            }
+        }
+    }
+
+    let live_rx = state.openclaw_event_service.subscribe_live();
+    let replay_events = if let Some(after) = after_cursor {
+        state
+            .openclaw_event_service
+            .list_events_after(after, 1000)
+            .await
+            .map_err(|error| crate::error::ApiError::Internal(error.to_string()))?
+    } else {
+        Vec::new()
+    };
+    let last_sent_id = Arc::new(AtomicI64::new(
+        replay_events
+            .last()
+            .map(|event| event.sequence_id)
+            .unwrap_or(after_cursor.unwrap_or(0)),
+    ));
+
+    let replay_stream = futures::stream::iter(replay_events.into_iter().map(to_sse_event));
+    let live_stream = BroadcastStream::new(live_rx).filter_map(move |message| {
+        let last_sent_id = last_sent_id.clone();
+        async move {
+            match message {
+                Ok(event) if event.sequence_id > last_sent_id.load(Ordering::Relaxed) => {
+                    last_sent_id.store(event.sequence_id, Ordering::Relaxed);
+                    Some(to_sse_event(event))
+                }
+                Ok(_) => None,
+                Err(_) => None,
+            }
+        }
+    });
+
+    Ok(Sse::new(replay_stream.chain(live_stream)).keep_alive(
+        KeepAlive::new()
+            .interval(Duration::from_secs(15))
+            .text("keep-alive"),
+    ))
+}
+
 pub fn create_router(state: AppState) -> Router {
-    let v1_routes = super::build_business_api_routes();
+    let v1_routes = super::build_business_api_routes().route("/events/stream", get(events_stream));
 
     Router::new()
         .route("/guide-for-openclaw", post(guide_for_openclaw))

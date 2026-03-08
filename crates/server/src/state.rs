@@ -5,9 +5,9 @@ use crate::services::project_assistant_worker_pool::ProjectAssistantWorkerPool;
 use acpms_executors::{AgentEvent, ExecutorOrchestrator, WorkerPool};
 use acpms_preview::PreviewManager;
 use acpms_services::{
-    BuildService, GitLabOAuthService, GitLabService, GitLabSyncService, PatchStore,
-    ProductionDeployService, SprintService, StreamService, SystemSettingsService, UserService,
-    WebhookAdminService, WebhookManager,
+    BuildService, GitLabOAuthService, GitLabService, GitLabSyncService,
+    OpenClawGatewayEventService, PatchStore, ProductionDeployService, SprintService, StreamService,
+    SystemSettingsService, UserService, WebhookAdminService, WebhookManager,
 };
 use sqlx::PgPool;
 use std::path::PathBuf;
@@ -97,6 +97,7 @@ pub struct AppState {
     pub stream_service: Arc<StreamService>,
     pub auth_session_store: Arc<AuthSessionStore>,
     pub openclaw_gateway: Arc<OpenClawGatewayConfig>,
+    pub openclaw_event_service: Arc<OpenClawGatewayEventService>,
 }
 
 impl axum::extract::FromRef<AppState> for PgPool {

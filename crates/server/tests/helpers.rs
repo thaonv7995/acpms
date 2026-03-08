@@ -9,8 +9,9 @@ use acpms_preview::PreviewManager;
 use acpms_services::{generate_jwt, hash_password};
 use acpms_services::{
     BuildService, EncryptionService, GitLabOAuthService, GitLabService, GitLabSyncService,
-    PatchStore, ProductionDeployService, SprintService, StorageService, StreamService,
-    SystemSettingsService, UserService, WebhookAdminService, WebhookManager,
+    OpenClawGatewayEventService, PatchStore, ProductionDeployService, SprintService,
+    StorageService, StreamService, SystemSettingsService, UserService, WebhookAdminService,
+    WebhookManager,
 };
 use axum::{
     body::Body,
@@ -199,6 +200,11 @@ pub async fn create_test_app_state(pool: PgPool) -> AppState {
         broadcast_tx.clone(),
         pool.clone(),
     ));
+    let openclaw_gateway = Arc::new(OpenClawGatewayConfig::from_env());
+    let openclaw_event_service = Arc::new(OpenClawGatewayEventService::new(
+        pool.clone(),
+        openclaw_gateway.event_retention_hours,
+    ));
 
     let mut state = AppState {
         worktrees_path: worktrees_path.clone(),
@@ -225,8 +231,13 @@ pub async fn create_test_app_state(pool: PgPool) -> AppState {
         patch_store,
         stream_service,
         auth_session_store: Arc::new(acpms_server::services::agent_auth::AuthSessionStore::new()),
-        openclaw_gateway: Arc::new(OpenClawGatewayConfig::from_env()),
+        openclaw_gateway,
+        openclaw_event_service: openclaw_event_service.clone(),
     };
+
+    openclaw_event_service
+        .clone()
+        .spawn_agent_event_bridge(state.broadcast_tx.subscribe());
 
     let project_assistant_handler_state = state.clone();
     let project_assistant_handler: ProjectAssistantJobHandler =

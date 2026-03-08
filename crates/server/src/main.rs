@@ -30,7 +30,7 @@ use utoipa_swagger_ui::SwaggerUi;
 
 use acpms_db::models::AttemptStatus;
 use acpms_executors::AgentEvent;
-use acpms_services::{StorageService, TaskAttemptService};
+use acpms_services::{OpenClawGatewayEventService, StorageService, TaskAttemptService};
 
 /// R7: Spawn task that uploads JSONL logs to S3 when attempt completes.
 fn spawn_log_upload_on_complete(
@@ -1848,6 +1848,10 @@ async fn main() -> anyhow::Result<()> {
             .with_storage(storage_service.clone()),
     );
     tracing::info!("JSON Patch streaming infrastructure initialized");
+    let openclaw_event_service = Arc::new(OpenClawGatewayEventService::new(
+        pool.clone(),
+        OpenClawGatewayConfig::from_env().event_retention_hours,
+    ));
 
     // Create AppState
     let mut state = AppState {
@@ -1875,7 +1879,12 @@ async fn main() -> anyhow::Result<()> {
         stream_service,
         auth_session_store: Arc::new(crate::services::agent_auth::AuthSessionStore::new()),
         openclaw_gateway: Arc::new(OpenClawGatewayConfig::from_env()),
+        openclaw_event_service: openclaw_event_service.clone(),
     };
+
+    openclaw_event_service
+        .clone()
+        .spawn_agent_event_bridge(broadcast_tx.subscribe());
 
     let deployment_handler_state = state.clone();
     let deployment_handler = Arc::new(move |job: DeploymentJob| {
@@ -1946,6 +1955,22 @@ async fn main() -> anyhow::Result<()> {
             interval.tick().await;
             if let Err(e) = preview_manager_cleanup.cleanup_expired_previews().await {
                 tracing::error!("Failed to cleanup expired previews: {}", e);
+            }
+        }
+    });
+
+    let openclaw_event_cleanup_service = openclaw_event_service.clone();
+    tokio::spawn(async move {
+        tracing::info!("Starting OpenClaw event cleanup job");
+        let mut interval = tokio::time::interval(std::time::Duration::from_secs(3600));
+
+        loop {
+            interval.tick().await;
+            if let Err(error) = openclaw_event_cleanup_service
+                .cleanup_expired_events()
+                .await
+            {
+                tracing::warn!("Failed to cleanup expired OpenClaw events: {}", error);
             }
         }
     });
