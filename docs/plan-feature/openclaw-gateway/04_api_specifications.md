@@ -53,6 +53,7 @@ The gateway also exposes one OpenClaw-specific bootstrap endpoint outside the mi
     *   validates the gateway API key
     *   returns an `instruction_prompt` telling OpenClaw what ACPMS is, what role OpenClaw has, and how it must operate
     *   returns the ACPMS endpoint map (`base`, `openapi`, global event stream URL, attempt stream URLs, optional webhook verification header names, etc.)
+    *   serves as the authoritative runtime follow-up after the installer-generated OpenClaw prompt handoff
     *   optionally accepts OpenClaw connection metadata and persists it
 
 Example request:

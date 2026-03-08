@@ -46,3 +46,4 @@ External OpenClaw integration as a Super Admin control plane for ACPMS, includin
 - [09_bootstrap_guide_api.md](openclaw-gateway/09_bootstrap_guide_api.md) - Bootstrap guide endpoint
 - [10_implementation_checklist.md](openclaw-gateway/10_implementation_checklist.md) - Implementation checklist for event stream and replay
 - [11_operating_rules.md](openclaw-gateway/11_operating_rules.md) - Operating rules for command handling and user reporting
+- [12_installer_bootstrap_prompt.md](openclaw-gateway/12_installer_bootstrap_prompt.md) - Ready-to-send installer prompt for OpenClaw handoff

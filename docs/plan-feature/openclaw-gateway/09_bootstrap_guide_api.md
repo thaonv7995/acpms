@@ -9,6 +9,7 @@ After the installer provides the ACPMS connection bundle:
 *   `API Key (Bearer)`
 *   `Global Event SSE`
 *   `Webhook Secret` (optional)
+*   `Ready-to-Send Installer Prompt`
 
 OpenClaw should not immediately start calling arbitrary ACPMS endpoints.
 
@@ -17,6 +18,11 @@ Instead, OpenClaw should first call a dedicated bootstrap endpoint:
 *   `POST /api/openclaw/guide-for-openclaw`
 
 This endpoint returns the ACPMS-specific onboarding guide for OpenClaw. It acts as the machine-readable and prompt-ready "operator manual" for this ACPMS instance.
+
+The installer-generated prompt and the bootstrap API have different jobs:
+
+*   the installer prompt is the **human handoff artifact**
+*   `POST /api/openclaw/guide-for-openclaw` is the **authoritative runtime guide**
 
 ## 2. Why This Endpoint Exists
 
@@ -32,6 +38,13 @@ The OpenAPI contract explains what endpoints exist, but it does **not** fully ex
 *   what safety and approval boundaries should apply to destructive admin actions
 
 The `guide-for-openclaw` endpoint fills that gap by returning a structured guide plus a large instruction prompt that OpenClaw can load into its integration/runtime context.
+
+This means the correct first-run flow is:
+
+1.  user copies the installer-generated prompt and sends it to OpenClaw
+2.  OpenClaw extracts the embedded ACPMS connection bundle
+3.  OpenClaw calls `POST /api/openclaw/guide-for-openclaw`
+4.  OpenClaw treats the response as the authoritative runtime contract
 
 At a minimum, the guide should teach OpenClaw these three core missions:
 
@@ -383,12 +396,18 @@ When OpenClaw Gateway is enabled, `install.sh` should print:
 *   `Global Event SSE`
 *   `API Key (Bearer)`
 *   `Webhook Secret` (optional)
+*   `Ready-to-Send Installer Prompt`
+
+The installer-generated handoff prompt is defined in:
+
+*   `docs/plan-feature/openclaw-gateway/12_installer_bootstrap_prompt.md`
 
 OpenClaw then uses these values in this order:
 
-1.  Call `Guide Endpoint`
-2.  Load `OpenAPI (Swagger)`
-3.  Open `Global Event SSE`
-4.  Store `Webhook Secret` only if optional Webhook mode is enabled
-5.  Configure reporting to the primary user via Telegram, Slack, or another supported OpenClaw channel
-6.  Start using the mirrored ACPMS admin API surface
+1.  Receive the installer-generated prompt from the human user
+2.  Call `Guide Endpoint`
+3.  Load `OpenAPI (Swagger)`
+4.  Open `Global Event SSE`
+5.  Store `Webhook Secret` only if optional Webhook mode is enabled
+6.  Configure reporting to the primary user via Telegram, Slack, or another supported OpenClaw channel
+7.  Start using the mirrored ACPMS admin API surface

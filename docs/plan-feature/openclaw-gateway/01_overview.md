@@ -47,8 +47,8 @@ To fulfill the requirements above, the chosen architecture pattern is **Full Int
 ## 3. High-Level Flow
 
 1.  **Provisioning**: User installs Agentic-Coding and opts to enable the OpenClaw Gateway. The installer generates an API Key and may also generate a Webhook Secret for optional Webhook mode.
-2.  **Configuration**: User stores those credentials inside OpenClaw as a privileged integration.
-3.  **Bootstrap Guide Call**: OpenClaw first calls `POST /api/openclaw/guide-for-openclaw` using the API Key. The response returns an instruction prompt, required headers, stream URLs, optional Webhook rules, endpoint checklist, and connection status.
+2.  **Configuration Handoff**: `install.sh` prints a ready-to-send OpenClaw prompt that already contains the ACPMS connection bundle. The user sends that whole prompt to OpenClaw instead of manually explaining the integration.
+3.  **Bootstrap Guide Call**: After reading the installer prompt, OpenClaw first calls `POST /api/openclaw/guide-for-openclaw` using the API Key. The response returns an instruction prompt, required headers, stream URLs, optional Webhook rules, endpoint checklist, and connection status.
 4.  **Discovery**: OpenClaw fetches `/api/openclaw/openapi.json` to discover the mirrored internal API surface.
 5.  **Primary Event Subscription**: OpenClaw opens the global ACPMS event stream and keeps it connected so it can receive attempt lifecycle events, task status changes, approval requests, and system alerts without exposing an inbound endpoint.
 6.  **Optional Webhook Finalization**: If a deployment intentionally enables Webhooks and OpenClaw includes receiver metadata (for example `webhook_receiver_url`) in the bootstrap call, ACPMS stores that information so outbound Webhooks can be completed.
