@@ -18,6 +18,8 @@ exists.
 - Project name and brief
 - Required language/framework, if specified
 - Expected persistence or auth needs, if known
+- Preview/deploy expectation, especially if ACPMS preview should run from Docker
+- Supporting services such as database, cache, queue, broker, or worker
 
 ## Workflow
 1. Choose the safest baseline stack that matches explicit requirements.
@@ -27,8 +29,12 @@ exists.
    - health endpoint
    - versioned API root
    - structured error handling shape
-5. Add Docker/dev defaults only when they support the baseline immediately.
-6. Leave the project in a runnable, verifiable state.
+5. Add container runtime files whenever ACPMS preview/deploy or helper services
+   require them:
+   - `Dockerfile`
+   - `docker-compose.yml` when orchestration or support services are needed
+6. Add Docker/dev defaults only when they support the baseline immediately.
+7. Leave the project in a runnable, verifiable state.
 
 ## Required Baseline
 - project manifest
@@ -38,6 +44,8 @@ exists.
 - README
 - `.gitignore`
 - `.env.example`
+- `Dockerfile` when the service is expected to run in ACPMS Docker preview/deploy
+- `docker-compose.yml` when helper services are part of the baseline runtime
 
 ## Decision Rules
 | Situation | Action |
@@ -45,12 +53,15 @@ exists.
 | Framework is explicitly requested | Follow it |
 | Database need is unclear | Stub config, do not invent a full schema |
 | Auth is not in scope yet | Leave auth-ready structure but do not over-implement |
+| ACPMS preview/deploy expects Docker runtime | Include a working `Dockerfile` from init. |
+| Service depends on DB/cache/queue/broker | Include `docker-compose.yml` wiring for the app and support services. |
 
 ## Output Contract
 Emit:
 - `scaffold_status`
 - `selected_stack`
 - `created_files`
+- `container_strategy`
 - `verification_commands`
 - `assumptions`
 
