@@ -1704,11 +1704,10 @@ async fn main() -> anyhow::Result<()> {
 
     // Initialize Services
     let gitlab_service = Arc::new(GitLabService::new(pool.clone())?);
-    let gitlab_sync_service = Arc::new(GitLabSyncService::new(
-        pool.clone(),
-        (*gitlab_service).clone(),
-    )
-    .with_openclaw_events(openclaw_event_service.clone()));
+    let gitlab_sync_service = Arc::new(
+        GitLabSyncService::new(pool.clone(), (*gitlab_service).clone())
+            .with_openclaw_events(openclaw_event_service.clone()),
+    );
     let user_service = UserService::new(pool.clone());
     let sprint_service = SprintService::new(pool.clone());
     let webhook_manager = Arc::new(

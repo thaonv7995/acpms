@@ -30,6 +30,33 @@ use crate::{
 };
 use acpms_db::models::TaskStatus;
 
+const OPENCLAW_HANDOFF_CONTRACT_VERSION: &str = "v1";
+const OPENCLAW_CONNECTION_BUNDLE_FIELDS: &[&str] = &[
+    "Base Endpoint URL",
+    "OpenAPI (Swagger)",
+    "Guide Endpoint",
+    "Global Event SSE",
+    "WebSocket Base",
+    "API Key (Bearer)",
+    "Webhook Secret",
+];
+const OPENCLAW_REQUIRED_FIRST_ACTIONS: &[&str] = &[
+    "Store the API Key as the Bearer credential for ACPMS.",
+    "Call the Guide Endpoint first and treat its response as the authoritative runtime guide.",
+    "Load the OpenAPI document.",
+    "Open and maintain the Global Event SSE connection.",
+    "Use only ACPMS OpenClaw routes.",
+    "Follow the ACPMS operating rules returned by the Guide Endpoint.",
+];
+const OPENCLAW_REQUIRED_ROUTE_PREFIXES: &[&str] = &["/api/openclaw/v1/*", "/api/openclaw/ws/*"];
+const OPENCLAW_REPORTING_REQUIREMENTS: &[&str] = &[
+    "report important status, analyses, plans, started attempts, completed attempts, failed attempts, blocked work, and approval requests",
+    "do not expose secrets, API keys, or webhook secrets in user-facing output",
+    "what ACPMS currently says",
+    "what you recommend",
+    "what you already changed",
+];
+
 #[derive(Debug, Default, Deserialize)]
 pub struct OpenClawGuideRequest {
     #[serde(default)]
@@ -63,6 +90,7 @@ pub struct OpenClawGuideResponse {
     pub instruction_prompt: String,
     pub core_missions: Vec<String>,
     pub acpms_profile: OpenClawAcpmsProfile,
+    pub handoff_contract: OpenClawHandoffContract,
     pub operating_model: OpenClawOperatingModel,
     pub operating_rules: OpenClawOperatingRules,
     pub auth_rules: OpenClawAuthRules,
@@ -81,6 +109,15 @@ pub struct OpenClawAcpmsProfile {
     pub guide_url: String,
     pub events_stream_url: String,
     pub websocket_base_url: String,
+}
+
+#[derive(Debug, Serialize)]
+pub struct OpenClawHandoffContract {
+    pub contract_version: String,
+    pub connection_bundle_fields: Vec<String>,
+    pub required_first_actions: Vec<String>,
+    pub required_route_prefixes: Vec<String>,
+    pub reporting_requirements: Vec<String>,
 }
 
 #[derive(Debug, Serialize)]
@@ -254,6 +291,28 @@ fn build_instruction_prompt(
     )
 }
 
+fn build_handoff_contract() -> OpenClawHandoffContract {
+    OpenClawHandoffContract {
+        contract_version: OPENCLAW_HANDOFF_CONTRACT_VERSION.to_string(),
+        connection_bundle_fields: OPENCLAW_CONNECTION_BUNDLE_FIELDS
+            .iter()
+            .map(|value| (*value).to_string())
+            .collect(),
+        required_first_actions: OPENCLAW_REQUIRED_FIRST_ACTIONS
+            .iter()
+            .map(|value| (*value).to_string())
+            .collect(),
+        required_route_prefixes: OPENCLAW_REQUIRED_ROUTE_PREFIXES
+            .iter()
+            .map(|value| (*value).to_string())
+            .collect(),
+        reporting_requirements: OPENCLAW_REPORTING_REQUIREMENTS
+            .iter()
+            .map(|value| (*value).to_string())
+            .collect(),
+    }
+}
+
 pub async fn guide_for_openclaw(
     State(state): State<AppState>,
     headers: HeaderMap,
@@ -313,6 +372,7 @@ pub async fn guide_for_openclaw(
             "Monitor execution and report outcomes, blockers, and approvals".to_string(),
         ],
         acpms_profile: profile,
+        handoff_contract: build_handoff_contract(),
         operating_model: OpenClawOperatingModel {
             role: "operations_assistant".to_string(),
             primary_human_relationship: "reporting_assistant".to_string(),
@@ -554,7 +614,11 @@ pub async fn events_stream(
     } else {
         Vec::new()
     };
-    let stream_mode = if after_cursor.is_some() { "resume" } else { "live" };
+    let stream_mode = if after_cursor.is_some() {
+        "resume"
+    } else {
+        "live"
+    };
     state
         .metrics
         .openclaw_event_stream_connections_total
@@ -627,4 +691,69 @@ pub fn create_router(state: AppState) -> Router {
             crate::middleware::require_openclaw_auth,
         ))
         .with_state(state)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{
+        build_handoff_contract, OPENCLAW_CONNECTION_BUNDLE_FIELDS,
+        OPENCLAW_HANDOFF_CONTRACT_VERSION, OPENCLAW_REPORTING_REQUIREMENTS,
+        OPENCLAW_REQUIRED_FIRST_ACTIONS, OPENCLAW_REQUIRED_ROUTE_PREFIXES,
+    };
+
+    #[test]
+    fn handoff_contract_uses_canonical_values() {
+        let handoff = build_handoff_contract();
+
+        assert_eq!(handoff.contract_version, OPENCLAW_HANDOFF_CONTRACT_VERSION);
+        assert_eq!(
+            handoff.connection_bundle_fields.len(),
+            OPENCLAW_CONNECTION_BUNDLE_FIELDS.len()
+        );
+        assert_eq!(
+            handoff.required_first_actions.len(),
+            OPENCLAW_REQUIRED_FIRST_ACTIONS.len()
+        );
+        assert_eq!(
+            handoff.required_route_prefixes.len(),
+            OPENCLAW_REQUIRED_ROUTE_PREFIXES.len()
+        );
+        assert_eq!(
+            handoff.reporting_requirements.len(),
+            OPENCLAW_REPORTING_REQUIREMENTS.len()
+        );
+    }
+
+    #[test]
+    fn install_script_mentions_canonical_handoff_contract() {
+        let install_script = include_str!(concat!(env!("CARGO_MANIFEST_DIR"), "/../../install.sh"));
+
+        for value in OPENCLAW_CONNECTION_BUNDLE_FIELDS {
+            assert!(
+                install_script.contains(value),
+                "install.sh is missing handoff connection field: {value}"
+            );
+        }
+
+        for value in OPENCLAW_REQUIRED_FIRST_ACTIONS {
+            assert!(
+                install_script.contains(value),
+                "install.sh is missing required first action: {value}"
+            );
+        }
+
+        for value in OPENCLAW_REQUIRED_ROUTE_PREFIXES {
+            assert!(
+                install_script.contains(value),
+                "install.sh is missing route prefix: {value}"
+            );
+        }
+
+        for value in OPENCLAW_REPORTING_REQUIREMENTS {
+            assert!(
+                install_script.contains(value),
+                "install.sh is missing reporting requirement: {value}"
+            );
+        }
+    }
 }

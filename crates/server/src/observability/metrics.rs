@@ -349,9 +349,7 @@ impl Metrics {
             .namespace("acpms"),
             &["reason"],
         )?;
-        registry.register(Box::new(
-            openclaw_event_stream_cursor_expired_total.clone(),
-        ))?;
+        registry.register(Box::new(openclaw_event_stream_cursor_expired_total.clone()))?;
 
         let openclaw_events_recorded_total = IntCounterVec::new(
             Opts::new(

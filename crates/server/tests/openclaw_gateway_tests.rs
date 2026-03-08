@@ -117,6 +117,19 @@ async fn openclaw_guide_returns_bootstrap_payload() {
         json["data"]["auth_rules"]["rest_auth_header"],
         "Authorization: Bearer <OPENCLAW_API_KEY>"
     );
+    assert_eq!(json["data"]["handoff_contract"]["contract_version"], "v1");
+    assert_eq!(
+        json["data"]["handoff_contract"]["connection_bundle_fields"][0],
+        "Base Endpoint URL"
+    );
+    assert_eq!(
+        json["data"]["handoff_contract"]["required_route_prefixes"][0],
+        "/api/openclaw/v1/*"
+    );
+    assert_eq!(
+        json["data"]["handoff_contract"]["required_route_prefixes"][1],
+        "/api/openclaw/ws/*"
+    );
     assert!(json["data"]["instruction_prompt"]
         .as_str()
         .expect("instruction prompt")
@@ -269,8 +282,7 @@ async fn openclaw_event_stream_returns_machine_readable_cursor_expired() {
     assert_eq!(json["code"], "4092", "{body}");
     assert_eq!(json["data"]["error_type"], "EventCursorExpired", "{body}");
     assert_eq!(
-        json["data"]["oldest_available_event_id"],
-        first_event.sequence_id,
+        json["data"]["oldest_available_event_id"], first_event.sequence_id,
         "{body}"
     );
 }

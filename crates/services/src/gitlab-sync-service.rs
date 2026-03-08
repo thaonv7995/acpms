@@ -29,7 +29,10 @@ impl GitLabSyncService {
         }
     }
 
-    pub fn with_openclaw_events(mut self, openclaw_event_service: Arc<OpenClawGatewayEventService>) -> Self {
+    pub fn with_openclaw_events(
+        mut self,
+        openclaw_event_service: Arc<OpenClawGatewayEventService>,
+    ) -> Self {
         self.openclaw_event_service = Some(openclaw_event_service);
         self
     }

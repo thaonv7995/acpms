@@ -379,8 +379,8 @@ impl OpenClawGatewayEventService {
 }
 
 fn build_webhook_signature(secret: &str, payload: &[u8]) -> Result<String> {
-    let mut mac = HmacSha256::new_from_slice(secret.as_bytes())
-        .context("Invalid OpenClaw webhook secret")?;
+    let mut mac =
+        HmacSha256::new_from_slice(secret.as_bytes()).context("Invalid OpenClaw webhook secret")?;
     mac.update(payload);
     Ok(hex::encode(mac.finalize().into_bytes()))
 }
@@ -418,10 +418,13 @@ async fn send_webhook_event(
     let status_code = response.status().as_u16();
 
     if !response.status().is_success() {
-        return (Some(status_code), Err(anyhow::anyhow!(
-            "OpenClaw webhook returned non-success status {}",
-            response.status()
-        )));
+        return (
+            Some(status_code),
+            Err(anyhow::anyhow!(
+                "OpenClaw webhook returned non-success status {}",
+                response.status()
+            )),
+        );
     }
 
     (Some(status_code), Ok(()))

@@ -3,8 +3,8 @@ use crate::OpenClawGatewayEventService;
 use acpms_executors::webhook_job::WebhookJob;
 use anyhow::{Context, Result};
 use sqlx::{FromRow, PgPool};
-use std::time::Duration;
 use std::sync::Arc;
+use std::time::Duration;
 use tokio::time::sleep;
 use uuid::Uuid;
 
@@ -28,7 +28,10 @@ impl WebhookManager {
         }
     }
 
-    pub fn with_openclaw_events(mut self, openclaw_event_service: Arc<OpenClawGatewayEventService>) -> Self {
+    pub fn with_openclaw_events(
+        mut self,
+        openclaw_event_service: Arc<OpenClawGatewayEventService>,
+    ) -> Self {
         self.handlers = self.handlers.with_openclaw_events(openclaw_event_service);
         self
     }

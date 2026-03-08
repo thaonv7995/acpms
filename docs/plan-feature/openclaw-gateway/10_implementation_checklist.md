@@ -24,7 +24,6 @@ Implementation status after the first code delivery:
 *   **Still open**:
     *   operational metrics for the stream and webhook transport
     *   a few higher-order replay/live-delivery integration scenarios
-    *   unifying installer prompt rendering and bootstrap-guide rendering from one canonical shared builder
 
 ## 1. Goal
 
@@ -325,8 +324,8 @@ Implementation note:
 
 ### 4.10 Phase 10: Installer Prompt Rendering
 
-- [ ] Render the installer prompt from the same canonical field set used by the bootstrap response.
-- [ ] Avoid hand-maintaining two divergent prompt templates.
+- [x] Render the installer prompt from the same canonical field set used by the bootstrap response.
+- [x] Avoid hand-maintaining two divergent prompt templates.
 - [x] Ensure the prompt includes:
   - Base endpoint
   - OpenAPI URL
@@ -338,6 +337,10 @@ Implementation note:
   - human reporting obligations
 - [x] Ensure the prompt is concise enough to paste into OpenClaw directly.
 - [x] Ensure the prompt does not inline the entire long-form rulebook.
+
+Implementation note:
+
+*   The runtime guide now exposes an explicit `handoff_contract`, and unit/integration tests enforce that `install.sh` keeps the same connection fields, first actions, route prefixes, and reporting obligations.
 
 ## 5. Cursor and Replay Rules
 
@@ -381,15 +384,15 @@ These rules should be implemented exactly to avoid ambiguous client behavior.
 - [x] Cursor parsing and validation
 - [ ] Replay query ordering
 - [ ] Retention cutoff cleanup
-- [ ] Installer prompt rendering from runtime config
-- [ ] Bootstrap response serialization including `operating_rules`
+- [x] Installer prompt rendering from runtime config
+- [x] Bootstrap response serialization including `operating_rules`
 
 ### 7.2 Integration Tests
 
 - [x] Unauthorized stream request returns `401`
 - [x] Disabled gateway returns `403`
 - [x] `guide-for-openclaw` returns required runtime fields for stream-first mode
-- [ ] Installer-generated prompt and bootstrap response stay field-consistent
+- [x] Installer-generated prompt and bootstrap response stay field-consistent
 - [ ] Connect with no cursor and receive live event
 - [ ] Reconnect with `Last-Event-ID` and receive missed events
 - [x] Expired cursor returns structured conflict error
@@ -435,7 +438,7 @@ These rules should be implemented exactly to avoid ambiguous client behavior.
 - [x] Event row DTO + domain DTO
 - [x] Broadcast integration
 - [x] Bootstrap-guide builder / serializer
-- [ ] Installer-prompt renderer from canonical runtime config
+- [x] Installer-prompt renderer from canonical runtime config
 
 ### 9.3 Server Routes
 
@@ -458,7 +461,7 @@ These rules should be implemented exactly to avoid ambiguous client behavior.
 - [x] Update `install.sh` output when implementation lands
 - [x] Update `install.sh` to print the ready-to-send prompt block
 - [x] Update `install.sh` to save the rendered prompt to a file if that behavior is enabled
-- [ ] Keep installer prompt content aligned with the OpenClaw operating rules and guide contract
+- [x] Keep installer prompt content aligned with the OpenClaw operating rules and guide contract
 
 ## 10. Recommended Shipping Sequence
 
@@ -480,4 +483,4 @@ Actual implementation progress so far:
 4.  **Completed (main flows)**: attempt lifecycle + task status emission wiring
 5.  **Completed (first pass)**: installer handoff prompt and saved prompt file
 6.  **Completed**: optional webhook compatibility, cursor-expiry handling, richer auth/expiry/WS tests, and additional GitLab merge task-status coverage
-7.  **Remaining**: stream/webhook metrics, fuller manual replay/live-delivery verification, and a canonical shared prompt builder for installer + guide rendering
+7.  **Remaining**: stream/webhook metrics and fuller manual replay/live-delivery verification

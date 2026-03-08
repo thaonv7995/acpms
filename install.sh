@@ -121,7 +121,7 @@ Your required first actions:
 2. Call the Guide Endpoint first and treat its response as the authoritative runtime guide.
 3. Load the OpenAPI document.
 4. Open and maintain the Global Event SSE connection.
-5. Use only ACPMS OpenClaw routes:
+5. Use only ACPMS OpenClaw routes.
    - /api/openclaw/v1/*
    - /api/openclaw/ws/*
 6. Follow the ACPMS operating rules returned by the Guide Endpoint.
