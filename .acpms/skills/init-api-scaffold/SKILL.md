@@ -10,6 +10,11 @@ Create a new API service baseline that is runnable, structured, and easy to
 extend without overbuilding infrastructure before the first useful endpoint
 exists.
 
+When the API is HTTP-facing, the scaffold should also make the preview surface
+obvious: health/readiness must exist, and an OpenAPI or Swagger docs route
+should be added whenever the chosen framework can support it without forcing a
+heavy custom implementation.
+
 ## When This Applies
 - Project type is API or backend service
 - ACPMS is bootstrapping a new service from scratch
@@ -28,6 +33,7 @@ exists.
 4. Create at least:
    - health endpoint
    - versioned API root
+   - docs/spec route when the framework already has a clean low-friction path
    - structured error handling shape
 5. Add container runtime files whenever ACPMS preview/deploy or helper services
    require them:
@@ -41,6 +47,7 @@ exists.
 - source entrypoint
 - health endpoint
 - API version prefix
+- docs/spec route when the framework naturally supports it
 - README
 - `.gitignore`
 - `.env.example`
@@ -51,6 +58,7 @@ exists.
 | Situation | Action |
 |---|---|
 | Framework is explicitly requested | Follow it |
+| Framework can expose Swagger/OpenAPI with low friction | Include the docs route so preview can land on a useful API surface. |
 | Database need is unclear | Stub config, do not invent a full schema |
 | Auth is not in scope yet | Leave auth-ready structure but do not over-implement |
 | ACPMS preview/deploy expects Docker runtime | Include a working `Dockerfile` from init. |
@@ -62,6 +70,7 @@ Emit:
 - `selected_stack`
 - `created_files`
 - `container_strategy`
+- `api_preview_surface`
 - `verification_commands`
 - `assumptions`
 

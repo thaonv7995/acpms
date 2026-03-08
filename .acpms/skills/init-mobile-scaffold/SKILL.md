@@ -44,7 +44,10 @@ shape and team/runtime constraints.
 4. Add platform-aware config and environment stubs.
 5. Add navigation baseline, screen structure, and shared UI/theme foundations.
 6. Add README and developer run instructions for simulator/device workflows.
-7. Leave the project in a state that can be built, bundled, or run in
+7. Plan preview/build outputs in two platform lanes from the start:
+   - Android
+   - iOS
+8. Leave the project in a state that can be built, bundled, or run in
    simulator/emulator without pretending unavailable signing/device steps work.
 
 ## Required Baseline
@@ -56,6 +59,8 @@ shape and team/runtime constraints.
 - `.gitignore`
 - build/run command path
 - `.env.example` when the app expects runtime config
+- an explicit Android preview/build lane
+- an explicit iOS preview/build lane
 
 ## Decision Rules
 | Situation | Action |
@@ -66,6 +71,7 @@ shape and team/runtime constraints.
 | Imported existing app already has a viable stack | Preserve it instead of re-platforming |
 | iOS signing is unavailable | Document the limitation, do not fake installability |
 | One platform is out of scope | Be explicit rather than pretending dual-platform parity |
+| Both Android and iOS are in scope | Define build/preview expectations for both lanes even if only one can be produced in the current environment. |
 | ACPMS preview path only needs a mobile artifact or dev bundle | Do not add Docker runtime files by default |
 
 ## Output Contract
@@ -77,6 +83,8 @@ Emit:
 - `platform_support`
 - `verification_commands`
 - `mobile_preview_strategy`
+- `android_preview_lane`
+- `ios_preview_lane`
 - `assumptions`
 
 ## Related Skills

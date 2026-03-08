@@ -38,19 +38,22 @@ repository layout.
 2. Choose the runtime stack that matches explicit requirements.
 3. Create the service entrypoint and configuration handling.
 4. Add health endpoints and structured logging baseline.
-5. If the repo shape is monorepo, place the service in the correct scoped
+5. If the service exposes an HTTP contract, add the lightest truthful docs/spec
+   surface the chosen stack can support.
+6. If the repo shape is monorepo, place the service in the correct scoped
    directory and avoid treating the whole repo as one service.
-6. Add containerization files and local run defaults.
-7. If the service depends on supporting infrastructure, add
+7. Add containerization files and local run defaults.
+8. If the service depends on supporting infrastructure, add
    `docker-compose.yml` that starts the service with those dependencies instead
    of leaving the runtime ambiguous.
-8. Stub metrics or observability entrypoints when appropriate.
-9. Leave the service runnable and health-checkable.
+9. Stub metrics or observability entrypoints when appropriate.
+10. Leave the service runnable and health-checkable.
 
 ## Required Baseline
 - service entrypoint
 - `.env.example`
 - health endpoint
+- docs/spec route when the service has an HTTP contract and the stack supports it cleanly
 - Dockerfile
 - README
 
@@ -63,6 +66,7 @@ repository layout.
 | Existing repo already contains multiple services/packages | Preserve the monorepo shape and add or normalize only the targeted service |
 | Database need is unclear | Leave config hooks, avoid schema overcommit |
 | Supporting services are required for the baseline runtime | Include `docker-compose.yml` from init, not as a later deploy-only patch. |
+| Service has an HTTP API and the stack can expose docs/specs with low friction | Add docs/spec route so preview can land on a useful contract surface. |
 | Observability stack is unspecified | Add lightweight health/logging baseline first |
 
 ## Output Contract
@@ -72,6 +76,7 @@ Emit:
 - `repo_shape_selected`
 - `created_files`
 - `container_strategy`
+- `microservice_preview_surface`
 - `verification_commands`
 
 ## Related Skills

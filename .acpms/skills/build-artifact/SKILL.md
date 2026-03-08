@@ -45,9 +45,9 @@ Do not report artifact success from:
 | Project Type | Typical Artifact | Notes |
 |---|---|---|
 | `web` | `dist/`, `.next/`, or framework-specific static/server build output | Must match the preview/deploy path actually used by the repo |
-| `api` / `microservice` | built server binary, packaged runtime tree, OpenAPI output, or container-ready runtime | Prefer the artifact used by the real runtime path, not a placeholder build |
-| `desktop` | runnable dev app output, unpacked app, packaged bundle, or installer | Prefer the preview surface the environment can actually support |
-| `mobile` | dev bundle, simulator-ready output, or packaged app artifact | Prefer the preview surface the environment can actually support |
+| `api` / `microservice` | built server binary, packaged runtime tree, OpenAPI/Swagger output, or container-ready runtime | Prefer the artifact used by the real runtime path, and expose docs/spec output when the service has an HTTP contract |
+| `desktop` | runnable dev app output, unpacked app, packaged bundle, or installer | Prefer the preview surface the environment can actually support, and track Windows/macOS lanes separately when both are in scope |
+| `mobile` | dev bundle, simulator-ready output, or packaged app artifact | Prefer the preview surface the environment can actually support, and track Android/iOS lanes separately when both are in scope |
 | `extension` | zipped extension, unpacked bundle, or browser-loadable output directory | Prefer the preview surface the browser/toolchain can actually support |
 
 ## Build Command Selection
@@ -100,10 +100,12 @@ Optional but recommended:
   - runnable dev app path exists when dev-run preview is expected
   - unpacked app directory exists when packaging stops short of an installer
   - installer or bundle exists when full packaging succeeds
+  - Windows and macOS outputs are reported separately when both lanes are in scope
 - For mobile builds, confirm the output matches the intended preview surface:
   - Expo/dev bundle metadata exists when using dev bundle preview
   - Android artifact exists for installable QA preview
   - iOS artifact is only reported when signing/export really succeeded
+  - Android and iOS outputs are reported separately when both lanes are in scope
 - For extension builds, confirm the output matches the intended preview surface:
   - zip exists when downloadable package preview is expected
   - unpacked directory contains manifest and required runtime assets
@@ -115,6 +117,7 @@ Optional but recommended:
 |---|---|
 | Multiple build targets exist | Build only the target relevant to the current flow and report which one was selected. |
 | API preview/deploy runs from a containerized service | Build the output that the container really uses, not only a library/test artifact. |
+| API or microservice exposes Swagger/OpenAPI or equivalent docs route | Treat docs/spec output as part of the previewable artifact set, not optional fluff. |
 | API has helper services but app build is stateless | Build the app artifact and let compose/runtime skills handle support services separately. |
 | Desktop app preview is a runnable dev app or unpacked app | Prefer the build path that matches that preview mode instead of forcing a signed installer. |
 | Desktop release packaging requires unavailable signing/notarization | Report the limitation honestly rather than claiming a releasable installer exists. |
@@ -132,6 +135,7 @@ Emit a `Build Artifact Summary` with:
 - `build_status`: `success` | `failed` | `skipped`
 - `build_command`: exact command used
 - `artifact_paths`: list of produced paths actually relevant to the task
+- `platform_artifacts`: per-platform lanes when mobile or desktop targets multiple OSes
 - `artifact_notes`: short note on artifact type and downstream usage
 
 If build is skipped, include a short reason.
