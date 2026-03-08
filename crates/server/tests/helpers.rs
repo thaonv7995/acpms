@@ -28,7 +28,7 @@ use uuid::Uuid;
 use acpms_server::services::project_assistant_worker_pool::{
     ProjectAssistantJobHandler, ProjectAssistantWorkerPool,
 };
-use acpms_server::state::AppState;
+use acpms_server::state::{AppState, OpenClawGatewayConfig};
 // use acpms_server::routes; // Not needed, only create_router is used
 
 // Re-export for convenience
@@ -225,6 +225,7 @@ pub async fn create_test_app_state(pool: PgPool) -> AppState {
         patch_store,
         stream_service,
         auth_session_store: Arc::new(acpms_server::services::agent_auth::AuthSessionStore::new()),
+        openclaw_gateway: Arc::new(OpenClawGatewayConfig::from_env()),
     };
 
     let project_assistant_handler_state = state.clone();

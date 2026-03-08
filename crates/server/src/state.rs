@@ -13,6 +13,61 @@ use sqlx::PgPool;
 use std::path::PathBuf;
 use std::sync::Arc;
 use tokio::sync::{broadcast, RwLock};
+use uuid::Uuid;
+
+#[derive(Debug, Clone)]
+pub struct OpenClawGatewayConfig {
+    pub enabled: bool,
+    pub api_key: Option<String>,
+    pub webhook_secret: Option<String>,
+    pub actor_user_id: Option<Uuid>,
+    pub event_retention_hours: i64,
+}
+
+impl OpenClawGatewayConfig {
+    pub fn from_env() -> Self {
+        let enabled = std::env::var("OPENCLAW_GATEWAY_ENABLED")
+            .ok()
+            .map(|value| {
+                matches!(
+                    value.trim().to_ascii_lowercase().as_str(),
+                    "1" | "true" | "yes" | "on"
+                )
+            })
+            .unwrap_or(false);
+
+        let actor_user_id = std::env::var("OPENCLAW_ACTOR_USER_ID")
+            .ok()
+            .and_then(|value| match Uuid::parse_str(value.trim()) {
+                Ok(id) => Some(id),
+                Err(error) => {
+                    tracing::warn!(
+                        error = %error,
+                        "Ignoring invalid OPENCLAW_ACTOR_USER_ID; falling back to first system admin"
+                    );
+                    None
+                }
+            });
+
+        let event_retention_hours = std::env::var("OPENCLAW_EVENT_RETENTION_HOURS")
+            .ok()
+            .and_then(|value| value.parse::<i64>().ok())
+            .filter(|value| *value > 0)
+            .unwrap_or(168);
+
+        Self {
+            enabled,
+            api_key: std::env::var("OPENCLAW_API_KEY")
+                .ok()
+                .filter(|value| !value.trim().is_empty()),
+            webhook_secret: std::env::var("OPENCLAW_WEBHOOK_SECRET")
+                .ok()
+                .filter(|value| !value.trim().is_empty()),
+            actor_user_id,
+            event_retention_hours,
+        }
+    }
+}
 
 #[derive(Clone)]
 pub struct AppState {
@@ -41,6 +96,7 @@ pub struct AppState {
     pub patch_store: Arc<PatchStore>,
     pub stream_service: Arc<StreamService>,
     pub auth_session_store: Arc<AuthSessionStore>,
+    pub openclaw_gateway: Arc<OpenClawGatewayConfig>,
 }
 
 impl axum::extract::FromRef<AppState> for PgPool {

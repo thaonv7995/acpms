@@ -2,16 +2,12 @@ use axum::{
     extract::{Path, Query, State},
     response::sse::{Event, KeepAlive, Sse},
 };
-use axum_extra::{
-    headers::{authorization::Bearer, Authorization},
-    TypedHeader,
-};
 use futures::{Stream, StreamExt};
 use serde::Deserialize;
 use std::convert::Infallible;
 use uuid::Uuid;
 
-use crate::middleware::{authenticate_bearer_token, Permission, RbacChecker};
+use crate::middleware::{AuthUser, Permission, RbacChecker};
 use crate::{error::ApiError, AppState};
 
 #[derive(Deserialize)]
@@ -24,9 +20,8 @@ pub async fn stream_attempt_sse(
     Path(attempt_id): Path<Uuid>,
     Query(params): Query<StreamParams>,
     State(state): State<AppState>,
-    TypedHeader(auth): TypedHeader<Authorization<Bearer>>,
+    auth_user: AuthUser,
 ) -> Result<Sse<impl Stream<Item = Result<Event, Infallible>>>, ApiError> {
-    let auth_user = authenticate_bearer_token(auth.token(), &state).await?;
     let user_id = auth_user.id;
 
     // Resolve project_id for this attempt, then apply RBAC.

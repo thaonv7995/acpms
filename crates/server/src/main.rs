@@ -12,10 +12,11 @@ mod types;
 use acpms_executors::ExecutorOrchestrator;
 use acpms_preview::PreviewManager;
 use anyhow::Context;
+use api::openapi_spec::ApiDoc;
 use axum::middleware as axum_middleware;
 use clap::Parser;
 use observability::{init_logging, request_id, Metrics};
-use state::AppState;
+use state::{AppState, OpenClawGatewayConfig};
 use std::collections::HashSet;
 use std::net::SocketAddr;
 use std::path::PathBuf;
@@ -95,199 +96,6 @@ fn spawn_log_upload_on_complete(
         }
     });
 }
-
-#[derive(OpenApi)]
-#[openapi(
-    paths(
-        routes::auth::register,
-        routes::auth::login,
-        routes::users::list_users,
-        routes::users::get_user,
-        routes::users::update_user,
-        routes::users::delete_user,
-        routes::users::get_avatar_upload_url,
-        routes::projects::create_project,
-        routes::projects::list_projects,
-        routes::projects::get_project,
-        routes::projects::update_project,
-        routes::projects::delete_project,
-        routes::projects::recheck_project_repository_access,
-        routes::projects::link_existing_fork,
-        routes::projects::create_project_fork,
-        routes::projects::import_project_preflight,
-        routes::projects::import_project_create_fork,
-        routes::projects::import_project,
-        // Tasks
-        routes::tasks::create_task,
-        routes::tasks::list_tasks,
-        routes::tasks::get_task,
-        routes::tasks::update_task,
-        routes::tasks::delete_task,
-        routes::tasks::update_task_status,
-        routes::tasks::get_task_children,
-        routes::tasks::assign_task,
-        routes::tasks::update_task_metadata,
-        // Sprints
-        routes::sprints::list_project_sprints,
-        routes::sprints::create_sprint,
-        routes::sprints::generate_sprints,
-        routes::sprints::get_sprint,
-        routes::sprints::update_sprint,
-        routes::sprints::delete_sprint,
-        routes::sprints::get_active_sprint,
-        routes::sprints::activate_sprint,
-        routes::sprints::close_sprint,
-        routes::sprints::get_sprint_overview,
-        // Requirements
-        routes::requirements::create_requirement,
-        routes::requirements::list_project_requirements,
-        routes::requirements::get_requirement,
-        routes::requirements::update_requirement,
-        routes::requirements::delete_requirement,
-        routes::requirement_breakdowns::start_requirement_breakdown,
-        routes::requirement_breakdowns::get_requirement_breakdown_session,
-        routes::requirement_breakdowns::confirm_requirement_breakdown,
-        routes::requirement_breakdowns::confirm_requirement_breakdown_manual,
-        routes::requirement_breakdowns::cancel_requirement_breakdown,
-        routes::requirement_breakdowns::start_requirement_task_sequence,
-        // Dashboard
-        routes::dashboard::get_dashboard,
-        // Task Attempts
-        routes::task_attempts::create_task_attempt,
-        routes::task_attempts::get_task_attempts,
-        routes::task_attempts::get_attempt,
-        routes::task_attempts::get_attempt_logs,
-        routes::task_attempts::patch_attempt_log,
-        routes::execution_processes::list_execution_processes,
-        routes::execution_processes::get_execution_process,
-        routes::execution_processes::get_execution_process_raw_logs,
-        routes::execution_processes::get_execution_process_normalized_logs,
-        routes::execution_processes::follow_up_execution_process,
-        routes::execution_processes::reset_execution_process,
-        routes::task_attempts::send_attempt_input,
-        routes::task_attempts::cancel_attempt,
-        // GitLab
-        routes::gitlab::list_merge_requests,
-        routes::gitlab::get_merge_request_stats,
-        routes::gitlab::link_project,
-        routes::gitlab::get_status,
-        routes::gitlab::get_task_merge_requests,
-        routes::gitlab::handle_webhook,
-        // Health
-        routes::health::health_check,
-        routes::health::readiness_check,
-        routes::health::liveness_check,
-    ),
-    components(
-        schemas(
-            api::UserDto,
-            api::AuthResponseDto,
-            api::UserResponse,
-            api::UserListResponse,
-            api::AuthResponse,
-            api::EmptyResponse,
-            api::ResponseCode,
-            api::ApiErrorDetail,
-            routes::auth::RegisterRequest,
-            routes::auth::LoginRequest,
-            routes::users::UpdateUserRequest,
-            routes::users::GetUploadUrlRequest,
-            routes::users::UploadUrlResponse,
-            api::ProjectDto,
-            api::ProjectResponse,
-            api::ProjectListResponse,
-            api::ProjectStackSelectionDoc,
-            api::CreateProjectRequestDoc,
-            api::UpdateProjectRequestDoc,
-            acpms_db::models::ProjectSettings,
-            acpms_db::models::ProjectSettingsResponse,
-            routes::projects::ImportProjectRequest,
-            routes::projects::ImportProjectResponse,
-            // Tasks
-            api::TaskDto,
-            api::TaskResponse,
-            api::TaskListResponse,
-            api::CreateTaskRequestDoc,
-            api::UpdateTaskRequestDoc,
-            routes::tasks::UpdateStatusRequest,
-            routes::tasks::AssignTaskRequest,
-            routes::tasks::UpdateMetadataRequest,
-            // Sprints
-            api::SprintDto,
-            api::SprintResponse,
-            api::SprintListResponse,
-            api::CreateSprintRequestDoc,
-            api::UpdateSprintRequestDoc,
-            api::GenerateSprintsRequestDoc,
-            api::CreateNextSprintRequestDoc,
-            api::CloseSprintRequestDoc,
-            api::CloseSprintResultResponse,
-            api::SprintOverviewResponse,
-            acpms_db::models::SprintCarryOverMode,
-            acpms_db::models::CreateNextSprintRequest,
-            acpms_db::models::CloseSprintRequest,
-            acpms_db::models::CloseSprintResult,
-            acpms_db::models::SprintOverview,
-            // Requirements
-            api::RequirementDto,
-            api::RequirementResponse,
-            api::RequirementListResponse,
-            api::CreateRequirementRequestDoc,
-            api::UpdateRequirementRequestDoc,
-            // Dashboard
-            api::DashboardResponse,
-            api::DashboardDataDoc,
-            api::DashboardStatsDoc,
-            api::StatsMetricDoc,
-            api::AgentStatsDoc,
-            api::SystemLoadDoc,
-            api::PrStatsDoc,
-            api::DashboardProjectDoc,
-            api::AgentAvatarDoc,
-            api::DashboardAgentLogDoc,
-            api::DashboardHumanTaskDoc,
-            api::UserAvatarDoc,
-            // Task Attempts
-            api::TaskAttemptDto,
-            api::TaskAttemptResponse,
-            api::TaskAttemptListResponse,
-            api::AgentLogDto,
-            api::AgentLogListResponse,
-            api::CreateTaskAttemptRequestDoc,
-            api::SendInputRequestDoc,
-            routes::task_attempts::CancelAttemptRequest,
-            routes::task_attempts::ResumeAttemptRequest,
-            routes::execution_processes::ExecutionProcessDto,
-            // GitLab
-            api::GitLabConfigurationDto,
-            api::MergeRequestDto,
-            api::MergeRequestOverviewDto,
-            api::MergeRequestStatsDto,
-            api::GitLabConfigurationResponse,
-            api::MergeRequestListResponse,
-            api::MergeRequestOverviewListResponse,
-            api::MergeRequestStatsResponse,
-            api::LinkGitLabProjectRequestDoc,
-            // Health
-            routes::health::HealthStatus,
-            routes::health::ComponentHealth,
-            routes::health::HealthResponse,
-        )
-    ),
-    tags(
-        (name = "Auth", description = "Authentication endpoints"),
-        (name = "Users", description = "User management endpoints"),
-        (name = "Projects", description = "Project management endpoints"),
-        (name = "Tasks", description = "Task management endpoints"),
-        (name = "Sprints", description = "Sprint management endpoints"),
-        (name = "Requirements", description = "Requirement management endpoints"),
-        (name = "Dashboard", description = "Dashboard endpoints"),
-        (name = "Task Attempts", description = "Task attempt endpoints"),
-        (name = "GitLab", description = "GitLab integration endpoints"),
-        (name = "Health", description = "Health check endpoints"),
-    )
-)]
-struct ApiDoc;
 
 fn infer_download_target(artifact_type: &str) -> (&'static str, &'static str) {
     let value = artifact_type.to_ascii_lowercase();
@@ -2066,6 +1874,7 @@ async fn main() -> anyhow::Result<()> {
         patch_store,
         stream_service,
         auth_session_store: Arc::new(crate::services::agent_auth::AuthSessionStore::new()),
+        openclaw_gateway: Arc::new(OpenClawGatewayConfig::from_env()),
     };
 
     let deployment_handler_state = state.clone();

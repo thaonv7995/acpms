@@ -1868,13 +1868,22 @@ async fn resolve_gemini_auth_script_args(
         }
         parts
     } else if let Some(npx) = npx_cmd {
-        let mut parts = vec![npx.to_string(), "-y".to_string(), "@google/gemini-cli".to_string()];
+        let mut parts = vec![
+            npx.to_string(),
+            "-y".to_string(),
+            "@google/gemini-cli".to_string(),
+        ];
         if gemini_supports_auth_subcommand(None, Some(npx)).await {
             parts.push("auth".to_string());
         }
         parts
     } else {
-        return vec!["-q".to_string(), "-c".to_string(), "gemini".to_string(), "/dev/null".to_string()];
+        return vec![
+            "-q".to_string(),
+            "-c".to_string(),
+            "gemini".to_string(),
+            "/dev/null".to_string(),
+        ];
     };
 
     let full_cmd = cmd_parts.join(" ");

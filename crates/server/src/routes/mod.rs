@@ -3,6 +3,7 @@ pub mod agent_activity;
 pub mod approvals;
 pub mod auth;
 pub mod health;
+pub mod openclaw;
 pub mod project_assistant;
 pub mod projects;
 pub mod streams;
@@ -85,26 +86,18 @@ async fn dev_frontend_fallback(method: Method, uri: Uri, headers: HeaderMap) -> 
     Redirect::temporary(&target).into_response()
 }
 
-pub fn create_router(state: AppState) -> Router {
-    // Health check routes (outside /api/v1 for simplicity)
-    let health_routes = Router::new()
-        .route("/health", get(health::health_check))
-        .route("/health/ready", get(health::readiness_check))
-        .route("/health/live", get(health::liveness_check))
-        .with_state(state.clone());
-
-    let auth_routes = Router::new()
+pub(crate) fn build_auth_routes() -> Router<AppState> {
+    Router::new()
         .route("/auth/register", post(auth::register))
         .route("/auth/login", post(auth::login))
         .route("/auth/refresh", post(auth::refresh_token))
         .route("/auth/logout", post(auth::logout))
         .route("/auth/revoke/:user_id", post(auth::revoke_user_tokens))
-        .layer(middleware::rate_limit::auth_rate_limiter());
+        .layer(middleware::rate_limit::auth_rate_limiter())
+}
 
-    let api_routes = Router::new()
-        // Auth routes
-        .merge(auth_routes)
-        // User routes
+pub(crate) fn build_business_api_routes() -> Router<AppState> {
+    Router::new()
         .route("/users", get(users::list_users).post(users::create_user))
         .route(
             "/users/:id",
@@ -194,10 +187,6 @@ pub fn create_router(state: AppState) -> Router {
         .route(
             "/projects/:id/assistant/sessions/:session_id/end",
             post(project_assistant::end_session),
-        )
-        .route(
-            "/projects/:id/assistant/sessions/:session_id/logs/ws",
-            get(websocket::assistant_logs_ws_handler),
         )
         .route(
             "/projects/:id/inviteable-users",
@@ -361,23 +350,6 @@ pub fn create_router(state: AppState) -> Router {
             "/execution-processes/:id/reset",
             post(execution_processes::reset_execution_process),
         )
-        .route("/attempts/:id/logs/ws", get(websocket::ws_handler))
-        .route(
-            "/execution-processes/:id/raw-logs/ws",
-            get(websocket::execution_process_raw_logs_ws_handler),
-        )
-        .route(
-            "/execution-processes/:id/normalized-logs/ws",
-            get(websocket::execution_process_normalized_logs_ws_handler),
-        )
-        .route(
-            "/execution-processes/stream/attempt/ws",
-            get(websocket::execution_processes_ws_handler),
-        )
-        .route(
-            "/execution-processes/stream/session/ws",
-            get(websocket::execution_processes_session_ws_handler),
-        )
         // Structured logs and subagent tree
         .route(
             "/attempts/:id/structured-logs",
@@ -387,31 +359,11 @@ pub fn create_router(state: AppState) -> Router {
             "/attempts/:id/subagent-tree",
             get(task_attempts::get_subagent_tree),
         )
-        // WebSocket stream endpoints (frontend expects /ws/ prefix)
-        .route("/ws/attempts/:id/logs", get(websocket::ws_handler))
-        .route(
-            "/ws/projects/:project_id/agents",
-            get(websocket::project_ws_handler),
-        )
-        .route(
-            "/ws/agent-activity/status",
-            get(websocket::agent_activity_ws_handler),
-        )
         // SSE JSON Patch streaming (Phase 3)
         .route("/attempts/:id/stream", get(streams::stream_attempt_sse))
-        // WebSocket attempt stream (Phase H - Vibe Kanban parity)
-        .route(
-            "/attempts/:id/stream/ws",
-            get(websocket::attempt_stream_ws_handler),
-        )
         .route(
             "/attempts/:id/input",
             post(task_attempts::send_attempt_input),
-        )
-        // Project-level agent WebSocket
-        .route(
-            "/projects/:project_id/agents/ws",
-            get(websocket::project_ws_handler),
         )
         .route(
             "/projects/:project_id/agents/active",
@@ -478,10 +430,6 @@ pub fn create_router(state: AppState) -> Router {
             "/agent/auth/sessions/:id",
             get(agent::get_agent_auth_session),
         )
-        .route(
-            "/agent/auth/sessions/:id/ws",
-            get(websocket::agent_auth_session_ws_handler),
-        )
         // GitLab routes
         .merge(gitlab::create_routes())
         // GitLab OAuth routes
@@ -505,12 +453,57 @@ pub fn create_router(state: AppState) -> Router {
             "/approvals/:approval_ref/respond",
             post(approvals::respond_to_approval),
         )
-        .route("/approvals/stream/ws", get(websocket::approvals_ws_handler));
+}
 
-    let api_routes = api_routes.with_state(state.clone());
+fn build_api_websocket_routes() -> Router<AppState> {
+    Router::new()
+        .route(
+            "/projects/:id/assistant/sessions/:session_id/logs/ws",
+            get(websocket::assistant_logs_ws_handler),
+        )
+        .route("/attempts/:id/logs/ws", get(websocket::ws_handler))
+        .route(
+            "/execution-processes/:id/raw-logs/ws",
+            get(websocket::execution_process_raw_logs_ws_handler),
+        )
+        .route(
+            "/execution-processes/:id/normalized-logs/ws",
+            get(websocket::execution_process_normalized_logs_ws_handler),
+        )
+        .route(
+            "/execution-processes/stream/attempt/ws",
+            get(websocket::execution_processes_ws_handler),
+        )
+        .route(
+            "/execution-processes/stream/session/ws",
+            get(websocket::execution_processes_session_ws_handler),
+        )
+        .route("/ws/attempts/:id/logs", get(websocket::ws_handler))
+        .route(
+            "/ws/projects/:project_id/agents",
+            get(websocket::project_ws_handler),
+        )
+        .route(
+            "/ws/agent-activity/status",
+            get(websocket::agent_activity_ws_handler),
+        )
+        .route(
+            "/attempts/:id/stream/ws",
+            get(websocket::attempt_stream_ws_handler),
+        )
+        .route(
+            "/projects/:project_id/agents/ws",
+            get(websocket::project_ws_handler),
+        )
+        .route(
+            "/agent/auth/sessions/:id/ws",
+            get(websocket::agent_auth_session_ws_handler),
+        )
+        .route("/approvals/stream/ws", get(websocket::approvals_ws_handler))
+}
 
-    // WebSocket routes at root level (outside /api/v1)
-    let ws_routes = Router::new()
+fn build_root_ws_routes() -> Router<AppState> {
+    Router::new()
         .route("/attempts/:id/logs", get(websocket::ws_handler))
         .route("/attempts/:id/diffs", get(websocket::ws_handler))
         .route(
@@ -521,7 +514,23 @@ pub fn create_router(state: AppState) -> Router {
             "/agent-activity/status",
             get(websocket::agent_activity_ws_handler),
         )
-        .with_state(state);
+}
+
+pub fn create_router(state: AppState) -> Router {
+    let health_routes = Router::new()
+        .route("/health", get(health::health_check))
+        .route("/health/ready", get(health::readiness_check))
+        .route("/health/live", get(health::liveness_check))
+        .with_state(state.clone());
+
+    let api_routes = build_business_api_routes()
+        .merge(build_auth_routes())
+        .merge(build_api_websocket_routes())
+        .with_state(state.clone());
+
+    let openclaw_routes = openclaw::create_router(state.clone());
+
+    let ws_routes = build_root_ws_routes().with_state(state.clone());
 
     // S3 proxy: path /{bucket}/*path (e.g. /acpms-media/avatars/...) so presigned URL path matches forwarded path; no body limit.
     let s3_bucket = std::env::var("S3_BUCKET_NAME").unwrap_or_else(|_| "acpms-media".to_string());
@@ -535,6 +544,7 @@ pub fn create_router(state: AppState) -> Router {
     let mut app = Router::new()
         .merge(health_routes)
         .nest("/api/v1", api_routes)
+        .nest("/api/openclaw", openclaw_routes)
         .nest("/ws", ws_routes)
         .merge(s3_routes);
 
