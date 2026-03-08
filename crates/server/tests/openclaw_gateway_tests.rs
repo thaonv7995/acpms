@@ -234,6 +234,18 @@ async fn openclaw_can_access_mirrored_projects_and_openapi() {
     assert!(json["paths"]
         .get("/api/openclaw/v1/events/stream")
         .is_some());
+    assert!(json["paths"]
+        .get("/api/openclaw/ws/attempts/{id}/stream")
+        .is_some());
+    assert!(json["paths"]
+        .get("/api/openclaw/ws/execution-processes/stream/attempt")
+        .is_some());
+    assert!(json["paths"]
+        .get("/api/openclaw/ws/approvals/stream")
+        .is_some());
+    assert!(json["paths"]
+        .get("/api/openclaw/ws/agent/auth/sessions/{id}")
+        .is_some());
     assert!(json["paths"].get("/api/v1/projects").is_none());
 }
 
@@ -1103,4 +1115,22 @@ async fn openclaw_ws_routes_require_openclaw_auth() {
     .await;
 
     assert_eq!(status, StatusCode::UNAUTHORIZED, "{body}");
+
+    let (approvals_status, approvals_body) = make_request_with_string_headers(
+        &router,
+        "GET",
+        &format!(
+            "/api/openclaw/ws/approvals/stream?attempt_id={}",
+            uuid::Uuid::new_v4()
+        ),
+        None,
+        vec![],
+    )
+    .await;
+
+    assert_eq!(
+        approvals_status,
+        StatusCode::UNAUTHORIZED,
+        "{approvals_body}"
+    );
 }

@@ -20,6 +20,7 @@ use std::{
     time::Duration,
 };
 use tokio_stream::wrappers::BroadcastStream;
+use utoipa::ToSchema;
 use uuid::Uuid;
 
 use crate::{
@@ -58,13 +59,13 @@ const OPENCLAW_REPORTING_REQUIREMENTS: &[&str] = &[
     "what you already changed",
 ];
 
-#[derive(Debug, Default, Deserialize)]
+#[derive(Debug, Default, Deserialize, ToSchema)]
 pub struct OpenClawGuideRequest {
     #[serde(default)]
     pub reporting: Option<OpenClawReportingRequest>,
 }
 
-#[derive(Debug, Deserialize)]
+#[derive(Debug, Deserialize, ToSchema)]
 pub struct OpenClawReportingRequest {
     #[serde(default)]
     pub primary_user: Option<OpenClawPrimaryUserRequest>,
@@ -72,21 +73,21 @@ pub struct OpenClawReportingRequest {
     pub channels: Vec<OpenClawReportingChannel>,
 }
 
-#[derive(Debug, Deserialize)]
+#[derive(Debug, Deserialize, ToSchema)]
 pub struct OpenClawPrimaryUserRequest {
     pub display_name: Option<String>,
     pub timezone: Option<String>,
     pub preferred_language: Option<String>,
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize, ToSchema)]
 pub struct OpenClawReportingChannel {
     #[serde(rename = "type")]
     pub channel_type: String,
     pub target: String,
 }
 
-#[derive(Debug, Serialize)]
+#[derive(Debug, Serialize, ToSchema)]
 pub struct OpenClawGuideResponse {
     pub instruction_prompt: String,
     pub core_missions: Vec<String>,
@@ -101,7 +102,7 @@ pub struct OpenClawGuideResponse {
     pub next_calls: Vec<OpenClawNextCall>,
 }
 
-#[derive(Debug, Serialize)]
+#[derive(Debug, Serialize, ToSchema)]
 pub struct OpenClawAcpmsProfile {
     pub product_name: String,
     pub role: String,
@@ -112,7 +113,7 @@ pub struct OpenClawAcpmsProfile {
     pub websocket_base_url: String,
 }
 
-#[derive(Debug, Serialize)]
+#[derive(Debug, Serialize, ToSchema)]
 pub struct OpenClawHandoffContract {
     pub contract_version: String,
     pub connection_bundle_fields: Vec<String>,
@@ -121,7 +122,7 @@ pub struct OpenClawHandoffContract {
     pub reporting_requirements: Vec<String>,
 }
 
-#[derive(Debug, Serialize)]
+#[derive(Debug, Serialize, ToSchema)]
 pub struct OpenClawOperatingModel {
     pub role: String,
     pub primary_human_relationship: String,
@@ -129,7 +130,7 @@ pub struct OpenClawOperatingModel {
     pub preferred_reporting_channels: Vec<String>,
 }
 
-#[derive(Debug, Serialize)]
+#[derive(Debug, Serialize, ToSchema)]
 pub struct OpenClawOperatingRules {
     pub rulebook_version: String,
     pub default_autonomy_mode: String,
@@ -140,7 +141,7 @@ pub struct OpenClawOperatingRules {
     pub recommended_reporting_template: Vec<String>,
 }
 
-#[derive(Debug, Serialize)]
+#[derive(Debug, Serialize, ToSchema)]
 pub struct OpenClawAuthRules {
     pub rest_auth_header: String,
     pub event_stream_resume: String,
@@ -148,37 +149,57 @@ pub struct OpenClawAuthRules {
     pub webhook_secret_usage: String,
 }
 
-#[derive(Debug, Serialize)]
+#[derive(Debug, Serialize, ToSchema)]
 pub struct OpenClawReportingPolicy {
     pub report_to_primary_user: bool,
     pub notify_on: Vec<String>,
     pub channels: Vec<OpenClawReportingChannel>,
 }
 
-#[derive(Debug, Serialize)]
+#[derive(Debug, Serialize, ToSchema)]
 pub struct OpenClawConnectionStatus {
     pub primary_transport: String,
     pub webhook_registered: bool,
     pub missing_steps: Vec<String>,
 }
 
-#[derive(Debug, Serialize)]
+#[derive(Debug, Serialize, ToSchema)]
 pub struct OpenClawNextCall {
     pub method: String,
     pub path: String,
     pub purpose: String,
 }
 
-#[derive(Debug, Deserialize)]
+#[derive(Debug, Deserialize, ToSchema)]
 pub struct OpenClawEventStreamParams {
     pub after: Option<String>,
 }
 
-#[derive(Debug, Serialize)]
-struct OpenClawEventCursorExpiredData {
+#[derive(Debug, Serialize, ToSchema)]
+pub struct OpenClawEventCursorExpiredData {
     error_type: &'static str,
     requested_after: i64,
     oldest_available_event_id: Option<i64>,
+}
+
+#[derive(Debug, Serialize, ToSchema)]
+pub struct OpenClawGuideApiResponseDoc {
+    pub success: bool,
+    pub code: ResponseCode,
+    pub message: String,
+    pub data: Option<OpenClawGuideResponse>,
+    pub metadata: Option<Value>,
+    pub error: Option<ApiErrorDetail>,
+}
+
+#[derive(Debug, Serialize, ToSchema)]
+pub struct OpenClawCursorExpiredApiResponseDoc {
+    pub success: bool,
+    pub code: ResponseCode,
+    pub message: String,
+    pub data: Option<OpenClawEventCursorExpiredData>,
+    pub metadata: Option<Value>,
+    pub error: Option<ApiErrorDetail>,
 }
 
 struct OpenClawEventStreamDisconnectGuard {

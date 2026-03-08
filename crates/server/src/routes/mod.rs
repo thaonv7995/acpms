@@ -521,12 +521,44 @@ fn build_openclaw_ws_routes() -> Router<AppState> {
         .route("/attempts/:id/logs", get(websocket::openclaw_ws_handler))
         .route("/attempts/:id/diffs", get(websocket::openclaw_ws_handler))
         .route(
+            "/attempts/:id/stream",
+            get(websocket::openclaw_attempt_stream_ws_handler),
+        )
+        .route(
+            "/projects/:project_id/assistant/sessions/:session_id/logs",
+            get(websocket::openclaw_assistant_logs_ws_handler),
+        )
+        .route(
             "/projects/:project_id/agents",
             get(websocket::openclaw_project_ws_handler),
         )
         .route(
             "/agent-activity/status",
             get(websocket::openclaw_agent_activity_ws_handler),
+        )
+        .route(
+            "/execution-processes/:id/raw-logs",
+            get(websocket::openclaw_execution_process_raw_logs_ws_handler),
+        )
+        .route(
+            "/execution-processes/:id/normalized-logs",
+            get(websocket::openclaw_execution_process_normalized_logs_ws_handler),
+        )
+        .route(
+            "/execution-processes/stream/attempt",
+            get(websocket::openclaw_execution_processes_ws_handler),
+        )
+        .route(
+            "/execution-processes/stream/session",
+            get(websocket::openclaw_execution_processes_session_ws_handler),
+        )
+        .route(
+            "/agent/auth/sessions/:id",
+            get(websocket::openclaw_agent_auth_session_ws_handler),
+        )
+        .route(
+            "/approvals/stream",
+            get(websocket::openclaw_approvals_ws_handler),
         )
 }
 
