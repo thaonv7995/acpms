@@ -1989,11 +1989,14 @@ fn load_skill_from_roots(skill_id: &str, roots: &[SkillRootCandidate]) -> Option
             continue;
         };
 
+        let origin = crate::knowledge_index::skill_origin_from_content(&content)
+            .unwrap_or_else(|| root.origin.clone());
+
         return Some(LoadedSkill {
             id: skill_id.to_string(),
             content,
             source: Some(path),
-            origin: Some(root.origin.clone()),
+            origin: Some(origin),
         });
     }
 
@@ -2028,6 +2031,7 @@ fn candidate_skill_roots_from_globals(
     // 1. Per-project skills (worktree .acpms/skills)
     if let Some(repo) = repo_path {
         push(repo.join(".acpms").join("skills"), "repo-local");
+        push(repo.join(".acpms").join("vendor-skills"), "vendor");
     }
 
     for root in global_roots {
@@ -2072,6 +2076,12 @@ pub fn detect_skill_file(path: &Path) -> Option<DetectedSkillFile> {
 }
 
 fn detect_skill_origin(path: &Path) -> String {
+    if let Ok(content) = std::fs::read_to_string(path) {
+        if let Some(origin) = crate::knowledge_index::skill_origin_from_content(&content) {
+            return origin;
+        }
+    }
+
     let components = path
         .components()
         .filter_map(|component| component.as_os_str().to_str())
@@ -2089,11 +2099,20 @@ fn detect_skill_origin(path: &Path) -> String {
         if path.starts_with(&skills_root) {
             return "platform".to_string();
         }
+        if let Some(parent) = skills_root.parent() {
+            let vendor_root = parent.join("vendor-skills");
+            if path.starts_with(vendor_root) {
+                return "vendor".to_string();
+            }
+        }
     }
 
     if let Ok(cwd) = std::env::current_dir() {
         if path.starts_with(cwd.join(".acpms").join("skills")) {
             return "cwd".to_string();
+        }
+        if path.starts_with(cwd.join(".acpms").join("vendor-skills")) {
+            return "vendor".to_string();
         }
     }
 
@@ -3185,20 +3204,31 @@ mod tests {
 
     #[test]
     fn detect_skill_file_extracts_skill_id_and_origin() {
-        let path = PathBuf::from("/Users/test/.acpms/skills/community-openai/openai-docs/SKILL.md");
+        let temp_dir = tempfile::tempdir().unwrap();
+        let skill_dir = temp_dir.path().join(".acpms").join("skills").join("openai-docs");
+        std::fs::create_dir_all(&skill_dir).unwrap();
+        let path = skill_dir.join("SKILL.md");
+        std::fs::write(
+            &path,
+            "---\nname: openai-docs\ndescription: repo managed copy\norigin: community-openai\n---\ncommunity copy",
+        )
+        .unwrap();
 
         let detected = detect_skill_file(&path).expect("skill file should be detected");
 
         assert_eq!(detected.skill_id, "openai-docs");
         assert_eq!(detected.origin, "community-openai");
-        assert_eq!(detected.source_path, path.to_string_lossy());
+        assert_eq!(
+            detected.source_path,
+            std::fs::canonicalize(path).unwrap().to_string_lossy()
+        );
     }
 
     #[test]
     fn detect_skill_file_resolves_symlinked_overlay_paths_to_real_source() {
         let temp_dir = tempfile::tempdir().unwrap();
         let platform_dir = temp_dir.path().join("platform-skills");
-        let community_skill_dir = platform_dir.join("community-openai").join("openai-docs");
+        let community_skill_dir = platform_dir.join("openai-docs");
         let overlay_dir = temp_dir
             .path()
             .join("overlay")
@@ -3209,7 +3239,7 @@ mod tests {
         std::fs::create_dir_all(overlay_dir.parent().unwrap()).unwrap();
         std::fs::write(
             community_skill_dir.join("SKILL.md"),
-            "---\nname: openai-docs\ndescription: repo managed copy\n---\ncommunity copy",
+            "---\nname: openai-docs\ndescription: repo managed copy\norigin: community-openai\n---\ncommunity copy",
         )
         .unwrap();
 
@@ -3246,10 +3276,9 @@ mod tests {
     fn runtime_skill_attachment_prefers_repo_managed_duplicate_over_codex_home() {
         let temp_dir = tempfile::tempdir().unwrap();
         let platform_dir = temp_dir.path().join("platform-skills");
-        let community_dir = platform_dir.join("community-openai");
         let codex_home_dir = temp_dir.path().join("codex-home").join("skills");
 
-        let community_skill_dir = community_dir.join("openai-docs");
+        let community_skill_dir = platform_dir.join("openai-docs");
         let codex_skill_dir = codex_home_dir.join("openai-docs");
 
         std::fs::create_dir_all(&community_skill_dir).unwrap();
@@ -3257,7 +3286,7 @@ mod tests {
 
         std::fs::write(
             community_skill_dir.join("SKILL.md"),
-            "---\nname: openai-docs\ndescription: bundled copy\n---\ncommunity copy",
+            "---\nname: openai-docs\ndescription: bundled copy\norigin: community-openai\n---\ncommunity copy",
         )
         .unwrap();
         std::fs::write(
@@ -3274,10 +3303,6 @@ mod tests {
                     origin: "platform".to_string(),
                 },
                 crate::knowledge_index::KnowledgeRoot {
-                    path: community_dir,
-                    origin: "community-openai".to_string(),
-                },
-                crate::knowledge_index::KnowledgeRoot {
                     path: codex_home_dir,
                     origin: "codex-home".to_string(),
                 },
@@ -3292,8 +3317,6 @@ mod tests {
             .source
             .as_ref()
             .expect("source path should exist")
-            .ends_with(Path::new(
-                "platform-skills/community-openai/openai-docs/SKILL.md"
-            )));
+            .ends_with(Path::new("platform-skills/openai-docs/SKILL.md")));
     }
 }

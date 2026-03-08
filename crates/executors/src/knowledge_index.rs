@@ -45,6 +45,8 @@ struct SkillFrontmatter {
     name: String,
     #[serde(default)]
     description: String,
+    #[serde(default)]
+    origin: String,
 }
 
 /// Discovered skill on disk before indexing.
@@ -195,9 +197,15 @@ impl SkillKnowledgeHandle {
     }
 }
 
+fn sibling_vendor_skills_dir(skills_dir: &std::path::Path) -> Option<PathBuf> {
+    skills_dir.parent().map(|parent| parent.join("vendor-skills"))
+}
+
 fn build_global_skill_roots(
     platform_skills_dir: Option<PathBuf>,
+    platform_vendor_skills_dir: Option<PathBuf>,
     cwd_skills_dir: Option<PathBuf>,
+    cwd_vendor_skills_dir: Option<PathBuf>,
     codex_home_skills_dir: Option<PathBuf>,
 ) -> Vec<KnowledgeRoot> {
     let mut roots = Vec::new();
@@ -214,27 +222,18 @@ fn build_global_skill_roots(
 
     if let Some(skills_path) = platform_skills_dir {
         push(skills_path.clone(), "platform");
+    }
 
-        if let Ok(entries) = std::fs::read_dir(&skills_path) {
-            let mut community_dirs = Vec::new();
-            for entry in entries.flatten() {
-                let path = entry.path();
-                let file_name = entry.file_name();
-                let file_name = file_name.to_string_lossy();
-                if path.is_dir() && file_name.starts_with("community-") {
-                    community_dirs.push((file_name.to_string(), path));
-                }
-            }
-
-            community_dirs.sort_by(|a, b| a.0.cmp(&b.0));
-            for (origin, path) in community_dirs {
-                push(path, &origin);
-            }
-        }
+    if let Some(vendor_path) = platform_vendor_skills_dir {
+        push(vendor_path, "vendor");
     }
 
     if let Some(cwd_skills) = cwd_skills_dir {
         push(cwd_skills, "cwd");
+    }
+
+    if let Some(cwd_vendor_skills) = cwd_vendor_skills_dir {
+        push(cwd_vendor_skills, "vendor");
     }
 
     // Codex-home is local-user fallback only. ACPMS-managed repo/platform/community
@@ -249,9 +248,15 @@ fn build_global_skill_roots(
 /// Discover all global skill roots that should be part of the shared knowledge base.
 pub fn discover_global_skill_roots() -> Vec<KnowledgeRoot> {
     let platform_skills_dir = std::env::var("ACPMS_SKILLS_DIR").ok().map(PathBuf::from);
+    let platform_vendor_skills_dir = platform_skills_dir
+        .as_deref()
+        .and_then(sibling_vendor_skills_dir);
     let cwd_skills_dir = std::env::current_dir()
         .ok()
         .map(|cwd| cwd.join(".acpms").join("skills"));
+    let cwd_vendor_skills_dir = std::env::current_dir()
+        .ok()
+        .map(|cwd| cwd.join(".acpms").join("vendor-skills"));
     let codex_home_skills_dir = if let Ok(codex_home) = std::env::var("CODEX_HOME") {
         Some(PathBuf::from(codex_home).join("skills"))
     } else if let Some(home) = dirs::home_dir() {
@@ -260,7 +265,13 @@ pub fn discover_global_skill_roots() -> Vec<KnowledgeRoot> {
         None
     };
 
-    build_global_skill_roots(platform_skills_dir, cwd_skills_dir, codex_home_skills_dir)
+    build_global_skill_roots(
+        platform_skills_dir,
+        platform_vendor_skills_dir,
+        cwd_skills_dir,
+        cwd_vendor_skills_dir,
+        codex_home_skills_dir,
+    )
 }
 
 /// In-memory knowledge index for lexical skill search.
@@ -387,23 +398,28 @@ fn discover_skills(roots: &[KnowledgeRoot]) -> Vec<DiscoveredSkill> {
             let name = if fm.name.is_empty() {
                 skill_id.clone()
             } else {
-                fm.name
+                fm.name.clone()
             };
-            let description = fm.description;
+            let description = fm.description.clone();
+            let origin = if fm.origin.trim().is_empty() {
+                root.origin.clone()
+            } else {
+                fm.origin.trim().to_string()
+            };
 
             skills.push(DiscoveredSkill {
                 search_terms: tokenize(&build_search_text(
                     &skill_id,
                     &name,
                     &description,
-                    &root.origin,
+                    &origin,
                     &content,
                 )),
                 skill_id,
                 name,
                 description,
                 source_path: entry.path().to_path_buf(),
-                origin: root.origin.clone(),
+                origin,
             });
 
             if skills.len() >= MAX_SKILLS_TO_INDEX {
@@ -430,6 +446,16 @@ fn parse_frontmatter(content: &str) -> SkillFrontmatter {
 
     let yaml_str = &after_first[..end].trim();
     serde_yaml::from_str(yaml_str).unwrap_or_default()
+}
+
+pub(crate) fn skill_origin_from_content(content: &str) -> Option<String> {
+    let origin = parse_frontmatter(content).origin;
+    let origin = origin.trim();
+    if origin.is_empty() {
+        None
+    } else {
+        Some(origin.to_string())
+    }
 }
 
 fn build_search_text(
@@ -610,6 +636,7 @@ mod tests {
         let content = r#"---
 name: test-skill
 description: A test skill for unit tests
+origin: community-openai
 ---
 
 # Test Skill
@@ -619,6 +646,7 @@ Body content here.
         let fm = parse_frontmatter(content);
         assert_eq!(fm.name, "test-skill");
         assert_eq!(fm.description, "A test skill for unit tests");
+        assert_eq!(fm.origin, "community-openai");
     }
 
     #[test]
@@ -650,6 +678,25 @@ Body content here.
         assert_eq!(skills[0].description, "hello");
         assert_eq!(skills[0].origin, "platform");
         assert!(skills[0].search_terms.contains("hello"));
+    }
+
+    #[test]
+    fn discover_skills_prefers_origin_from_frontmatter_when_present() {
+        let tmp = tempfile::tempdir().unwrap();
+        let skill_dir = tmp.path().join("openai-docs");
+        std::fs::create_dir_all(&skill_dir).unwrap();
+        std::fs::write(
+            skill_dir.join("SKILL.md"),
+            "---\nname: openai-docs\ndescription: hello\norigin: community-openai\n---\n# Skill",
+        )
+        .unwrap();
+
+        let skills = discover_skills(&[KnowledgeRoot {
+            path: tmp.path().to_path_buf(),
+            origin: "platform".to_string(),
+        }]);
+        assert_eq!(skills.len(), 1);
+        assert_eq!(skills[0].origin, "community-openai");
     }
 
     #[test]
@@ -730,17 +777,22 @@ Body content here.
     fn global_skill_roots_prioritize_repo_managed_sources_before_codex_home() {
         let tmp = tempfile::tempdir().unwrap();
         let platform_dir = tmp.path().join("platform-skills");
-        let community_dir = platform_dir.join("community-openai");
+        let platform_vendor_dir = tmp.path().join("vendor-skills");
         let cwd_dir = tmp.path().join("cwd").join(".acpms").join("skills");
+        let cwd_vendor_dir = tmp.path().join("cwd").join(".acpms").join("vendor-skills");
         let codex_home_dir = tmp.path().join("codex-home").join("skills");
 
-        std::fs::create_dir_all(&community_dir).unwrap();
+        std::fs::create_dir_all(&platform_dir).unwrap();
+        std::fs::create_dir_all(&platform_vendor_dir).unwrap();
         std::fs::create_dir_all(&cwd_dir).unwrap();
+        std::fs::create_dir_all(&cwd_vendor_dir).unwrap();
         std::fs::create_dir_all(&codex_home_dir).unwrap();
 
         let roots = build_global_skill_roots(
             Some(platform_dir.clone()),
+            Some(platform_vendor_dir.clone()),
             Some(cwd_dir.clone()),
+            Some(cwd_vendor_dir.clone()),
             Some(codex_home_dir.clone()),
         );
 
@@ -753,8 +805,9 @@ Body content here.
             actual,
             vec![
                 ("platform", platform_dir),
-                ("community-openai", community_dir),
+                ("vendor", platform_vendor_dir),
                 ("cwd", cwd_dir),
+                ("vendor", cwd_vendor_dir),
                 ("codex-home", codex_home_dir),
             ]
         );
@@ -764,7 +817,7 @@ Body content here.
     fn knowledge_index_prefers_repo_managed_duplicate_skill_ids_over_codex_home() {
         let tmp = tempfile::tempdir().unwrap();
         let platform_dir = tmp.path().join("platform-skills");
-        let community_dir = platform_dir.join("community-openai").join("openai-docs");
+        let community_dir = platform_dir.join("openai-docs");
         let codex_home_dir = tmp
             .path()
             .join("codex-home")
@@ -776,7 +829,7 @@ Body content here.
 
         std::fs::write(
             community_dir.join("SKILL.md"),
-            "---\nname: openai-docs\ndescription: bundled community copy\n---\ncommunity copy",
+            "---\nname: openai-docs\ndescription: bundled community copy\norigin: community-openai\n---\ncommunity copy",
         )
         .unwrap();
         std::fs::write(
@@ -788,6 +841,8 @@ Body content here.
         let index = KnowledgeIndex::build(build_global_skill_roots(
             Some(platform_dir),
             None,
+            None,
+            None,
             Some(tmp.path().join("codex-home").join("skills")),
         ))
         .unwrap();
@@ -797,9 +852,9 @@ Body content here.
 
         assert_eq!(matches[0].skill_id, "openai-docs");
         assert_eq!(matches[0].origin, "community-openai");
-        assert!(matches[0].source_path.ends_with(Path::new(
-            "platform-skills/community-openai/openai-docs/SKILL.md"
-        )));
+        assert!(matches[0]
+            .source_path
+            .ends_with(Path::new("platform-skills/openai-docs/SKILL.md")));
         assert!(content.contains("community copy"));
     }
 

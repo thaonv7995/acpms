@@ -1314,7 +1314,7 @@ mod tests {
         let repo_root = temp_dir.path().join("repo-skills");
         let codex_root = temp_dir.path().join("codex-home").join("skills");
 
-        let repo_openai = repo_root.join("community-openai").join("openai-docs");
+        let repo_openai = repo_root.join("openai-docs");
         let codex_openai = codex_root.join("openai-docs");
         let codex_system = codex_root.join(".system").join("skill-creator");
 
@@ -1327,17 +1327,12 @@ mod tests {
         fs::write(codex_system.join("SKILL.md"), "system fallback copy")
             .expect("write system skill");
 
-        let community_root = temp_dir.path().join("repo-skills").join("community-openai");
         materialize_skill_tree(
             &merged_dir,
             &[
                 ManagedSkillRoot {
                     path: temp_dir.path().join("repo-skills"),
                     origin: "platform".to_string(),
-                },
-                ManagedSkillRoot {
-                    path: community_root,
-                    origin: "community-openai".to_string(),
                 },
                 ManagedSkillRoot {
                     path: codex_root,
