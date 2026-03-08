@@ -1,7 +1,15 @@
+import { useCallback, useMemo, useState } from 'react';
+import { getAttemptArtifacts } from '@/api/taskAttempts';
+import {
+    extractArtifactDownloadRefs,
+    type ArtifactDownloadRef,
+} from '@/lib/artifact-downloads';
+
 interface PreviewSectionProps {
     previewUrl?: string;
     appDownloadUrl?: string;
     appDownloads?: Array<Record<string, unknown>>;
+    artifactAttemptId?: string;
     previewTarget?: string;
     deploymentStatus?: string;
     deploymentError?: string;
@@ -13,43 +21,65 @@ export function PreviewSection({
     previewUrl,
     appDownloadUrl,
     appDownloads = [],
+    artifactAttemptId,
     previewTarget,
     deploymentStatus,
     deploymentError,
     appVersion,
     isCompleted = false,
 }: PreviewSectionProps) {
-    const normalizedDownloads = appDownloads
-        .map((item) => {
-            const label = typeof item.label === 'string' ? item.label : 'Download';
-            const os = typeof item.os === 'string' ? item.os : 'generic';
-            const url = typeof item.url === 'string' ? item.url : undefined;
-            const presignedUrl =
-                typeof item.presigned_url === 'string' ? item.presigned_url : undefined;
-            const artifactType =
-                typeof item.artifact_type === 'string' ? item.artifact_type : undefined;
-            return {
-                label,
-                os,
-                artifactType,
-                url: presignedUrl || url,
-            };
-        })
-        .filter((item) => Boolean(item.url));
+    const [downloadError, setDownloadError] = useState<string | null>(null);
+    const normalizedDownloads = useMemo(() => {
+        const metadata: Record<string, unknown> = {
+            app_downloads: appDownloads,
+        };
+        if (appDownloadUrl) {
+            metadata.app_download_url = appDownloadUrl;
+        }
+        return extractArtifactDownloadRefs(metadata, artifactAttemptId).map((item) => ({
+            ...item,
+            os: item.os ?? 'generic',
+            artifactType: item.artifactType,
+        }));
+    }, [appDownloadUrl, appDownloads, artifactAttemptId]);
 
     const downloadEntries =
         normalizedDownloads.length > 0
             ? normalizedDownloads
-            : appDownloadUrl
-              ? [
-                    {
-                        label: 'Download',
-                        os: 'generic',
-                        artifactType: undefined,
-                        url: appDownloadUrl,
-                    },
-                ]
-              : [];
+            : [];
+
+    const handleDownload = useCallback(async (entry: ArtifactDownloadRef) => {
+        setDownloadError(null);
+
+        if (entry.legacyUrl && !entry.artifactId) {
+            window.open(entry.legacyUrl, '_blank', 'noopener,noreferrer');
+            return;
+        }
+
+        if (!entry.attemptId || !entry.artifactId) {
+            setDownloadError('Artifact reference is incomplete for this task.');
+            return;
+        }
+
+        try {
+            const artifacts = await getAttemptArtifacts(entry.attemptId);
+            const matchedArtifact = artifacts.find((item) => item.id === entry.artifactId);
+            const downloadUrl = matchedArtifact?.download_url;
+
+            if (!downloadUrl) {
+                setDownloadError('Artifact is not ready for download yet.');
+                return;
+            }
+
+            window.open(downloadUrl, '_blank', 'noopener,noreferrer');
+        } catch (error) {
+            setDownloadError(
+                error instanceof Error
+                    ? error.message
+                    : 'Failed to prepare artifact download.'
+            );
+        }
+    }, []);
 
     // Don't render if no preview, no downloads, and no deployment status/error.
     if (!previewUrl && downloadEntries.length === 0 && !deploymentError && !deploymentStatus) {
@@ -70,6 +100,13 @@ export function PreviewSection({
                     <div className="p-4 rounded-lg border border-red-500/40 bg-red-500/10">
                         <p className="text-sm font-semibold text-red-300">Deployment Issue</p>
                         <p className="text-xs text-red-200 mt-1">{deploymentError}</p>
+                    </div>
+                )}
+
+                {downloadError && (
+                    <div className="p-4 rounded-lg border border-red-500/40 bg-red-500/10">
+                        <p className="text-sm font-semibold text-red-300">Download Issue</p>
+                        <p className="text-xs text-red-200 mt-1">{downloadError}</p>
                     </div>
                 )}
 
@@ -139,19 +176,22 @@ export function PreviewSection({
                                             v{appVersion}
                                         </span>
                                     )}
-                                    <span className="truncate max-w-[280px]">{entry.url}</span>
+                                    {entry.artifactType && (
+                                        <span className="truncate max-w-[280px]">
+                                            {entry.artifactType}
+                                        </span>
+                                    )}
                                 </div>
                             </div>
                         </div>
-                        <a
-                            href={entry.url}
-                            target="_blank"
-                            rel="noopener noreferrer"
+                        <button
+                            type="button"
+                            onClick={() => void handleDownload(entry)}
                             className="flex items-center gap-1.5 px-3 py-2 bg-purple-500 hover:bg-purple-600 text-white text-xs font-medium rounded-lg transition-colors"
                         >
                             <span className="material-symbols-outlined text-[16px]">download</span>
                             Download
-                        </a>
+                        </button>
                     </div>
                 ))}
 

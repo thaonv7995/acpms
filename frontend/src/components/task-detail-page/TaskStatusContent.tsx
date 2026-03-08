@@ -6,6 +6,8 @@ import { PreviewSection } from './PreviewSection';
 interface TaskStatusContentProps {
     task: Task;
     normalizedStatus: string;
+    artifactAttemptId?: string;
+    previewMetadata?: Record<string, unknown>;
 }
 
 /**
@@ -15,7 +17,11 @@ interface TaskStatusContentProps {
 export function TaskStatusContent({
     task,
     normalizedStatus,
+    artifactAttemptId,
+    previewMetadata,
 }: TaskStatusContentProps) {
+    const metadata = previewMetadata ?? task.metadata;
+
     // Common sections that appear in all statuses
     const descriptionSection = <TaskDescriptionCard description={task.description} />;
 
@@ -26,13 +32,14 @@ export function TaskStatusContent({
                     {descriptionSection}
                     {/* Preview section if available */}
                     <PreviewSection
-                        previewUrl={task.metadata?.preview_url as string}
-                        appDownloadUrl={task.metadata?.app_download_url as string}
-                        appDownloads={task.metadata?.app_downloads as Array<Record<string, unknown>>}
-                        previewTarget={task.metadata?.preview_target as string}
-                        deploymentStatus={task.metadata?.deployment_status as string}
-                        deploymentError={task.metadata?.deployment_error as string}
-                        appVersion={task.metadata?.app_version as string}
+                        previewUrl={metadata?.preview_url as string}
+                        appDownloadUrl={metadata?.app_download_url as string}
+                        appDownloads={metadata?.app_downloads as Array<Record<string, unknown>>}
+                        artifactAttemptId={artifactAttemptId}
+                        previewTarget={metadata?.preview_target as string}
+                        deploymentStatus={metadata?.deployment_status as string}
+                        deploymentError={metadata?.deployment_error as string}
+                        appVersion={metadata?.app_version as string}
                     />
                     <TaskActivityFeed />
                 </div>
@@ -44,13 +51,14 @@ export function TaskStatusContent({
                     {descriptionSection}
                     {/* Show final deployment/preview */}
                     <PreviewSection
-                        previewUrl={task.metadata?.preview_url as string}
-                        appDownloadUrl={task.metadata?.app_download_url as string}
-                        appDownloads={task.metadata?.app_downloads as Array<Record<string, unknown>>}
-                        previewTarget={task.metadata?.preview_target as string}
-                        deploymentStatus={task.metadata?.deployment_status as string}
-                        deploymentError={task.metadata?.deployment_error as string}
-                        appVersion={task.metadata?.app_version as string}
+                        previewUrl={metadata?.preview_url as string}
+                        appDownloadUrl={metadata?.app_download_url as string}
+                        appDownloads={metadata?.app_downloads as Array<Record<string, unknown>>}
+                        artifactAttemptId={artifactAttemptId}
+                        previewTarget={metadata?.preview_target as string}
+                        deploymentStatus={metadata?.deployment_status as string}
+                        deploymentError={metadata?.deployment_error as string}
+                        appVersion={metadata?.app_version as string}
                         isCompleted
                     />
                     <TaskActivityFeed />
