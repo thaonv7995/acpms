@@ -2,7 +2,10 @@ import type { LayoutMode } from '../../components/layout/TasksLayout';
 import type { KanbanTask } from '../../types/project';
 import type { TaskAttempt } from '../../types/task-attempt';
 import { NewCardHeader } from '@/components/ui/new-card';
-import { AttemptHeaderActions } from '@/components/panels/AttemptHeaderActions';
+import {
+  AttemptHeaderActions,
+  type AttemptArtifactDownloadItem,
+} from '@/components/panels/AttemptHeaderActions';
 import {
   Breadcrumb,
   BreadcrumbList,
@@ -23,11 +26,10 @@ interface ProjectTasksHeaderProps {
   showPreviewToggle?: boolean;
   previewModeDisabled?: boolean;
   previewModeDisabledReason?: string;
-  downloadArtifactUrl?: string;
-  downloadArtifactLabel?: string;
+  artifactDownloads?: AttemptArtifactDownloadItem[];
   downloadDisabled?: boolean;
   downloadDisabledReason?: string;
-  onDownloadArtifact?: () => void;
+  onDownloadArtifact?: (artifact?: AttemptArtifactDownloadItem) => void;
   onCreateAttempt?: () => void;
   onOpenGitActions?: () => void;
   onDeleteTask?: () => void;
@@ -62,8 +64,7 @@ export function ProjectTasksHeader({
   showPreviewToggle = true,
   previewModeDisabled = false,
   previewModeDisabledReason,
-  downloadArtifactUrl,
-  downloadArtifactLabel,
+  artifactDownloads = [],
   downloadDisabled = false,
   downloadDisabledReason,
   onDownloadArtifact,
@@ -93,8 +94,7 @@ export function ProjectTasksHeader({
             showPreviewToggle={showPreviewToggle}
             previewDisabled={previewModeDisabled}
             previewDisabledReason={previewModeDisabledReason}
-            downloadArtifactUrl={downloadArtifactUrl}
-            downloadArtifactLabel={downloadArtifactLabel}
+            artifactDownloads={artifactDownloads}
             downloadDisabled={downloadDisabled}
             downloadDisabledReason={downloadDisabledReason}
             onDownloadArtifact={onDownloadArtifact}

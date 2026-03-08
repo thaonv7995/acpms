@@ -1,4 +1,5 @@
 import { fireEvent, render, screen, waitFor } from '@testing-library/react';
+import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { ProjectTasksPage } from '../../../pages/ProjectTasksPage';
 import { useKanban } from '../../../hooks/useKanban';
@@ -7,6 +8,7 @@ import { useToast } from '../../../hooks/useToast';
 import { usePreviewReadiness } from '../../../hooks/usePreviewReadiness';
 import { useAttemptData } from '../../../pages/project-tasks/use-attempt-data';
 import { useProjectTasksNavigation } from '../../../pages/project-tasks/use-project-tasks-navigation';
+import { getAttemptArtifacts } from '../../../api/taskAttempts';
 
 const mockNavigate = vi.fn();
 const mockHandleModeChangeBase = vi.fn();
@@ -170,6 +172,7 @@ vi.mock('../../../api/taskAttempts', () => ({
   createTaskAttempt: vi.fn(),
   cancelAttempt: vi.fn(),
   getTaskAttempts: vi.fn(),
+  getAttemptArtifacts: vi.fn(),
 }));
 
 vi.mock('../../../api/tasks', () => ({
@@ -198,7 +201,11 @@ function setupMocks(projectType: 'desktop' | 'mobile' | 'extension', artifactUrl
               app_downloads: [
                 {
                   label: `${projectType} artifact`,
-                  presigned_url: artifactUrl,
+                  attempt_id: 'attempt-1',
+                  artifact_id: `${projectType}-artifact-1`,
+                  artifact_key: `builds/${projectType}-qa.zip`,
+                  artifact_type: `${projectType}_artifact`,
+                  os: projectType === 'extension' ? 'browser' : projectType,
                 },
               ],
             },
@@ -211,6 +218,11 @@ function setupMocks(projectType: 'desktop' | 'mobile' | 'extension', artifactUrl
     refetch: vi.fn().mockResolvedValue(undefined),
     updateStatus: vi.fn().mockResolvedValue(undefined),
     moveTaskToColumn: vi.fn().mockResolvedValue(undefined),
+    closeTask: vi.fn().mockResolvedValue(undefined),
+    columnConfig: {
+      showClosed: false,
+      showBacklog: true,
+    },
     setFilters: vi.fn(),
     filters: {},
   } as any);
@@ -274,9 +286,33 @@ function setupMocks(projectType: 'desktop' | 'mobile' | 'extension', artifactUrl
       status: 'completed',
       created_at: '2026-03-04T00:00:00Z',
       updated_at: '2026-03-04T00:00:00Z',
+      metadata: {
+        app_downloads: [
+          {
+            attempt_id: 'attempt-1',
+            artifact_id: `${projectType}-artifact-1`,
+            artifact_key: `builds/${projectType}-qa.zip`,
+            artifact_type: `${projectType}_artifact`,
+            os: projectType === 'extension' ? 'browser' : projectType,
+            label: `${projectType} artifact`,
+          },
+        ],
+      },
     },
     isAttemptsLoading: false,
   } as any);
+
+  vi.mocked(getAttemptArtifacts).mockResolvedValue([
+    {
+      id: `${projectType}-artifact-1`,
+      artifact_key: `builds/${projectType}-qa.zip`,
+      artifact_type: `${projectType}_artifact`,
+      size_bytes: 1024,
+      file_count: 1,
+      download_url: artifactUrl,
+      created_at: '2026-03-04T00:00:00Z',
+    },
+  ]);
 
   vi.mocked(usePreviewReadiness).mockReturnValue({ readiness: null } as any);
 
@@ -303,8 +339,13 @@ describe('ProjectTasksPage artifact preview delivery', () => {
     async (projectType) => {
       const artifactUrl = `https://cdn.example.com/builds/${projectType}-qa.zip`;
       setupMocks(projectType, artifactUrl);
+      const queryClient = new QueryClient();
 
-      render(<ProjectTasksPage />);
+      render(
+        <QueryClientProvider client={queryClient}>
+          <ProjectTasksPage />
+        </QueryClientProvider>
+      );
 
       await waitFor(() => {
         expect(mockHandleModeChangeBase).toHaveBeenCalledWith(null);
@@ -320,13 +361,20 @@ describe('ProjectTasksPage artifact preview delivery', () => {
 
       fireEvent.click(downloadButton);
 
-      const anchorNode = appendChildSpy.mock.calls
-        .map(([node]) => node)
-        .find((node) => node instanceof HTMLAnchorElement) as
-        | HTMLAnchorElement
-        | undefined;
+      await waitFor(() => {
+        expect(getAttemptArtifacts).toHaveBeenCalledWith('attempt-1');
+      });
 
-      expect(anchorNode).toBeTruthy();
+      let anchorNode: HTMLAnchorElement | undefined;
+      await waitFor(() => {
+        anchorNode = appendChildSpy.mock.calls
+          .map(([node]) => node)
+          .find((node) => node instanceof HTMLAnchorElement) as
+          | HTMLAnchorElement
+          | undefined;
+        expect(anchorNode).toBeTruthy();
+      });
+
       expect(anchorNode?.href).toBe(artifactUrl);
       expect(anchorNode?.target).toBe('_blank');
       expect(anchorNode?.rel).toContain('noopener');

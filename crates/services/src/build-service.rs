@@ -383,8 +383,48 @@ impl BuildService {
         base_key: &str,
         artifact_path: &Path,
     ) -> Result<Vec<UploadedArtifact>> {
-        let files = self.collect_files_recursively(artifact_path).await?;
         let mut uploaded: Vec<UploadedArtifact> = Vec::new();
+
+        if artifact_path.is_dir() {
+            let mut entries = tokio::fs::read_dir(artifact_path).await?;
+            while let Some(entry) = entries.next_entry().await? {
+                let path = entry.path();
+                if !path.is_dir() {
+                    continue;
+                }
+                let Some(file_name) = path.file_name().and_then(|n| n.to_str()) else {
+                    continue;
+                };
+                let ext_lc = path
+                    .extension()
+                    .and_then(|e| e.to_str())
+                    .unwrap_or_default()
+                    .to_ascii_lowercase();
+
+                if ext_lc != "app" {
+                    continue;
+                }
+
+                let zip_path = path.with_extension("app.zip");
+                self.create_zip_archive(&path, &zip_path).await?;
+                let key = format!("{}/desktop/macos/{}.zip", base_key, file_name);
+                let size = tokio::fs::metadata(&zip_path)
+                    .await
+                    .map(|m| m.len())
+                    .unwrap_or(0);
+                self.upload_file_to_storage(&zip_path, &key, "application/zip")
+                    .await?;
+                let _ = tokio::fs::remove_file(&zip_path).await;
+                uploaded.push(UploadedArtifact {
+                    artifact_key: key,
+                    artifact_type: "desktop_macos".to_string(),
+                    size_bytes: size,
+                    file_count: 1,
+                });
+            }
+        }
+
+        let files = self.collect_files_recursively(artifact_path).await?;
 
         for file in files {
             let Some(file_name) = file.file_name().and_then(|n| n.to_str()) else {
@@ -401,10 +441,28 @@ impl BuildService {
                 || ext_lc == "pkg"
                 || name_lc.contains("mac")
                 || name_lc.contains("darwin")
+                || name_lc.contains("osx")
+                || (ext_lc == "zip"
+                    && (name_lc.contains("mac")
+                        || name_lc.contains("darwin")
+                        || name_lc.contains("osx")))
             {
                 Some("macos")
-            } else if ext_lc == "exe" || ext_lc == "msi" || name_lc.contains("win") {
+            } else if ext_lc == "exe"
+                || ext_lc == "msi"
+                || name_lc.contains("win")
+                || (ext_lc == "zip"
+                    && (name_lc.contains("win") || name_lc.contains("windows")))
+            {
                 Some("windows")
+            } else if ext_lc == "appimage"
+                || ext_lc == "deb"
+                || ext_lc == "rpm"
+                || name_lc.contains("linux")
+                || (ext_lc == "zip"
+                    && (name_lc.contains("linux") || name_lc.contains("appimage")))
+            {
+                Some("linux")
             } else {
                 None
             };

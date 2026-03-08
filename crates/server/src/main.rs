@@ -103,6 +103,8 @@ fn infer_download_target(artifact_type: &str) -> (&'static str, &'static str) {
         ("windows", "Windows")
     } else if value.contains("macos") || value.contains("darwin") || value.contains("osx") {
         ("macos", "macOS")
+    } else if value.contains("linux") || value.contains("appimage") {
+        ("linux", "Linux")
     } else if value.contains("ios") {
         ("ios", "iOS")
     } else if value.contains("android") {
@@ -118,17 +120,18 @@ fn download_rank(os: &str) -> i32 {
     match os {
         "windows" => 0,
         "macos" => 1,
-        "ios" => 2,
+        "linux" => 2,
         "android" => 3,
-        "browser" => 4,
-        _ => 5,
+        "ios" => 4,
+        "browser" => 5,
+        _ => 6,
     }
 }
 
 fn finalize_app_downloads(
     project_type: acpms_db::models::ProjectType,
     mut app_downloads: Vec<serde_json::Value>,
-) -> (Option<String>, Vec<serde_json::Value>) {
+) -> Vec<serde_json::Value> {
     if project_type == acpms_db::models::ProjectType::Desktop {
         let mut desktop_only: Vec<serde_json::Value> = app_downloads
             .iter()
@@ -136,7 +139,7 @@ fn finalize_app_downloads(
                 entry
                     .get("os")
                     .and_then(|value| value.as_str())
-                    .map(|os| os == "windows" || os == "macos")
+                    .map(|os| os == "windows" || os == "macos" || os == "linux")
                     .unwrap_or(false)
             })
             .cloned()
@@ -155,13 +158,7 @@ fn finalize_app_downloads(
             .unwrap_or(99)
     });
 
-    let primary_url = app_downloads
-        .first()
-        .and_then(|entry| entry.get("url"))
-        .and_then(|value| value.as_str())
-        .map(ToString::to_string);
-
-    (primary_url, app_downloads)
+    app_downloads
 }
 
 async fn update_task_metadata_patch(
@@ -178,6 +175,26 @@ async fn update_task_metadata_patch(
         "#,
     )
     .bind(task_id)
+    .bind(metadata_patch)
+    .execute(db)
+    .await?;
+    Ok(())
+}
+
+async fn update_attempt_metadata_patch(
+    db: &acpms_db::PgPool,
+    attempt_id: Uuid,
+    metadata_patch: serde_json::Value,
+) -> anyhow::Result<()> {
+    sqlx::query(
+        r#"
+        UPDATE task_attempts
+        SET metadata = COALESCE(metadata, '{}'::jsonb) || $2::jsonb,
+            updated_at = NOW()
+        WHERE id = $1
+        "#,
+    )
+    .bind(attempt_id)
     .bind(metadata_patch)
     .execute(db)
     .await?;
@@ -634,6 +651,7 @@ async fn handle_attempt_success_deployment(
         || attempt.metadata.get("deployment_report").is_some();
 
     let mut metadata_patch = serde_json::Map::new();
+    let mut attempt_metadata_patch = serde_json::Map::new();
 
     match delivery_mode {
         TaskSuccessDeliveryMode::Preview => {
@@ -755,6 +773,14 @@ async fn handle_attempt_success_deployment(
                     "app_downloads".to_string(),
                     serde_json::Value::Array(Vec::new()),
                 );
+                attempt_metadata_patch.insert(
+                    "app_download_url".to_string(),
+                    serde_json::Value::Null,
+                );
+                attempt_metadata_patch.insert(
+                    "app_downloads".to_string(),
+                    serde_json::Value::Array(Vec::new()),
+                );
             } else if let Err(e) = build_service.run_build(&project, attempt_id, None).await {
                 tracing::error!(
                     "Build pipeline failed for attempt {} ({:?}): {}",
@@ -764,45 +790,38 @@ async fn handle_attempt_success_deployment(
                 );
             } else {
                 let artifacts = build_service.get_attempt_artifacts(attempt_id).await?;
-                let _primary_artifact = artifacts.first();
                 if !artifacts.is_empty() {
                     let mut app_downloads: Vec<serde_json::Value> = Vec::new();
 
                     for artifact in &artifacts {
                         let (target, label) = infer_download_target(&artifact.artifact_type);
-                        let public_url = storage_service.get_public_url(&artifact.artifact_key);
-                        let presigned_url = build_service
-                            .get_artifact_download_url(&artifact.artifact_key)
-                            .await
-                            .ok();
 
                         app_downloads.push(serde_json::json!({
+                            "attempt_id": attempt_id,
                             "artifact_id": artifact.id,
+                            "artifact_key": artifact.artifact_key,
                             "artifact_type": artifact.artifact_type,
                             "os": target,
                             "label": label,
-                            "url": public_url,
-                            "presigned_url": presigned_url,
                             "size_bytes": artifact.size_bytes,
                             "created_at": artifact.created_at,
                         }));
                     }
 
-                    let (primary_url, app_downloads) =
-                        finalize_app_downloads(project.project_type, app_downloads);
-
-                    if let Some(primary_url) = primary_url {
-                        metadata_patch.insert(
-                            "app_download_url".to_string(),
-                            serde_json::Value::String(primary_url),
-                        );
-                    }
-
+                    let app_downloads = finalize_app_downloads(project.project_type, app_downloads);
                     metadata_patch.insert(
+                        "app_downloads".to_string(),
+                        serde_json::Value::Array(app_downloads.clone()),
+                    );
+                    metadata_patch.insert(
+                        "deployment_kind".to_string(),
+                        serde_json::Value::String("artifact_downloads".to_string()),
+                    );
+                    attempt_metadata_patch.insert(
                         "app_downloads".to_string(),
                         serde_json::Value::Array(app_downloads),
                     );
-                    metadata_patch.insert(
+                    attempt_metadata_patch.insert(
                         "deployment_kind".to_string(),
                         serde_json::Value::String("artifact_downloads".to_string()),
                     );
@@ -813,6 +832,10 @@ async fn handle_attempt_success_deployment(
 
     if !metadata_patch.is_empty() {
         update_task_metadata_patch(db, task.id, serde_json::Value::Object(metadata_patch)).await?;
+    }
+    if !attempt_metadata_patch.is_empty() {
+        update_attempt_metadata_patch(db, attempt_id, serde_json::Value::Object(attempt_metadata_patch))
+            .await?;
     }
 
     Ok(())
@@ -1211,15 +1234,13 @@ mod tests {
     #[test]
     fn finalize_app_downloads_prefers_native_desktop_installers() {
         let app_downloads = vec![
-            serde_json::json!({ "os": "generic", "url": "https://example.test/bundle.zip" }),
-            serde_json::json!({ "os": "macos", "url": "https://example.test/app.dmg" }),
-            serde_json::json!({ "os": "windows", "url": "https://example.test/app.exe" }),
+            serde_json::json!({ "os": "generic", "artifact_key": "builds/bundle.zip" }),
+            serde_json::json!({ "os": "macos", "artifact_key": "builds/app.dmg" }),
+            serde_json::json!({ "os": "windows", "artifact_key": "builds/app.exe" }),
         ];
 
-        let (primary_url, filtered) =
-            finalize_app_downloads(acpms_db::models::ProjectType::Desktop, app_downloads);
+        let filtered = finalize_app_downloads(acpms_db::models::ProjectType::Desktop, app_downloads);
 
-        assert_eq!(primary_url.as_deref(), Some("https://example.test/app.exe"));
         assert_eq!(filtered.len(), 2);
         assert_eq!(
             filtered[0].get("os").and_then(|value| value.as_str()),
@@ -1234,31 +1255,25 @@ mod tests {
     #[test]
     fn finalize_app_downloads_keeps_desktop_bundle_when_no_native_installer_exists() {
         let app_downloads = vec![
-            serde_json::json!({ "os": "generic", "url": "https://example.test/bundle.tar.gz" }),
-            serde_json::json!({ "os": "browser", "url": "https://example.test/web.zip" }),
+            serde_json::json!({ "os": "generic", "artifact_key": "builds/bundle.tar.gz" }),
+            serde_json::json!({ "os": "browser", "artifact_key": "builds/web.zip" }),
         ];
 
-        let (primary_url, filtered) =
-            finalize_app_downloads(acpms_db::models::ProjectType::Desktop, app_downloads);
+        let filtered = finalize_app_downloads(acpms_db::models::ProjectType::Desktop, app_downloads);
 
-        assert_eq!(primary_url.as_deref(), Some("https://example.test/web.zip"));
         assert_eq!(filtered.len(), 2);
     }
 
     #[test]
     fn finalize_app_downloads_preserves_extension_entries_and_browser_priority() {
         let app_downloads = vec![
-            serde_json::json!({ "os": "generic", "url": "https://example.test/source.zip" }),
-            serde_json::json!({ "os": "browser", "url": "https://example.test/extension.zip" }),
+            serde_json::json!({ "os": "generic", "artifact_key": "builds/source.zip" }),
+            serde_json::json!({ "os": "browser", "artifact_key": "builds/extension.zip" }),
         ];
 
-        let (primary_url, filtered) =
+        let filtered =
             finalize_app_downloads(acpms_db::models::ProjectType::Extension, app_downloads);
 
-        assert_eq!(
-            primary_url.as_deref(),
-            Some("https://example.test/extension.zip")
-        );
         assert_eq!(filtered.len(), 2);
         assert_eq!(
             filtered[0].get("os").and_then(|value| value.as_str()),
@@ -1308,14 +1323,10 @@ mod tests {
             Some("artifact_downloads")
         );
 
-        let app_download_url = metadata
-            .get("app_download_url")
-            .and_then(|value| value.as_str())
-            .expect("missing primary app_download_url");
         assert!(
-            app_download_url.contains("/builds/"),
-            "expected public artifact URL, got: {}",
-            app_download_url
+            metadata.get("app_download_url").is_none()
+                || metadata.get("app_download_url") == Some(&serde_json::Value::Null),
+            "expected app_download_url to be absent for fresh artifact flow"
         );
 
         let app_downloads = metadata
@@ -1333,9 +1344,16 @@ mod tests {
         );
         assert!(app_downloads.iter().all(|entry| {
             entry
-                .get("presigned_url")
+                .get("artifact_key")
                 .and_then(|value| value.as_str())
-                .map(|url| url.contains("/builds/"))
+                .map(|key| key.contains("/builds/"))
+                .unwrap_or(false)
+        }));
+        assert!(app_downloads.iter().all(|entry| {
+            entry
+                .get("attempt_id")
+                .and_then(|value| value.as_str())
+                .map(|id| id == attempt_id.to_string())
                 .unwrap_or(false)
         }));
 
@@ -1415,9 +1433,9 @@ mod tests {
             Some("Browser")
         );
         assert!(app_downloads[0]
-            .get("url")
+            .get("artifact_key")
             .and_then(|value| value.as_str())
-            .map(|url| url.contains("/builds/"))
+            .map(|key| key.contains("/builds/"))
             .unwrap_or(false));
 
         let artifact_type = sqlx::query_scalar::<_, String>(

@@ -198,6 +198,11 @@ export function TaskDetailPage() {
                             <TaskStatusContent
                                 task={task}
                                 normalizedStatus={normalizedStatus}
+                                artifactAttemptId={latestSuccessAttempt?.id}
+                                previewMetadata={
+                                    (latestSuccessAttempt?.metadata as Record<string, unknown> | undefined) ??
+                                    (task.metadata as Record<string, unknown> | undefined)
+                                }
                             />
                         </div>
 
