@@ -12,7 +12,7 @@ This is critical for:
 ## 2. HITL Flow Architecture
 
 1.  **Detection**: The Executor monitors the Agent's stdout/stderr. If it detects a predefined "needs input" pattern (or if the Agent explicitly uses a `ask_human` tool), the Orchestrator pauses the execution stream.
-2.  **Notification (Webhook)**: The Orchestrator fires an `attempt.needs_input` Webhook to OpenClaw.
+2.  **Notification (Event Stream / Optional Webhook)**: The Orchestrator emits an `attempt.needs_input` event on the global OpenClaw event stream. If optional Webhook delivery is configured, ACPMS may also send the same event via Webhook.
     ```json
     {
       "event": "attempt.needs_input",

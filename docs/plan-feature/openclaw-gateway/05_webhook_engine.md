@@ -2,7 +2,9 @@
 
 ## 1. Concept
 
-To avoid OpenClaw aggressively polling mirrored status endpoints such as `GET /api/openclaw/v1/attempts/{id}`, Agentic-Coding implements an async Webhook pushing capability. When significant state changes occur internally, the `Webhook Dispatcher` formats the event and pushes it to OpenClaw's registered receiver URL.
+The default OpenClaw integration model should be **outbound-only from OpenClaw to ACPMS**. OpenClaw keeps a long-lived connection to the ACPMS global event stream and attempt streams, so it does not need to expose its own public inbound domain.
+
+Webhooks remain an **optional transport** for deployments that explicitly want ACPMS to push major state transitions back into OpenClaw. When enabled, the `Webhook Dispatcher` formats the event and pushes it to OpenClaw's registered receiver URL.
 
 ## 2. Event Dispatching Architecture
 
@@ -13,11 +15,15 @@ To avoid OpenClaw aggressively polling mirrored status endpoints such as `GET /a
 ## 3. Webhook Registration Configuration
 
 Currently, for v1 simplicity, instead of dynamic registrations, the target Webhook URL can be stored in the configurations (or via a simple Settings UI later). A preferred future path is to let `POST /api/openclaw/guide-for-openclaw` accept and persist OpenClaw's `webhook_receiver_url` during bootstrap.
+
+This transport is optional:
+*   If no Webhook URL is configured, ACPMS should continue operating normally and OpenClaw should rely on the event stream transport.
+*   Missing Webhook configuration must **not** block the baseline ACPMS <-> OpenClaw integration.
 *   `OPENCLAW_WEBHOOK_URL=https://openclaw.system/api/agentic-events`
 
 ## 4. Security: HMAC-SHA256 Signature Validation
 
-Webhooks are vulnerable to spoofing if left unprotected. We will use the `OPENCLAW_WEBHOOK_SECRET` generated during installation to secure payloads.
+Webhooks are vulnerable to spoofing if left unprotected. We will use the `OPENCLAW_WEBHOOK_SECRET` generated during installation to secure payloads in deployments that enable this optional transport.
 
 ### 4.1 Dispatch Sequence (Agentic-Coding side)
 
@@ -56,3 +62,5 @@ OpenClaw must do the following to verify the authenticity:
 *   `attempt.completed`: Fired when the attempt exits normally. Data payload includes summary/diff metadata where available.
 *   `attempt.failed`: Fired when the attempt crashes, times out, or otherwise terminates unsuccessfully.
 *   `attempt.needs_input`: Fired when the running attempt pauses and requires operator input.
+
+The same semantic event types should also be available on the default `GET /api/openclaw/v1/events/stream` transport so OpenClaw can operate without Webhooks.

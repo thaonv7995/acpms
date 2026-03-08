@@ -17,7 +17,7 @@ Do you want to enable the OpenClaw Integration Gateway for external AI control? 
 If the user answers `Y` (Yes), the script handles the complex part automatically:
 
 1.  **Generate API Key**: Uses `openssl` or `/dev/urandom` to produce a secure, high-entropy string prepended with `oc_live_`. This key is used by OpenClaw to authenticate its API calls to Agentic-Coding.
-2.  **Generate Webhook Secret**: Produces another secure string prepended with `wh_sec_`. This secret is used by Agentic-Coding to cryptographically sign outgoing Webhook payloads, allowing OpenClaw to verify authenticity.
+2.  **Generate Webhook Secret (Optional)**: Produces another secure string prepended with `wh_sec_`. This secret is used only if the deployment enables optional ACPMS -> OpenClaw Webhook delivery. It is not required for the default outbound-only streaming integration model.
 
 Because the gateway is intended to expose the full internal administrative API surface, the generated `OPENCLAW_API_KEY` must be treated as a **Super Admin secret**. In practical terms, possession of this key is equivalent to having root-level API control over the Agentic-Coding instance.
 
@@ -43,8 +43,9 @@ At the end of the installation process, the `print_success_report()` function wi
  Base Endpoint URL : https://api.yourdomain.com/api/openclaw/v1
  OpenAPI (Swagger) : https://api.yourdomain.com/api/openclaw/openapi.json
  Guide Endpoint    : https://api.yourdomain.com/api/openclaw/guide-for-openclaw
+ Global Event SSE  : https://api.yourdomain.com/api/openclaw/v1/events/stream
  API Key (Bearer)  : oc_live_5x8a9b2c3d4e5f6g7h8i9j0k
- Webhook Secret    : wh_sec_a1b2c3d4e5f6g7h8i9j0k1l2
+ Webhook Secret    : wh_sec_a1b2c3d4e5f6g7h8i9j0k1l2 (optional)
  
  Note: Keep these credentials secure. The API key grants Super Admin-equivalent access.
 ================================================================================
@@ -55,7 +56,8 @@ OpenClaw should use these values in this order:
 1.  Store the `API Key (Bearer)` as the default authorization secret for ACPMS.
 2.  Call the `Guide Endpoint` first to retrieve the instance-specific bootstrap instructions.
 3.  Fetch the `OpenAPI (Swagger)` document to discover the mirrored ACPMS tool surface.
-4.  Store the `Webhook Secret` so OpenClaw can verify signed ACPMS Webhook payloads.
+4.  Open the `Global Event SSE` connection and keep it active as the primary lifecycle/event transport.
+5.  Store the `Webhook Secret` only if optional Webhook delivery is enabled for this deployment.
 
 ## 2. Disabling or Resetting Credentials
 

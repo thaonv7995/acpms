@@ -17,6 +17,7 @@ crates/server/src/routes/
 │   ├── mod.rs          // Gateway route registration and mirroring
 │   ├── auth.rs         // Bearer token validation + synthetic Super Admin identity
 │   ├── audit.rs        // Audit metadata, request tracing, actor annotations
+│   ├── events.rs       // Global OpenClaw event stream and replay cursor handling
 │   ├── guide.rs        // Bootstrap guide endpoint for OpenClaw self-configuration
 │   ├── mirror.rs       // Helpers for mounting mirrored REST/SSE/WS routes
 │   └── openapi.rs      // OpenClaw-specific OpenAPI export and security scheme
@@ -68,6 +69,10 @@ Examples:
 *   `/api/v1/tasks/:task_id/attempts` -> `/api/openclaw/v1/tasks/:task_id/attempts`
 *   `/api/v1/attempts/:id/stream` -> `/api/openclaw/v1/attempts/:id/stream`
 
+In addition to mirrored attempt streams, the gateway should expose one gateway-specific SSE endpoint for global lifecycle events:
+
+*   `GET /api/openclaw/v1/events/stream`
+
 ### 3.2 WebSocket Mirroring
 
 Root-level WebSocket routes should be mirrored under an OpenClaw namespace as well:
@@ -88,11 +93,12 @@ Even with the goal of exposing the full internal admin surface, a few routes sho
 2.  **Browser Callback Endpoints**: Human-interactive OAuth callbacks (for example browser redirect handlers) remain browser-oriented and should not be re-modeled as OpenClaw admin tools.
 3.  **Non-OpenAPI Scrape Endpoints**: Raw operational scrape endpoints such as Prometheus text metrics can be exposed separately, but they are not part of the main mirrored OpenAPI contract unless explicitly wrapped.
 
-The key gateway-specific bootstrap endpoint is:
+The key gateway-specific control-plane endpoints are:
 
 *   `POST /api/openclaw/guide-for-openclaw`
+*   `GET /api/openclaw/v1/events/stream`
 
-This endpoint is intentionally **not** a mirrored internal route. Its purpose is to help OpenClaw bootstrap itself after the installer-provided credentials are pasted into OpenClaw.
+These endpoints are intentionally **not** mirrored internal routes. They exist to help OpenClaw bootstrap itself and receive outbound-only lifecycle events after the installer-provided credentials are pasted into OpenClaw.
 
 ### 3.4 Bootstrap Guide Endpoint
 
@@ -103,6 +109,17 @@ The bootstrap endpoint should:
 3.  describe which ACPMS endpoints, auth headers, stream types, and Webhook verification rules OpenClaw must use
 4.  optionally accept OpenClaw metadata such as `openclaw_instance_name`, `openclaw_base_url`, and `webhook_receiver_url`
 5.  persist the receiver URL/config if provided so that the ACPMS -> OpenClaw Webhook path is completed during bootstrap
+
+### 3.5 Global Event Stream Endpoint
+
+The global event stream should:
+
+1.  authenticate with the same `OPENCLAW_API_KEY`
+2.  expose ACPMS lifecycle events without requiring OpenClaw to host a public inbound URL
+3.  emit stable event IDs so OpenClaw can resume after disconnects
+4.  support replay via `Last-Event-ID` and/or an explicit cursor query parameter such as `after=<event_id>`
+5.  carry events such as `attempt.started`, `attempt.completed`, `attempt.failed`, `attempt.needs_input`, `task.status_changed`, and high-signal system/integration alerts
+6.  remain the default transport for OpenClaw state synchronization, with Webhooks treated as optional redundancy
 
 ## 4. OpenAPI / Swagger Integration (`utoipa`)
 
