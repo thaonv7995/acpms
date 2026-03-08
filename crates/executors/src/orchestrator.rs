@@ -4922,6 +4922,25 @@ impl ExecutorOrchestrator {
         Ok(())
     }
 
+    /// Attach or replace the live input channel for an existing attempt session.
+    ///
+    /// This is used by runtimes that establish input transport out of band and by
+    /// integration tests that need to exercise `/attempts/{id}/input` without a full
+    /// provider subprocess.
+    pub async fn attach_input_sender_for_attempt(
+        &self,
+        attempt_id: Uuid,
+        input_sender: mpsc::UnboundedSender<String>,
+    ) {
+        let mut sessions = self.active_sessions.lock().await;
+        let session = sessions.entry(attempt_id).or_insert_with(|| ActiveSession {
+            interrupt_sender: None,
+            child: Arc::new(Mutex::new(None)),
+            input_sender: None,
+        });
+        session.input_sender = Some(input_sender);
+    }
+
     /// Send input to an active Project Assistant session (follow-up message).
     pub async fn send_input_to_assistant_session(
         &self,

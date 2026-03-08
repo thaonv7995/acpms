@@ -22,7 +22,7 @@ Implementation status after the first code delivery:
     *   custom OpenClaw OpenAPI entries are present, but not yet modeled with full `utoipa` path annotations
     *   lifecycle emission is wired for the main ACPMS and GitLab merge flows, but not yet for every possible status mutation path across the whole system
 *   **Still open**:
-    *   end-to-end stream scenarios around `attempt.needs_input` resolution and validating that attempt-log SSE remains independent from the global lifecycle stream
+    *   manual verification in a live ACPMS environment
 
 ## 1. Goal
 
@@ -396,8 +396,8 @@ These rules should be implemented exactly to avoid ambiguous client behavior.
 - [x] Reconnect with `Last-Event-ID` and receive missed events
 - [x] Expired cursor returns structured conflict error
 - [x] Attempt start -> completion emits expected global events in order
-- [ ] `attempt.needs_input` appears on the global stream and can be resolved via `POST /attempts/{id}/input`
-- [ ] Attempt log stream still works independently from the global event stream
+- [x] `attempt.needs_input` appears on the global stream and can be resolved via `POST /attempts/{id}/input`
+- [x] Attempt log stream still works independently from the global event stream
 
 ### 7.3 Manual Verification
 
@@ -482,4 +482,4 @@ Actual implementation progress so far:
 4.  **Completed (main flows)**: attempt lifecycle + task status emission wiring
 5.  **Completed (first pass)**: installer handoff prompt and saved prompt file
 6.  **Completed**: optional webhook compatibility, cursor-expiry handling, richer auth/expiry/WS tests, and additional GitLab merge task-status coverage
-7.  **Remaining**: `attempt.needs_input` end-to-end resolution, attempt-log/global-stream independence checks, and manual verification in a live ACPMS environment
+7.  **Remaining**: manual verification in a live ACPMS environment
