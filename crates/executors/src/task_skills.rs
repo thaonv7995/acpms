@@ -2205,6 +2205,7 @@ fn builtin_skill_content(skill_id: &str) -> Option<&'static str> {
         ),
         "init-api-scaffold" => Some(
             r#"API scaffold: init project (Cargo/package/requirements), web framework, README, .gitignore, routes, middleware, health check, /api/v1/, CRUD template.
+- If the stack supports Swagger/OpenAPI cleanly, add docs/spec route so preview can land on API docs instead of a vague base URL.
 - Include Dockerfile when ACPMS preview/deploy expects Docker runtime.
 - Include docker-compose.yml when helper services such as DB/cache/queue are part of the baseline runtime.
 - Use Project Details for name/description."#,
@@ -2216,7 +2217,8 @@ fn builtin_skill_content(skill_id: &str) -> Option<&'static str> {
 - Mobile-first polished product: prefer the stack that best fits the requested runtime and team.
 - Imported existing app: preserve the current viable stack.
 - Decide whether this is a standalone mobile repo or a mobile app inside a monorepo.
-- Deliver platform config, entrypoint, navigation/screens structure, README, .gitignore, and preview/build commands appropriate for simulator, device, or artifact workflows. Use Project Details for name/description."#,
+- Deliver platform config, entrypoint, navigation/screens structure, README, .gitignore, and preview/build commands appropriate for simulator, device, or artifact workflows.
+- Plan preview/build in explicit Android and iOS lanes, and report truthful limitations per lane. Use Project Details for name/description."#,
         ),
         "init-extension-scaffold" => Some(
             r#"Extension scaffold: choose stack from extension shape, not from a hard-coded default.
@@ -2235,11 +2237,13 @@ fn builtin_skill_content(skill_id: &str) -> Option<&'static str> {
 - Windows + deep system integration: strongly consider .NET/WinUI/WPF.
 - Imported existing app: preserve the current viable stack.
 - Decide whether this is a standalone desktop repo or a desktop app inside a monorepo.
-- Deliver runtime entrypoint, UI entrypoint, package/build config, README, .gitignore, and truthful preview/build commands for dev app or packaged artifact workflows. Use Project Details for name/description."#,
+- Deliver runtime entrypoint, UI entrypoint, package/build config, README, .gitignore, and truthful preview/build commands for dev app or packaged artifact workflows.
+- Plan preview/build in explicit Windows and macOS lanes, and report truthful limitations per lane. Use Project Details for name/description."#,
         ),
         "init-microservice-scaffold" => Some(
             r#"Microservice scaffold: decide first whether this is a standalone service repo or one service inside a monorepo.
 - Scaffold health/ready/live, logging, config, and container runtime for the targeted service only.
+- If the service exposes an HTTP contract and the stack supports docs/specs cleanly, add that route so preview can land on the service contract surface.
 - Include docker-compose.yml when the service depends on supporting services or local orchestration.
 - Use Project Details for name/description."#,
         ),
@@ -2254,19 +2258,24 @@ fn builtin_skill_content(skill_id: &str) -> Option<&'static str> {
         "build-artifact" => Some(
             r#"Produce build artifacts appropriate for project type.
 - Ensure output path exists.
+- API/microservice with HTTP contract: include docs/spec output when that is part of the preview surface.
+- Mobile: report Android and iOS artifact lanes separately.
+- Desktop: report Windows and macOS artifact lanes separately.
 - Record artifact commands and output summary in report."#,
         ),
         "preview-artifact-desktop" => Some(
-            r#"For desktop task previews, produce installable desktop artifacts.
+            r#"For desktop task previews, produce QA-usable desktop artifacts.
 - Keep build command/output dir aligned with project metadata.
-- Prefer native installers or platform bundles in the desktop output folder.
-- Report install notes for macOS and Windows when applicable."#,
+- Report explicit Windows and macOS lanes.
+- Prefer installers or bundles when they truly exist; otherwise report runnable or unpacked app truthfully.
+- Report install notes and environment limitations per lane."#,
         ),
         "preview-artifact-mobile" => Some(
             r#"For mobile task previews, produce downloadable test artifacts.
+- Report explicit Android and iOS lanes.
 - Prefer APK/AAB for Android; note clearly when iOS requires signing or simulator-only output.
 - Keep build command/output dir aligned with project metadata.
-- Report install steps and platform limitations."#,
+- Report install steps and platform limitations per lane."#,
         ),
         "preview-artifact-extension" => Some(
             r#"For extension task previews, produce downloadable extension bundles.

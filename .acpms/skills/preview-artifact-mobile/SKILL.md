@@ -13,6 +13,11 @@ Mobile preview is not a browser URL by default. Prefer the most honest preview
 surface for the current stack and environment: simulator/emulator run, Expo/dev
 bundle, or installable artifact.
 
+Treat mobile delivery as two preview lanes when the product targets both major
+platforms:
+- Android
+- iOS
+
 ## When This Applies
 - Project type is mobile
 - Task preview is delivered as downloadable build output
@@ -38,7 +43,9 @@ bundle, or installable artifact.
    - iOS artifact only when signing/export is actually available
 3. Reuse the project’s native packaging flow when it works.
 4. Produce the artifact or preview bundle appropriate to the environment.
-5. Validate that the result exists and is usable for QA.
+5. Validate each platform lane separately:
+   - Android lane
+   - iOS lane
 6. Document installability, simulator limitations, and signing constraints
    honestly.
 
@@ -49,6 +56,7 @@ bundle, or installable artifact.
 | Android artifact exists | Prefer `.apk` for easiest QA install |
 | iOS signing is unavailable | Do not claim device installability |
 | Only one platform can be built | Report the unsupported platform clearly |
+| Android and iOS are both in scope | Always report both lanes, even if one ends as `unavailable_in_current_environment` |
 | No installable artifact can be produced but simulator/dev bundle works | Treat simulator/dev bundle as the preview surface and report it clearly |
 
 ## Output Contract
@@ -58,6 +66,10 @@ Emit:
 - `artifact_output_directory`
 - `artifact_types`
 - `preview_surface`: `simulator` | `emulator` | `dev_bundle` | `android_artifact` | `ios_artifact`
+- `android_artifact_status`
+- `android_artifact_path`
+- `ios_artifact_status`
+- `ios_artifact_path`
 - `qa_install_notes`
 
 ## Related Skills

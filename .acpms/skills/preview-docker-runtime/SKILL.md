@@ -38,9 +38,15 @@ description: Use when a task needs a live preview URL for Web/API/Microservice a
 5. Verify the local runtime with a real project-appropriate check before claiming success:
    - web app -> page response
    - API service -> health endpoint, and docs/OpenAPI when expected
-   - microservice -> health/readiness endpoint
-6. Write `.acpms/preview-output.json` only after the HTTP check passes.
-7. Emit `PREVIEW_TARGET` and `PREVIEW_URL` only after verification succeeds.
+   - microservice -> health/readiness endpoint, and docs/OpenAPI when the service exposes an HTTP contract
+6. Decide the preview URLs:
+   - `preview_target` must remain the local base runtime URL
+   - `preview_url` should point to the most useful user-facing surface
+     - web -> app URL
+     - API -> docs URL when exposed, otherwise base URL
+     - microservice -> docs URL when exposed, otherwise base URL
+7. Write `.acpms/preview-output.json` only after the HTTP check passes.
+8. Emit `PREVIEW_TARGET` and `PREVIEW_URL` only after verification succeeds.
 
 ## Decision Rules
 | Situation | Action |
@@ -51,14 +57,18 @@ description: Use when a task needs a live preview URL for Web/API/Microservice a
 | Old preview container exists | Stop or remove it before starting the new one. |
 | Port conflict exists | Pick a new host port and update the contract. |
 | Project type is API or microservice | Verify `/health`, `/ready`, or the documented health route before reporting success. |
-| API exposes docs/OpenAPI and the route is part of the expected runtime contract | Verify docs/spec route in addition to health. |
+| API exposes docs/OpenAPI and the route is part of the expected runtime contract | Verify docs/spec route in addition to health, and prefer it as `PREVIEW_URL`. |
+| Microservice exposes docs/OpenAPI as part of its HTTP contract | Verify docs/spec route in addition to health/readiness, and prefer it as `PREVIEW_URL`. |
 | Runtime files exist but no container is serving traffic | Start the runtime; do not report success from config validation alone. |
 | Docker preview cannot be started | Emit `DEPLOYMENT_FAILURE_REASON: <root cause>`. |
 
 ## Output Contract
 Write `.acpms/preview-output.json` with:
 - `preview_target`: always the reachable local Docker URL
-- `preview_url`: local URL for local-only preview, or public URL when a tunnel exists
+- `preview_url`: the best user-facing preview surface
+  - web -> local/public app URL
+  - API -> local/public docs URL when exposed, otherwise base URL
+  - microservice -> local/public docs URL when exposed, otherwise base URL
 - `runtime_control`: enough metadata to stop/restart the runtime later
 
 Also emit:

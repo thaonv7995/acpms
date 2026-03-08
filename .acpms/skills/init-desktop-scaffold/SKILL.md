@@ -50,8 +50,12 @@ shape, native/runtime depth, platform targets, and team constraints.
 3. Create the desktop runtime shell and frontend/backend split appropriate to
    the selected stack.
 4. Add basic packaging/build configuration.
-5. Create README, ignore files, and environment/config stubs.
-6. Leave a runnable dev path and a clear package path.
+5. Plan preview/build outputs in two platform lanes from the start when the
+   brief expects cross-platform delivery:
+   - Windows
+   - macOS
+6. Create README, ignore files, and environment/config stubs.
+7. Leave a runnable dev path and a clear package path.
 
 ## Required Baseline
 - main/runtime entrypoint
@@ -61,6 +65,8 @@ shape, native/runtime depth, platform targets, and team constraints.
 - `.gitignore`
 - dev run command
 - package/build command path
+- a Windows artifact lane when Windows is in scope
+- a macOS artifact lane when macOS is in scope
 
 ## Decision Rules
 | Situation | Action |
@@ -74,6 +80,7 @@ shape, native/runtime depth, platform targets, and team constraints.
 | macOS app needs deep system hooks, privileged APIs, or native UX fidelity | Prefer Swift/SwiftUI/AppKit unless the user explicitly requires another stack |
 | Windows app needs deep shell/system integration | Prefer a Windows-native stack such as .NET/WinUI/WPF unless the user explicitly requires another stack |
 | Signing/notarization unavailable | Document it; do not pretend it is solved |
+| Both Windows and macOS are in scope | Define preview/package expectations for both lanes even if only one can be produced in the current environment. |
 | Native integrations are not required yet | Stub structure, do not overbuild |
 | ACPMS only needs artifact or app-run preview | Do not add Docker runtime files by default |
 
@@ -87,6 +94,8 @@ Emit:
 - `package_strategy`
 - `verification_commands`
 - `desktop_preview_strategy`
+- `windows_preview_lane`
+- `macos_preview_lane`
 - `assumptions`
 
 ## Related Skills
