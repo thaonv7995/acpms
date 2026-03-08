@@ -7,7 +7,8 @@ After the installer provides the ACPMS connection bundle:
 *   `Base Endpoint URL`
 *   `OpenAPI (Swagger)`
 *   `API Key (Bearer)`
-*   `Webhook Secret`
+*   `Global Event SSE`
+*   `Webhook Secret` (optional)
 
 OpenClaw should not immediately start calling arbitrary ACPMS endpoints.
 
@@ -23,8 +24,10 @@ The OpenAPI contract explains what endpoints exist, but it does **not** fully ex
 
 *   OpenClaw's mission and authority inside ACPMS
 *   which ACPMS capabilities OpenClaw should prefer first
-*   how OpenClaw should verify Webhooks
-*   how OpenClaw should finalize the ACPMS -> OpenClaw connection
+*   how OpenClaw should connect to ACPMS using outbound-only event streams
+*   how OpenClaw should verify Webhooks if optional Webhook mode is enabled
+*   how OpenClaw should finalize the ACPMS -> OpenClaw connection without exposing an inbound domain
+*   how OpenClaw should decide whether to read, analyze, mutate, execute, or only report when a user gives it a command
 *   how OpenClaw should report status and incidents back to the primary human user
 *   what safety and approval boundaries should apply to destructive admin actions
 
@@ -53,11 +56,12 @@ At a minimum, the guide should teach OpenClaw these three core missions:
   "openclaw_instance": {
     "name": "OpenClaw Production",
     "version": "1.0.0",
-    "base_url": "https://openclaw.example.com"
+    "base_url": null
   },
   "connection": {
-    "webhook_receiver_url": "https://openclaw.example.com/api/acpms-events",
-    "supports_webhooks": true,
+    "delivery_mode": "streaming",
+    "webhook_receiver_url": null,
+    "supports_webhooks": false,
     "supports_sse": true,
     "supports_websocket": true
   },
@@ -105,6 +109,7 @@ The response should reuse the normal ACPMS `ApiResponse<T>` envelope.
       "base_endpoint_url": "https://api.example.com/api/openclaw/v1",
       "openapi_url": "https://api.example.com/api/openclaw/openapi.json",
       "guide_url": "https://api.example.com/api/openclaw/guide-for-openclaw",
+      "events_stream_url": "https://api.example.com/api/openclaw/v1/events/stream",
       "websocket_base_url": "wss://api.example.com/api/openclaw/ws"
     },
     "operating_model": {
@@ -113,10 +118,25 @@ The response should reuse the normal ACPMS `ApiResponse<T>` envelope.
       "human_reporting_required": true,
       "preferred_reporting_channels": ["telegram", "slack"]
     },
+    "operating_rules": {
+      "rulebook_version": "v1",
+      "default_autonomy_mode": "analyze_then_confirm",
+      "must_load_acpms_context_before_mutation": true,
+      "must_report_material_changes": true,
+      "must_confirm_before_destructive_actions": true,
+      "high_priority_report_events": [
+        "attempt_failed",
+        "attempt_needs_input",
+        "approval_required",
+        "deployment_risk",
+        "system_health_issue"
+      ]
+    },
     "auth_rules": {
       "rest_auth_header": "Authorization: Bearer <OPENCLAW_API_KEY>",
+      "event_stream_resume": "Reconnect with Last-Event-ID or ?after=<event_id> when supported",
       "webhook_signature_header": "X-Agentic-Signature",
-      "webhook_secret_usage": "Use OPENCLAW_WEBHOOK_SECRET to verify HMAC-SHA256 signatures from ACPMS"
+      "webhook_secret_usage": "Use OPENCLAW_WEBHOOK_SECRET to verify HMAC-SHA256 signatures from ACPMS when optional Webhooks are enabled"
     },
     "reporting_policy": {
       "report_to_primary_user": true,
@@ -140,21 +160,28 @@ The response should reuse the normal ACPMS `ApiResponse<T>` envelope.
       ]
     },
     "connection_status": {
-      "webhook_registered": true,
+      "primary_transport": "sse_events_stream",
+      "webhook_registered": false,
       "missing_steps": []
     },
-      "setup_steps": [
+    "setup_steps": [
       "Load the OpenAPI contract",
-      "Store the webhook secret for signature verification",
+      "Open the global ACPMS event stream and keep it connected",
       "Configure reporting to the primary user via Telegram or Slack",
       "Use ACPMS context when analyzing user requirements",
-      "Use the mirrored /api/openclaw/v1 routes for all ACPMS operations"
+      "Use the mirrored /api/openclaw/v1 routes for all ACPMS operations",
+      "Store the webhook secret only if optional ACPMS webhooks are enabled"
     ],
     "next_calls": [
       {
         "method": "GET",
         "path": "/api/openclaw/openapi.json",
         "purpose": "Load ACPMS tool surface"
+      },
+      {
+        "method": "GET",
+        "path": "/api/openclaw/v1/events/stream",
+        "purpose": "Subscribe to ACPMS lifecycle events"
       },
       {
         "method": "GET",
@@ -173,14 +200,15 @@ The `instruction_prompt` should be a long-form prompt intended to be copied into
 1.  it is connected to ACPMS as a **Super Admin integration**
 2.  it must use the mirrored `/api/openclaw/v1/*` and `/api/openclaw/ws/*` surfaces
 3.  it must use `/api/openclaw/openapi.json` for discovery rather than hardcoding tools
-4.  it must verify ACPMS Webhooks using `OPENCLAW_WEBHOOK_SECRET`
-5.  it should prefer signed Webhooks and streaming APIs for long-running execution visibility
+4.  it must connect to `GET /api/openclaw/v1/events/stream` as the default lifecycle transport
+5.  it must verify ACPMS Webhooks using `OPENCLAW_WEBHOOK_SECRET` only if optional Webhook mode is enabled
 6.  it may manage projects, tasks, sprints, requirements, attempts, settings, reviews, deployments, and integrations through ACPMS
 7.  it should act like an **operations assistant** for the primary human user
 8.  it should report important ACPMS events, summaries, and incidents back to that user through OpenClaw-managed channels such as Telegram or Slack
 9.  it should analyze user requirements by combining the request with ACPMS context before proposing a solution
 10. it should convert approved solutions into ACPMS actions such as creating requirements, creating tasks, and starting task attempts
 11. it should require additional human/operator confirmation before destructive system-wide actions unless the operator has explicitly enabled fully autonomous mode
+12. it should follow the ACPMS operating rules for deciding when to only report, when to propose, and when to mutate ACPMS
 
 ### 5.1 Full Example Prompt
 
@@ -206,6 +234,7 @@ ACPMS connection rules:
 - Base API: {{base_endpoint_url}}
 - OpenAPI spec: {{openapi_url}}
 - Bootstrap guide: {{guide_url}}
+- Global event stream: {{events_stream_url}}
 - WebSocket base: {{websocket_base_url}}
 - Always authenticate with: Authorization: Bearer <OPENCLAW_API_KEY>
 - Use only the OpenClaw gateway namespaces:
@@ -217,20 +246,27 @@ Discovery workflow:
 1. Load this guide into your ACPMS integration context.
 2. Fetch and parse the ACPMS OpenAPI contract.
 3. Build your ACPMS tool surface dynamically from that contract.
-4. If webhook registration is incomplete, provide or confirm your webhook receiver URL.
-5. Verify that your reporting channels for the primary user are configured.
+4. Open and maintain the ACPMS global event stream connection.
+5. If optional Webhook delivery is intentionally enabled, provide or confirm your webhook receiver URL.
+6. Verify that your reporting channels for the primary user are configured.
 
 Webhook verification:
 - ACPMS signs outgoing webhooks with HMAC-SHA256.
 - Signature header: X-Agentic-Signature
 - Verify the raw HTTP body exactly as received.
-- Use the provided OPENCLAW_WEBHOOK_SECRET to validate signatures.
+- Use the provided OPENCLAW_WEBHOOK_SECRET to validate signatures when optional Webhook delivery is enabled.
 - Reject webhook payloads if verification fails.
 
 Operational behavior:
 - Treat ACPMS as the source of truth for state.
-- Prefer webhooks, SSE, and WebSocket streams for long-running visibility.
+- Prefer the global event stream and attempt SSE/WebSocket streams for long-running visibility.
+- Use optional Webhooks only when the deployment has explicitly enabled them.
 - Use mirrored ACPMS APIs for all create/read/update/control actions.
+- Classify each user command before acting: status/reporting, requirement analysis, work creation, execution, investigation, control, or admin/system.
+- For status/reporting commands, read ACPMS and report without mutating ACPMS.
+- For requirement-analysis commands, load ACPMS context first, detect overlap/conflicts, and propose a solution before making changes.
+- For work-creation commands, check whether equivalent requirements/tasks already exist before creating new ones.
+- For execution commands, ensure the target work exists, then start and monitor attempts, and report lifecycle changes.
 - Re-read ACPMS state before retrying state-conflict operations.
 - Before proposing a solution to the user, gather the relevant ACPMS context needed to avoid duplicate or conflicting work.
 - When the user gives a new requirement, analyze it against ACPMS context first, then propose a concrete solution or execution plan.
@@ -242,6 +278,13 @@ Operational behavior:
 Human reporting behavior:
 - Your primary human-facing responsibility is to keep the user informed.
 - Report important events and summaries to the primary user through configured channels such as Telegram or Slack.
+- For every material ACPMS-related response, report:
+  - what the user asked
+  - what ACPMS context you checked
+  - what you concluded
+  - what ACPMS action you took, if any
+  - current status
+  - next step or needed human approval
 - Send concise reports for:
   - requirement analysis and recommended solution
   - attempt started
@@ -259,12 +302,29 @@ Human reporting behavior:
 
 Preferred first actions:
 - Load OpenAPI.
+- Open the global event stream.
 - List projects.
 - Check settings and integration status.
-- Check webhook registration status.
+- Check webhook registration status only if optional Webhook delivery is enabled.
 - Validate your reporting channel configuration.
 - Then proceed with normal ACPMS operations.
 ```
+
+### 5.4 Operating Rulebook Semantics
+
+OpenClaw should treat the ACPMS rulebook as an execution policy layer on top of the API surface.
+
+At minimum, the bootstrap response should tell OpenClaw:
+
+1.  the default autonomy mode
+2.  whether ACPMS context must be loaded before mutation
+3.  whether material changes must always be reported
+4.  which events require immediate user notification
+5.  whether destructive actions always require confirmation
+
+The detailed behavioral rulebook is described in:
+
+*   `docs/plan-feature/openclaw-gateway/11_operating_rules.md`
 
 ### 5.2 Reporting Semantics
 
@@ -295,7 +355,8 @@ If `webhook_receiver_url` is included in the bootstrap request:
 If the URL is missing:
 
 *   ACPMS still returns the guide.
-*   The response includes `missing_steps`, telling OpenClaw or the operator that the ACPMS -> OpenClaw Webhook path is not complete yet.
+*   The response should not treat this as an error when the deployment is using the default stream-first integration model.
+*   The response includes `missing_steps` only if the operator explicitly requested optional Webhook delivery but did not finish configuring it.
 
 If reporting channel metadata is included in the bootstrap request:
 
@@ -319,13 +380,15 @@ When OpenClaw Gateway is enabled, `install.sh` should print:
 *   `Base Endpoint URL`
 *   `OpenAPI (Swagger)`
 *   `Guide Endpoint`
+*   `Global Event SSE`
 *   `API Key (Bearer)`
-*   `Webhook Secret`
+*   `Webhook Secret` (optional)
 
 OpenClaw then uses these values in this order:
 
 1.  Call `Guide Endpoint`
 2.  Load `OpenAPI (Swagger)`
-3.  Store `Webhook Secret`
-4.  Configure reporting to the primary user via Telegram, Slack, or another supported OpenClaw channel
-5.  Start using the mirrored ACPMS admin API surface
+3.  Open `Global Event SSE`
+4.  Store `Webhook Secret` only if optional Webhook mode is enabled
+5.  Configure reporting to the primary user via Telegram, Slack, or another supported OpenClaw channel
+6.  Start using the mirrored ACPMS admin API surface

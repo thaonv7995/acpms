@@ -52,7 +52,7 @@ The gateway also exposes one OpenClaw-specific bootstrap endpoint outside the mi
 *   **Behavior**:
     *   validates the gateway API key
     *   returns an `instruction_prompt` telling OpenClaw what ACPMS is, what role OpenClaw has, and how it must operate
-    *   returns the ACPMS endpoint map (`base`, `openapi`, stream URLs, webhook verification header names, etc.)
+    *   returns the ACPMS endpoint map (`base`, `openapi`, global event stream URL, attempt stream URLs, optional webhook verification header names, etc.)
     *   optionally accepts OpenClaw connection metadata and persists it
 
 Example request:
@@ -62,11 +62,12 @@ Example request:
   "openclaw_instance": {
     "name": "OpenClaw Production",
     "version": "1.0.0",
-    "base_url": "https://openclaw.example.com"
+    "base_url": null
   },
   "connection": {
-    "webhook_receiver_url": "https://openclaw.example.com/api/acpms-events",
-    "supports_webhooks": true,
+    "delivery_mode": "streaming",
+    "webhook_receiver_url": null,
+    "supports_webhooks": false,
     "supports_sse": true,
     "supports_websocket": true
   },
@@ -110,6 +111,7 @@ Example response shape:
       "base_endpoint_url": "https://api.example.com/api/openclaw/v1",
       "openapi_url": "https://api.example.com/api/openclaw/openapi.json",
       "guide_url": "https://api.example.com/api/openclaw/guide-for-openclaw",
+      "events_stream_url": "https://api.example.com/api/openclaw/v1/events/stream",
       "websocket_base_url": "wss://api.example.com/api/openclaw/ws"
     },
     "operating_model": {
@@ -117,16 +119,32 @@ Example response shape:
       "human_reporting_required": true,
       "preferred_reporting_channels": ["telegram", "slack"]
     },
+    "operating_rules": {
+      "rulebook_version": "v1",
+      "default_autonomy_mode": "analyze_then_confirm",
+      "must_load_acpms_context_before_mutation": true,
+      "must_report_material_changes": true,
+      "must_confirm_before_destructive_actions": true,
+      "high_priority_report_events": [
+        "attempt_failed",
+        "attempt_needs_input",
+        "approval_required",
+        "deployment_risk",
+        "system_health_issue"
+      ]
+    },
     "connection_status": {
-      "webhook_registered": true,
+      "primary_transport": "sse_events_stream",
+      "webhook_registered": false,
       "missing_steps": []
     },
     "setup_steps": [
       "Load the OpenAPI contract",
-      "Store the webhook secret for signature verification",
+      "Open the global ACPMS event stream and keep it connected",
       "Configure Telegram or Slack reporting for the primary user",
       "Use ACPMS context when analyzing user requirements",
-      "Use the mirrored /api/openclaw/v1 routes for all ACPMS operations"
+      "Use the mirrored /api/openclaw/v1 routes for all ACPMS operations",
+      "Store the webhook secret only if optional ACPMS webhooks are enabled"
     ]
   }
 }
@@ -190,7 +208,16 @@ OpenClaw should be able to fully operate agent execution, including:
 *   retrieve raw logs, normalized logs, diffs, summaries, and subagent trees
 *   trigger follow-up and reset flows where supported
 
-### 2.6 Collaboration, Review, and Approvals
+### 2.6 Eventing and Real-time Observability
+
+OpenClaw should be able to keep itself synchronized with ACPMS using:
+
+*   a global outbound-only event stream for lifecycle updates
+*   attempt-specific SSE streams for logs and fine-grained execution visibility
+*   optional Webhook delivery when the deployment intentionally configures an inbound receiver
+*   replay/resume semantics so OpenClaw can recover after connection interruptions
+
+### 2.7 Collaboration, Review, and Approvals
 
 OpenClaw should be able to access and operate:
 
@@ -198,7 +225,7 @@ OpenClaw should be able to access and operate:
 *   approval queues and responses
 *   human-in-the-loop routing APIs
 
-### 2.7 Deployments and External Integrations
+### 2.8 Deployments and External Integrations
 
 OpenClaw should be able to use deployment/integration APIs such as:
 
@@ -207,7 +234,7 @@ OpenClaw should be able to use deployment/integration APIs such as:
 *   GitLab status, merge requests, and project linking
 *   webhook administration and retry tooling
 
-### 2.8 Project Assistant APIs
+### 2.9 Project Assistant APIs
 
 OpenClaw should be able to drive project assistant sessions as part of the mirrored admin surface, including:
 
@@ -228,6 +255,7 @@ The following examples illustrate the mirroring rule:
 | `PUT /api/v1/projects/{id}` | `PUT /api/openclaw/v1/projects/{id}` | Update project |
 | `GET /api/v1/tasks?project_id=...` | `GET /api/openclaw/v1/tasks?project_id=...` | Kanban/task listing |
 | `POST /api/v1/tasks/{task_id}/attempts` | `POST /api/openclaw/v1/tasks/{task_id}/attempts` | Start agent execution |
+| `(gateway-specific)` | `GET /api/openclaw/v1/events/stream` | Global lifecycle event stream |
 | `GET /api/v1/attempts/{id}` | `GET /api/openclaw/v1/attempts/{id}` | Inspect attempt |
 | `GET /api/v1/attempts/{id}/stream` | `GET /api/openclaw/v1/attempts/{id}/stream` | SSE streaming |
 | `POST /api/v1/attempts/{id}/input` | `POST /api/openclaw/v1/attempts/{id}/input` | Human input / steering |
@@ -243,8 +271,9 @@ Even under the “full internal API” goal, a few categories are intentionally 
 
 1.  **User Auth Bootstrap**: Login/register/refresh/logout flows are not needed because OpenClaw uses its dedicated bearer token.
 2.  **Gateway Bootstrap Endpoint**: `POST /api/openclaw/guide-for-openclaw` is intentionally custom to help OpenClaw self-configure.
-3.  **Browser Redirect Callbacks**: Human-interactive OAuth callback endpoints remain browser-oriented.
-4.  **Raw Scrape/Debug Endpoints**: Non-OpenAPI operational endpoints such as raw Prometheus scrapes can be exposed separately if desired, but they are not part of the main mirrored OpenClaw contract by default.
+3.  **Gateway Event Stream**: `GET /api/openclaw/v1/events/stream` is intentionally custom so OpenClaw can receive outbound-only lifecycle events without exposing an inbound receiver.
+4.  **Browser Redirect Callbacks**: Human-interactive OAuth callback endpoints remain browser-oriented.
+5.  **Raw Scrape/Debug Endpoints**: Non-OpenAPI operational endpoints such as raw Prometheus scrapes can be exposed separately if desired, but they are not part of the main mirrored OpenClaw contract by default.
 
 ---
 

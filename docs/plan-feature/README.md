@@ -30,3 +30,19 @@ A retrieval-augmented generation (RAG) system for AI agents to pull community "S
 
 - [01_concept.md](global-knowledge-base/01_concept.md) - The Global Knowledge Base vision
 - [02_retrieval_architecture.md](global-knowledge-base/02_retrieval_architecture.md) - Architecture for ingesting and retrieving SKILLs
+
+## [openclaw-gateway](openclaw-gateway/)
+
+External OpenClaw integration as a Super Admin control plane for ACPMS, including mirrored APIs, bootstrap guidance, stream-first eventing, and optional Webhook support.
+
+- [01_overview.md](openclaw-gateway/01_overview.md) - Overview and architecture
+- [02_installation_and_onboarding.md](openclaw-gateway/02_installation_and_onboarding.md) - Installer and onboarding flow
+- [03_backend_architecture.md](openclaw-gateway/03_backend_architecture.md) - Rust backend architecture
+- [04_api_specifications.md](openclaw-gateway/04_api_specifications.md) - Mirrored API and gateway endpoints
+- [05_webhook_engine.md](openclaw-gateway/05_webhook_engine.md) - Optional Webhook transport
+- [06_api_design_standards.md](openclaw-gateway/06_api_design_standards.md) - Response and error standards
+- [07_streaming_api.md](openclaw-gateway/07_streaming_api.md) - Global and attempt-specific SSE streams
+- [08_hitl_api.md](openclaw-gateway/08_hitl_api.md) - Human-in-the-loop handling
+- [09_bootstrap_guide_api.md](openclaw-gateway/09_bootstrap_guide_api.md) - Bootstrap guide endpoint
+- [10_implementation_checklist.md](openclaw-gateway/10_implementation_checklist.md) - Implementation checklist for event stream and replay
+- [11_operating_rules.md](openclaw-gateway/11_operating_rules.md) - Operating rules for command handling and user reporting
