@@ -197,6 +197,32 @@ pub fn build_openclaw_openapi_json() -> Value {
             rewritten.insert(new_path, item);
         }
     }
+    rewritten.insert(
+        "/api/openclaw/guide-for-openclaw".to_string(),
+        serde_json::json!({
+            "post": {
+                "summary": "Bootstrap the OpenClaw integration",
+                "responses": {
+                    "200": {
+                        "description": "Bootstrap guide generated successfully"
+                    }
+                }
+            }
+        }),
+    );
+    rewritten.insert(
+        "/api/openclaw/v1/events/stream".to_string(),
+        serde_json::json!({
+            "get": {
+                "summary": "Subscribe to OpenClaw lifecycle events",
+                "responses": {
+                    "200": {
+                        "description": "SSE event stream"
+                    }
+                }
+            }
+        }),
+    );
     *paths = rewritten;
 
     if let Some(info) = document.get_mut("info").and_then(Value::as_object_mut) {

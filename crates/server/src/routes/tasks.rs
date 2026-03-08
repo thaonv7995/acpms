@@ -13,7 +13,7 @@ use validator::Validate;
 use crate::api::{ApiResponse, TaskDto};
 use crate::error::{ApiError, ApiResult};
 use crate::middleware::{AuthUser, Permission, RbacChecker, ValidatedJson};
-use crate::routes::task_attempts;
+use crate::routes::{openclaw, task_attempts};
 use crate::AppState;
 use utoipa::{IntoParams, ToSchema};
 
@@ -670,6 +670,15 @@ pub async fn update_task_status(
         .update_task_status(task_id, req.status)
         .await
         .map_err(|e| ApiError::BadRequest(e.to_string()))?;
+    openclaw::emit_task_status_changed(
+        &state,
+        existing_task.project_id,
+        task_id,
+        existing_task.status,
+        req.status,
+        "routes.tasks.update_task_status",
+    )
+    .await;
 
     let dto = TaskDto::from(task);
     let response = ApiResponse::success(dto, "Task status updated successfully");

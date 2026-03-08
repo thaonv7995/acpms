@@ -20,6 +20,7 @@ use std::{
     time::Duration,
 };
 use tokio_stream::wrappers::BroadcastStream;
+use uuid::Uuid;
 
 use crate::{
     api::{openapi_spec::build_openclaw_openapi_json, ApiResponse},
@@ -27,6 +28,7 @@ use crate::{
     middleware::AuthUser,
     AppState,
 };
+use acpms_db::models::TaskStatus;
 
 #[derive(Debug, Default, Deserialize)]
 pub struct OpenClawGuideRequest {
@@ -405,6 +407,51 @@ fn to_sse_event(event: acpms_services::OpenClawGatewayEvent) -> Result<Event, In
         .id(event.sequence_id.to_string())
         .event(event.event_type)
         .data(data))
+}
+
+pub fn task_status_label(status: TaskStatus) -> &'static str {
+    match status {
+        TaskStatus::Backlog => "backlog",
+        TaskStatus::Todo => "todo",
+        TaskStatus::InProgress => "in_progress",
+        TaskStatus::InReview => "in_review",
+        TaskStatus::Blocked => "blocked",
+        TaskStatus::Done => "done",
+        TaskStatus::Archived => "archived",
+    }
+}
+
+pub async fn emit_task_status_changed(
+    state: &AppState,
+    project_id: Uuid,
+    task_id: Uuid,
+    previous_status: TaskStatus,
+    new_status: TaskStatus,
+    source: &str,
+) {
+    if previous_status == new_status {
+        return;
+    }
+
+    if let Err(error) = state
+        .openclaw_event_service
+        .record_task_status_changed(
+            project_id,
+            task_id,
+            task_status_label(previous_status),
+            task_status_label(new_status),
+            source,
+        )
+        .await
+    {
+        tracing::warn!(
+            task_id = %task_id,
+            previous_status = task_status_label(previous_status),
+            new_status = task_status_label(new_status),
+            error = %error,
+            "Failed to emit OpenClaw task.status_changed event"
+        );
+    }
 }
 
 pub async fn events_stream(

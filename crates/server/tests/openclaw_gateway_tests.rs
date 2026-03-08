@@ -139,5 +139,11 @@ async fn openclaw_can_access_mirrored_projects_and_openapi() {
     assert_eq!(openapi_status, StatusCode::OK, "{openapi_body}");
     let json: Value = serde_json::from_str(&openapi_body).expect("valid json");
     assert!(json["paths"].get("/api/openclaw/v1/projects").is_some());
+    assert!(json["paths"]
+        .get("/api/openclaw/guide-for-openclaw")
+        .is_some());
+    assert!(json["paths"]
+        .get("/api/openclaw/v1/events/stream")
+        .is_some());
     assert!(json["paths"].get("/api/v1/projects").is_none());
 }

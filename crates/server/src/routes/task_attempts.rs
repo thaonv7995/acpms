@@ -25,6 +25,7 @@ use uuid::Uuid;
 use crate::api::{AgentLogDto, ApiResponse, RetryInfoDto, RetryResponseDto, TaskAttemptDto};
 use crate::error::{ApiError, ApiResult};
 use crate::middleware::{AuthUser, Permission, RbacChecker};
+use crate::routes::openclaw;
 use crate::AppState;
 use utoipa::{IntoParams, ToSchema};
 
@@ -989,6 +990,15 @@ pub async fn create_task_attempt(
             .await;
         return Err(ApiError::Internal(message));
     }
+    openclaw::emit_task_status_changed(
+        &state,
+        task.project_id,
+        task_id,
+        previous_task_status,
+        TaskStatus::InProgress,
+        "routes.task_attempts.create_task_attempt",
+    )
+    .await;
 
     // Get project settings for timeout, retry config
     let settings = project_service
@@ -2059,6 +2069,15 @@ Continue working on the same task. Build on your previous work."#,
                 .await;
             return Err(ApiError::Internal(message));
         }
+        openclaw::emit_task_status_changed(
+            &state,
+            task.project_id,
+            task.id,
+            task.status,
+            TaskStatus::InProgress,
+            "routes.task_attempts.create_task_attempt_from_edit.new_attempt",
+        )
+        .await;
 
         let execution_process_id =
             create_execution_process_record(&pool, new_attempt.id, Some(repo_path.as_path()), None)
@@ -2199,6 +2218,15 @@ Continue working on the same task. Build on your previous work."#,
             .await;
         return Err(ApiError::Internal(message));
     }
+    openclaw::emit_task_status_changed(
+        &state,
+        task.project_id,
+        attempt.task_id,
+        original_task_status,
+        TaskStatus::InProgress,
+        "routes.task_attempts.send_attempt_input.resume_attempt",
+    )
+    .await;
 
     // Broadcast running status so SSE/WebSocket consumers update immediately.
     let _ = state.broadcast_tx.send(AgentEvent::Status(StatusMessage {
@@ -2268,6 +2296,15 @@ Continue working on the same task. Build on your previous work."#,
             let _ = task_service
                 .update_task_status(task.id, original_task_status)
                 .await;
+            openclaw::emit_task_status_changed(
+                &state,
+                task.project_id,
+                task.id,
+                TaskStatus::InProgress,
+                original_task_status,
+                "routes.task_attempts.send_attempt_input.resume_revert",
+            )
+            .await;
             return Err(ApiError::Internal(message));
         }
     } else {
@@ -4323,6 +4360,15 @@ pub async fn retry_attempt(
             .await;
         return Err(ApiError::Internal(message));
     }
+    openclaw::emit_task_status_changed(
+        &state,
+        task.project_id,
+        task.id,
+        task.status,
+        TaskStatus::InProgress,
+        "routes.task_attempts.retry_attempt",
+    )
+    .await;
 
     // Get project for job creation
     let project = project_service
