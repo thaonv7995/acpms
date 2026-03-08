@@ -49,6 +49,7 @@ const OPENCLAW_REQUIRED_FIRST_ACTIONS: &[&str] = &[
     "Follow the ACPMS operating rules returned by the Guide Endpoint.",
 ];
 const OPENCLAW_REQUIRED_ROUTE_PREFIXES: &[&str] = &["/api/openclaw/v1/*", "/api/openclaw/ws/*"];
+const OPENCLAW_EVENT_REPLAY_PAGE_SIZE: i64 = 1000;
 const OPENCLAW_REPORTING_REQUIREMENTS: &[&str] = &[
     "report important status, analyses, plans, started attempts, completed attempts, failed attempts, blocked work, and approval requests",
     "do not expose secrets, API keys, or webhook secrets in user-facing output",
@@ -614,11 +615,31 @@ pub async fn events_stream(
         );
     }
     let replay_events = if let Some(after) = after_cursor {
-        state
-            .openclaw_event_service
-            .list_events_after(after, 1000)
-            .await
-            .map_err(|error| crate::error::ApiError::Internal(error.to_string()))?
+        let mut replay_events = Vec::new();
+        let mut replay_cursor = after;
+        loop {
+            let page = state
+                .openclaw_event_service
+                .list_events_after(replay_cursor, OPENCLAW_EVENT_REPLAY_PAGE_SIZE)
+                .await
+                .map_err(|error| crate::error::ApiError::Internal(error.to_string()))?;
+
+            if page.is_empty() {
+                break;
+            }
+
+            let page_len = page.len();
+            replay_cursor = page
+                .last()
+                .map(|event| event.sequence_id)
+                .unwrap_or(replay_cursor);
+            replay_events.extend(page);
+
+            if page_len < OPENCLAW_EVENT_REPLAY_PAGE_SIZE as usize {
+                break;
+            }
+        }
+        replay_events
     } else {
         Vec::new()
     };

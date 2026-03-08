@@ -94,6 +94,16 @@ where
     }
 }
 
+fn parse_sse_event_id(chunk: &str) -> i64 {
+    chunk
+        .lines()
+        .find_map(|line| line.strip_prefix("id: "))
+        .unwrap_or_else(|| panic!("missing SSE id in chunk: {chunk}"))
+        .trim()
+        .parse::<i64>()
+        .unwrap_or_else(|error| panic!("invalid SSE id in chunk: {error}; chunk: {chunk}"))
+}
+
 #[tokio::test]
 async fn openclaw_guide_requires_valid_api_key() {
     let _guard = env_lock().lock().unwrap_or_else(|error| error.into_inner());
@@ -456,7 +466,10 @@ async fn openclaw_event_stream_delivers_live_event_without_cursor() {
     let chunk = read_next_sse_chunk(response).await;
 
     assert!(chunk.contains("event: attempt.completed"), "{chunk}");
-    assert!(chunk.contains(&format!("id: {}", expected_event.sequence_id)), "{chunk}");
+    assert!(
+        chunk.contains(&format!("id: {}", expected_event.sequence_id)),
+        "{chunk}"
+    );
     assert!(chunk.contains("\"status\":\"success\""), "{chunk}");
 }
 
@@ -590,8 +603,88 @@ async fn openclaw_event_stream_replays_events_after_last_event_id() {
     let chunk = read_next_sse_chunk(response).await;
 
     assert!(chunk.contains("event: attempt.completed"), "{chunk}");
-    assert!(chunk.contains(&format!("id: {}", second_event.sequence_id)), "{chunk}");
-    assert!(!chunk.contains(&format!("id: {}", first_event.sequence_id)), "{chunk}");
+    assert!(
+        chunk.contains(&format!("id: {}", second_event.sequence_id)),
+        "{chunk}"
+    );
+    assert!(
+        !chunk.contains(&format!("id: {}", first_event.sequence_id)),
+        "{chunk}"
+    );
+}
+
+#[tokio::test]
+async fn openclaw_event_stream_replays_backlogs_larger_than_one_page() {
+    let _guard = env_lock().lock().unwrap_or_else(|error| error.into_inner());
+    configure_openclaw_env();
+    if !test_database_ready().await {
+        eprintln!("skipping openclaw gateway test because DATABASE_URL is not reachable");
+        return;
+    }
+
+    let pool = setup_test_db().await;
+    sqlx::query("DELETE FROM openclaw_gateway_events")
+        .execute(&pool)
+        .await
+        .expect("clear openclaw events");
+
+    let state = create_test_app_state(pool).await;
+    let first_event = state
+        .openclaw_event_service
+        .record_event(NewOpenClawGatewayEvent {
+            event_type: "attempt.started".to_string(),
+            project_id: None,
+            task_id: None,
+            attempt_id: None,
+            source: "test.sse.replay.large".to_string(),
+            payload: serde_json::json!({ "index": 0 }),
+        })
+        .await
+        .expect("record first replay event");
+
+    let mut final_event_id = first_event.sequence_id;
+    for index in 1..=1005 {
+        final_event_id = state
+            .openclaw_event_service
+            .record_event(NewOpenClawGatewayEvent {
+                event_type: "attempt.progress".to_string(),
+                project_id: None,
+                task_id: None,
+                attempt_id: None,
+                source: "test.sse.replay.large".to_string(),
+                payload: serde_json::json!({ "index": index }),
+            })
+            .await
+            .expect("record replay backlog event")
+            .sequence_id;
+    }
+    let router = create_router(state);
+
+    let response = router
+        .oneshot(
+            Request::builder()
+                .method("GET")
+                .uri("/api/openclaw/v1/events/stream")
+                .header(header::AUTHORIZATION, "Bearer oc_test_phase1_key")
+                .header("Last-Event-ID", first_event.sequence_id.to_string())
+                .body(Body::empty())
+                .expect("build request"),
+        )
+        .await
+        .expect("execute request");
+    assert_eq!(response.status(), StatusCode::OK);
+
+    let mut stream = response.into_body().into_data_stream();
+    let mut replayed_count = 0usize;
+    let mut last_seen_id = first_event.sequence_id;
+    while replayed_count < 1005 {
+        let chunk = read_next_sse_chunk_from_stream(&mut stream).await;
+        last_seen_id = parse_sse_event_id(&chunk);
+        replayed_count += 1;
+    }
+
+    assert_eq!(replayed_count, 1005);
+    assert_eq!(last_seen_id, final_event_id);
 }
 
 #[tokio::test]
@@ -650,8 +743,14 @@ async fn openclaw_event_stream_emits_attempt_start_then_completion_in_order() {
     let first_chunk = read_next_sse_chunk_from_stream(&mut stream).await;
     let second_chunk = read_next_sse_chunk_from_stream(&mut stream).await;
 
-    assert!(first_chunk.contains("event: attempt.started"), "{first_chunk}");
-    assert!(second_chunk.contains("event: attempt.completed"), "{second_chunk}");
+    assert!(
+        first_chunk.contains("event: attempt.started"),
+        "{first_chunk}"
+    );
+    assert!(
+        second_chunk.contains("event: attempt.completed"),
+        "{second_chunk}"
+    );
 
     let persisted_events = sqlx::query_scalar::<_, String>(
         r#"
@@ -668,7 +767,10 @@ async fn openclaw_event_stream_emits_attempt_start_then_completion_in_order() {
 
     assert_eq!(
         persisted_events,
-        vec!["attempt.started".to_string(), "attempt.completed".to_string()]
+        vec![
+            "attempt.started".to_string(),
+            "attempt.completed".to_string()
+        ]
     );
 }
 
@@ -765,9 +867,15 @@ async fn openclaw_attempt_log_stream_remains_independent_from_global_event_strea
         .expect("clear openclaw events");
 
     let (user_id, _) = create_test_user(&pool, None, None, None).await;
-    let project_id = create_test_project(&pool, user_id, Some("OpenClaw Independence Project")).await;
-    let task_id =
-        create_test_task(&pool, project_id, user_id, Some("OpenClaw Independence Task")).await;
+    let project_id =
+        create_test_project(&pool, user_id, Some("OpenClaw Independence Project")).await;
+    let task_id = create_test_task(
+        &pool,
+        project_id,
+        user_id,
+        Some("OpenClaw Independence Task"),
+    )
+    .await;
     let attempt_id = create_test_attempt(&pool, task_id, Some("running")).await;
 
     let state = create_test_app_state(pool.clone()).await;
@@ -793,7 +901,9 @@ async fn openclaw_attempt_log_stream_remains_independent_from_global_event_strea
         .oneshot(
             Request::builder()
                 .method("GET")
-                .uri(format!("/api/openclaw/v1/attempts/{attempt_id}/stream?since=1"))
+                .uri(format!(
+                    "/api/openclaw/v1/attempts/{attempt_id}/stream?since=1"
+                ))
                 .header(header::AUTHORIZATION, "Bearer oc_test_phase1_key")
                 .body(Body::empty())
                 .expect("build attempt request"),
@@ -818,7 +928,10 @@ async fn openclaw_attempt_log_stream_remains_independent_from_global_event_strea
         .expect("record global event");
 
     let global_chunk = read_next_sse_chunk_from_stream(&mut global_stream).await;
-    assert!(global_chunk.contains("event: attempt.completed"), "{global_chunk}");
+    assert!(
+        global_chunk.contains("event: attempt.completed"),
+        "{global_chunk}"
+    );
     assert!(
         global_chunk.contains(&format!("id: {}", global_event.sequence_id)),
         "{global_chunk}"
@@ -836,8 +949,14 @@ async fn openclaw_attempt_log_stream_remains_independent_from_global_event_strea
     .expect("write attempt log");
 
     let attempt_chunk = read_next_sse_chunk_from_stream(&mut attempt_stream).await;
-    assert!(attempt_chunk.contains("\"path\":\"/attempts/"), "{attempt_chunk}");
-    assert!(attempt_chunk.contains("attempt log line from test"), "{attempt_chunk}");
+    assert!(
+        attempt_chunk.contains("\"path\":\"/attempts/"),
+        "{attempt_chunk}"
+    );
+    assert!(
+        attempt_chunk.contains("attempt log line from test"),
+        "{attempt_chunk}"
+    );
     assert_no_sse_chunk_from_stream(&mut global_stream, Duration::from_millis(200)).await;
 }
 
