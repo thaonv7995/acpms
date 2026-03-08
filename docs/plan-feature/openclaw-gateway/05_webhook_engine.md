@@ -2,11 +2,11 @@
 
 ## 1. Concept
 
-To avoid OpenClaw aggressively polling the `GET /v1/sessions/{id}` endpoint, Agentic-Coding implements an async Webhook pushing capability. When significant state changes occur internally, the `Webhook Dispatcher` formats the event and pushes it to OpenClaw's registered receiver URL.
+To avoid OpenClaw aggressively polling mirrored status endpoints such as `GET /api/openclaw/v1/attempts/{id}`, Agentic-Coding implements an async Webhook pushing capability. When significant state changes occur internally, the `Webhook Dispatcher` formats the event and pushes it to OpenClaw's registered receiver URL.
 
 ## 2. Event Dispatching Architecture
 
-1.  **In-App Event Bus**: In `crates/executors/src/orchestrator.rs` and `session.rs`, whenever a task state changes (e.g., status changes to `Done`) or a session finishes processing (success/failure), an internal event is emitted.
+1.  **In-App Event Bus**: In `crates/executors/src/orchestrator.rs` and related execution/session state management, whenever a task or attempt state changes, an internal event is emitted.
 2.  **Background Worker**: The `Webhook Dispatcher` listens to these events. It operates in an asynchronous background Tokio task to ensure it NEVER blocks the main execution flow or API responses.
 3.  **HTTP Client**: `reqwest` is used to send a `POST` request to the configured external webhook URL.
 
@@ -24,10 +24,10 @@ Webhooks are vulnerable to spoofing if left unprotected. We will use the `OPENCL
 1.  Construct the Event JSON payload. Example:
     ```json
     {
-      "event": "session.completed",
+      "event": "attempt.completed",
       "timestamp": "2026-03-06T12:00:00Z",
       "data": {
-        "session_id": "uuid-123",
+        "attempt_id": "uuid-123",
         "task_id": "uuid-456",
         "status": "success",
         "summary": "Completed Webhook Dispatcher implementation."
@@ -52,6 +52,7 @@ OpenClaw must do the following to verify the authenticity:
 ## 5. Typical Event Types
 
 *   `task.status_changed`: Fired when a Kanban item moves columns.
-*   `session.started`: Highlighting that an Executor has acknowledged the trigger request and allocated resources.
-*   `session.completed`: The agent finished executing bash/code commands and exited normally. Data payload includes the commit/diff summary.
-*   `session.failed`: The executor crashed or timed out. Immediate attention might be needed from OpenClaw's supervisor loop.
+*   `attempt.started`: Fired when an execution attempt begins running.
+*   `attempt.completed`: Fired when the attempt exits normally. Data payload includes summary/diff metadata where available.
+*   `attempt.failed`: Fired when the attempt crashes, times out, or otherwise terminates unsuccessfully.
+*   `attempt.needs_input`: Fired when the running attempt pauses and requires operator input.
