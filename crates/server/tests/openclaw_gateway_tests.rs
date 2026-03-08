@@ -1096,6 +1096,99 @@ async fn openclaw_event_cleanup_removes_expired_rows_and_updates_retained_metric
 }
 
 #[tokio::test]
+async fn openclaw_webhook_deliveries_are_persisted_and_retryable() {
+    let _guard = env_lock().lock().unwrap_or_else(|error| error.into_inner());
+    configure_openclaw_env();
+    std::env::set_var("OPENCLAW_WEBHOOK_URL", "http://127.0.0.1:9/openclaw");
+    if !test_database_ready().await {
+        eprintln!("skipping openclaw gateway test because DATABASE_URL is not reachable");
+        return;
+    }
+
+    let pool = setup_test_db().await;
+    sqlx::query("DELETE FROM openclaw_webhook_deliveries")
+        .execute(&pool)
+        .await
+        .expect("clear openclaw webhook deliveries");
+    sqlx::query("DELETE FROM openclaw_gateway_events")
+        .execute(&pool)
+        .await
+        .expect("clear openclaw events");
+
+    let state = create_test_app_state(pool.clone()).await;
+    let event = state
+        .openclaw_event_service
+        .record_event(NewOpenClawGatewayEvent {
+            event_type: "attempt.completed".to_string(),
+            project_id: None,
+            task_id: None,
+            attempt_id: None,
+            source: "test.webhook.queue".to_string(),
+            payload: serde_json::json!({ "status": "success" }),
+        })
+        .await
+        .expect("record event with webhook delivery");
+
+    let delivery_id = tokio::time::timeout(Duration::from_secs(2), async {
+        loop {
+            let maybe_id = sqlx::query_scalar::<_, uuid::Uuid>(
+                "SELECT id FROM openclaw_webhook_deliveries WHERE event_sequence_id = $1",
+            )
+            .bind(event.sequence_id)
+            .fetch_optional(&pool)
+            .await
+            .expect("load queued webhook delivery");
+
+            if let Some(delivery_id) = maybe_id {
+                break delivery_id;
+            }
+
+            tokio::time::sleep(Duration::from_millis(50)).await;
+        }
+    })
+    .await
+    .expect("timed out waiting for queued webhook delivery");
+
+    sqlx::query(
+        r#"
+        UPDATE openclaw_webhook_deliveries
+        SET
+            status = 'failed',
+            attempt_count = max_attempts,
+            last_error = 'simulated failure'
+        WHERE id = $1
+        "#,
+    )
+    .bind(delivery_id)
+    .execute(&pool)
+    .await
+    .expect("mark queued webhook delivery as failed");
+
+    let failed_deliveries = state
+        .openclaw_event_service
+        .get_failed_webhook_deliveries(10)
+        .await
+        .expect("load failed openclaw webhook deliveries");
+    assert_eq!(failed_deliveries.len(), 1);
+    assert_eq!(failed_deliveries[0].id, delivery_id);
+    assert_eq!(failed_deliveries[0].event_sequence_id, event.sequence_id);
+
+    state
+        .openclaw_event_service
+        .retry_failed_webhook_delivery(delivery_id)
+        .await
+        .expect("retry failed openclaw webhook delivery");
+
+    let stats = state
+        .openclaw_event_service
+        .webhook_delivery_stats()
+        .await
+        .expect("load openclaw webhook delivery stats");
+    assert_eq!(stats.failed, 0);
+    assert_eq!(stats.pending, 1);
+}
+
+#[tokio::test]
 async fn openclaw_ws_routes_require_openclaw_auth() {
     let _guard = env_lock().lock().unwrap_or_else(|error| error.into_inner());
     configure_openclaw_env();

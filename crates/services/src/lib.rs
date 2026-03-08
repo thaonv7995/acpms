@@ -85,8 +85,8 @@ pub use gitlab_oauth_types::*;
 pub use gitlab_sync_service::{GitLabSyncService, SyncResult};
 pub use normalized_logs::NormalizedLogService;
 pub use openclaw_gateway_events::{
-    NewOpenClawGatewayEvent, OpenClawGatewayEvent, OpenClawGatewayEventService,
-    OpenClawGatewayMetricsObserver,
+    FailedOpenClawWebhookDelivery, NewOpenClawGatewayEvent, OpenClawGatewayEvent,
+    OpenClawGatewayEventService, OpenClawGatewayMetricsObserver, OpenClawWebhookDeliveryStats,
 };
 pub use project::ProjectService;
 pub use project_assistant_instruction::{

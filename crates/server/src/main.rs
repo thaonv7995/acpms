@@ -1898,6 +1898,9 @@ async fn main() -> anyhow::Result<()> {
     openclaw_event_service
         .clone()
         .spawn_agent_event_bridge(broadcast_tx.subscribe());
+    openclaw_event_service
+        .clone()
+        .spawn_webhook_delivery_worker();
 
     let deployment_handler_state = state.clone();
     let deployment_handler = Arc::new(move |job: DeploymentJob| {

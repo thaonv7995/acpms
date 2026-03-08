@@ -14,9 +14,13 @@ use std::{
     time::Instant,
 };
 use tokio::sync::broadcast;
+use tokio::time::{self, MissedTickBehavior};
 use uuid::Uuid;
 
 const OPENCLAW_WEBHOOK_SIGNATURE_HEADER: &str = "X-Agentic-Signature";
+const OPENCLAW_WEBHOOK_MAX_ATTEMPTS: i32 = 5;
+const OPENCLAW_WEBHOOK_BATCH_SIZE: i64 = 25;
+const OPENCLAW_WEBHOOK_POLL_INTERVAL_SECS: u64 = 5;
 type HmacSha256 = Hmac<Sha256>;
 
 pub trait OpenClawGatewayMetricsObserver: Send + Sync {
@@ -51,6 +55,42 @@ pub struct NewOpenClawGatewayEvent {
 struct OpenClawGatewayWebhookConfig {
     url: String,
     secret: String,
+}
+
+#[derive(Debug, Clone, sqlx::FromRow)]
+struct ClaimedOpenClawWebhookDelivery {
+    delivery_id: Uuid,
+    attempt_count: i32,
+    max_attempts: i32,
+    sequence_id: i64,
+    event_type: String,
+    occurred_at: DateTime<Utc>,
+    project_id: Option<Uuid>,
+    task_id: Option<Uuid>,
+    attempt_id: Option<Uuid>,
+    source: String,
+    payload: Value,
+}
+
+#[derive(Debug, Clone, sqlx::FromRow)]
+pub struct FailedOpenClawWebhookDelivery {
+    pub id: Uuid,
+    pub event_sequence_id: i64,
+    pub event_type: String,
+    pub attempt_count: i32,
+    pub max_attempts: i32,
+    pub last_status_code: Option<i32>,
+    pub last_error: Option<String>,
+    pub created_at: DateTime<Utc>,
+    pub last_attempt_at: Option<DateTime<Utc>>,
+}
+
+#[derive(Debug, Clone, sqlx::FromRow)]
+pub struct OpenClawWebhookDeliveryStats {
+    pub pending: i64,
+    pub processing: i64,
+    pub completed: i64,
+    pub failed: i64,
 }
 
 #[derive(Clone)]
@@ -113,6 +153,10 @@ impl OpenClawGatewayEventService {
         self.retention_hours
     }
 
+    pub fn webhook_enabled(&self) -> bool {
+        self.webhook.is_some()
+    }
+
     pub async fn record_event(
         &self,
         event: NewOpenClawGatewayEvent,
@@ -156,7 +200,17 @@ impl OpenClawGatewayEventService {
         if let Err(error) = self.bump_retained_event_rows(1).await {
             tracing::warn!("Failed to update OpenClaw retained-row metric after insert: {error}");
         }
-        self.dispatch_optional_webhook(stored.clone());
+        if let Err(error) = self
+            .enqueue_optional_webhook_delivery(stored.sequence_id)
+            .await
+        {
+            tracing::warn!(
+                sequence_id = stored.sequence_id,
+                event_type = %stored.event_type,
+                error = %error,
+                "Failed to queue OpenClaw webhook delivery"
+            );
+        }
         Ok(stored)
     }
 
@@ -256,6 +310,172 @@ impl OpenClawGatewayEventService {
                 }
             }
         });
+    }
+
+    pub fn spawn_webhook_delivery_worker(self: Arc<Self>) {
+        if !self.webhook_enabled() {
+            return;
+        }
+
+        tokio::spawn(async move {
+            tracing::info!("Starting OpenClaw webhook delivery worker");
+            let mut interval = time::interval(std::time::Duration::from_secs(
+                OPENCLAW_WEBHOOK_POLL_INTERVAL_SECS,
+            ));
+            interval.set_missed_tick_behavior(MissedTickBehavior::Skip);
+
+            loop {
+                interval.tick().await;
+                if let Err(error) = self
+                    .process_pending_webhook_deliveries(OPENCLAW_WEBHOOK_BATCH_SIZE)
+                    .await
+                {
+                    tracing::warn!("Failed to process OpenClaw webhook deliveries: {error}");
+                }
+            }
+        });
+    }
+
+    pub async fn process_pending_webhook_deliveries(&self, limit: i64) -> Result<usize> {
+        let Some(webhook) = self.webhook.clone() else {
+            return Ok(0);
+        };
+
+        let deliveries = self.claim_pending_webhook_deliveries(limit).await?;
+        if deliveries.is_empty() {
+            return Ok(0);
+        }
+
+        let mut processed = 0usize;
+        for delivery in deliveries {
+            let event = OpenClawGatewayEvent {
+                sequence_id: delivery.sequence_id,
+                event_type: delivery.event_type.clone(),
+                occurred_at: delivery.occurred_at,
+                project_id: delivery.project_id,
+                task_id: delivery.task_id,
+                attempt_id: delivery.attempt_id,
+                source: delivery.source.clone(),
+                payload: delivery.payload.clone(),
+            };
+
+            let started_at = Instant::now();
+            let (status_code, result) =
+                send_webhook_event(self.http_client.clone(), webhook.clone(), event.clone()).await;
+            if let Some(observer) = &self.metrics_observer {
+                observer.on_webhook_delivery(
+                    result.is_ok(),
+                    status_code,
+                    started_at.elapsed().as_secs_f64(),
+                );
+            }
+
+            match result {
+                Ok(()) => {
+                    self.mark_webhook_delivery_completed(delivery.delivery_id, status_code)
+                        .await?;
+                }
+                Err(error) => {
+                    if delivery.attempt_count >= delivery.max_attempts {
+                        self.mark_webhook_delivery_failed(
+                            delivery.delivery_id,
+                            delivery.attempt_count,
+                            status_code,
+                            &error,
+                        )
+                        .await?;
+                    } else {
+                        self.mark_webhook_delivery_pending_retry(
+                            delivery.delivery_id,
+                            delivery.attempt_count,
+                            status_code,
+                            &error,
+                        )
+                        .await?;
+                    }
+
+                    tracing::warn!(
+                        delivery_id = %delivery.delivery_id,
+                        sequence_id = event.sequence_id,
+                        event_type = %event.event_type,
+                        attempt_count = delivery.attempt_count,
+                        max_attempts = delivery.max_attempts,
+                        error = %error,
+                        "Failed to deliver OpenClaw webhook"
+                    );
+                }
+            }
+
+            processed += 1;
+        }
+
+        Ok(processed)
+    }
+
+    pub async fn get_failed_webhook_deliveries(
+        &self,
+        limit: i64,
+    ) -> Result<Vec<FailedOpenClawWebhookDelivery>> {
+        sqlx::query_as::<_, FailedOpenClawWebhookDelivery>(
+            r#"
+            SELECT
+                d.id,
+                d.event_sequence_id,
+                e.event_type,
+                d.attempt_count,
+                d.max_attempts,
+                d.last_status_code,
+                d.last_error,
+                d.created_at,
+                d.last_attempt_at
+            FROM openclaw_webhook_deliveries d
+            JOIN openclaw_gateway_events e ON e.sequence_id = d.event_sequence_id
+            WHERE d.status = 'failed'
+            ORDER BY d.last_attempt_at DESC NULLS LAST, d.created_at DESC
+            LIMIT $1
+            "#,
+        )
+        .bind(limit.max(1))
+        .fetch_all(&self.pool)
+        .await
+        .context("Failed to load failed OpenClaw webhook deliveries")
+    }
+
+    pub async fn retry_failed_webhook_delivery(&self, delivery_id: Uuid) -> Result<()> {
+        sqlx::query(
+            r#"
+            UPDATE openclaw_webhook_deliveries
+            SET
+                status = 'pending',
+                attempt_count = 0,
+                next_attempt_at = NOW(),
+                last_error = NULL,
+                last_status_code = NULL
+            WHERE id = $1 AND status = 'failed'
+            "#,
+        )
+        .bind(delivery_id)
+        .execute(&self.pool)
+        .await
+        .context("Failed to reset OpenClaw webhook delivery for retry")?;
+        self.kick_optional_webhook_delivery_worker();
+        Ok(())
+    }
+
+    pub async fn webhook_delivery_stats(&self) -> Result<OpenClawWebhookDeliveryStats> {
+        sqlx::query_as::<_, OpenClawWebhookDeliveryStats>(
+            r#"
+            SELECT
+                COUNT(*) FILTER (WHERE status = 'pending') AS pending,
+                COUNT(*) FILTER (WHERE status = 'processing') AS processing,
+                COUNT(*) FILTER (WHERE status = 'completed') AS completed,
+                COUNT(*) FILTER (WHERE status = 'failed') AS failed
+            FROM openclaw_webhook_deliveries
+            "#,
+        )
+        .fetch_one(&self.pool)
+        .await
+        .context("Failed to load OpenClaw webhook delivery stats")
     }
 
     async fn handle_agent_event(&self, event: AgentEvent) -> Result<()> {
@@ -386,30 +606,43 @@ impl OpenClawGatewayEventService {
         .await
     }
 
-    fn dispatch_optional_webhook(&self, event: OpenClawGatewayEvent) {
-        let Some(webhook) = self.webhook.clone() else {
-            return;
-        };
+    async fn enqueue_optional_webhook_delivery(&self, event_sequence_id: i64) -> Result<()> {
+        if !self.webhook_enabled() {
+            return Ok(());
+        }
 
-        let client = self.http_client.clone();
-        let metrics_observer = self.metrics_observer.clone();
+        sqlx::query(
+            r#"
+            INSERT INTO openclaw_webhook_deliveries (
+                event_sequence_id,
+                status,
+                attempt_count,
+                max_attempts,
+                next_attempt_at
+            )
+            VALUES ($1, 'pending', 0, $2, NOW())
+            ON CONFLICT (event_sequence_id) DO NOTHING
+            "#,
+        )
+        .bind(event_sequence_id)
+        .bind(OPENCLAW_WEBHOOK_MAX_ATTEMPTS)
+        .execute(&self.pool)
+        .await
+        .context("Failed to queue OpenClaw webhook delivery")?;
+
+        self.kick_optional_webhook_delivery_worker();
+        Ok(())
+    }
+
+    fn kick_optional_webhook_delivery_worker(&self) {
+        if !self.webhook_enabled() {
+            return;
+        }
+
+        let service = self.clone();
         tokio::spawn(async move {
-            let started_at = Instant::now();
-            let (status_code, result) = send_webhook_event(client, webhook, event.clone()).await;
-            if let Some(observer) = &metrics_observer {
-                observer.on_webhook_delivery(
-                    result.is_ok(),
-                    status_code,
-                    started_at.elapsed().as_secs_f64(),
-                );
-            }
-            if let Err(error) = result {
-                tracing::warn!(
-                    sequence_id = event.sequence_id,
-                    event_type = %event.event_type,
-                    error = %error,
-                    "Failed to deliver OpenClaw webhook"
-                );
+            if let Err(error) = service.process_pending_webhook_deliveries(1).await {
+                tracing::warn!("Failed to kick OpenClaw webhook delivery worker: {error}");
             }
         });
     }
@@ -426,6 +659,142 @@ impl OpenClawGatewayEventService {
         if let Some(observer) = &self.metrics_observer {
             observer.on_retained_event_rows_changed(next);
         }
+        Ok(())
+    }
+
+    async fn claim_pending_webhook_deliveries(
+        &self,
+        limit: i64,
+    ) -> Result<Vec<ClaimedOpenClawWebhookDelivery>> {
+        sqlx::query_as::<_, ClaimedOpenClawWebhookDelivery>(
+            r#"
+            WITH claimed AS (
+                SELECT d.id
+                FROM openclaw_webhook_deliveries d
+                WHERE d.status = 'pending'
+                  AND d.next_attempt_at <= NOW()
+                ORDER BY d.next_attempt_at ASC, d.created_at ASC
+                FOR UPDATE SKIP LOCKED
+                LIMIT $1
+            ),
+            updated AS (
+                UPDATE openclaw_webhook_deliveries d
+                SET
+                    status = 'processing',
+                    attempt_count = d.attempt_count + 1,
+                    last_attempt_at = NOW()
+                FROM claimed
+                WHERE d.id = claimed.id
+                RETURNING
+                    d.id AS delivery_id,
+                    d.attempt_count,
+                    d.max_attempts,
+                    d.event_sequence_id
+            )
+            SELECT
+                updated.delivery_id,
+                updated.attempt_count,
+                updated.max_attempts,
+                e.sequence_id,
+                e.event_type,
+                e.occurred_at,
+                e.project_id,
+                e.task_id,
+                e.attempt_id,
+                e.source,
+                e.payload
+            FROM updated
+            JOIN openclaw_gateway_events e ON e.sequence_id = updated.event_sequence_id
+            ORDER BY e.sequence_id ASC
+            "#,
+        )
+        .bind(limit.max(1))
+        .fetch_all(&self.pool)
+        .await
+        .context("Failed to claim pending OpenClaw webhook deliveries")
+    }
+
+    async fn mark_webhook_delivery_completed(
+        &self,
+        delivery_id: Uuid,
+        status_code: Option<u16>,
+    ) -> Result<()> {
+        sqlx::query(
+            r#"
+            UPDATE openclaw_webhook_deliveries
+            SET
+                status = 'completed',
+                last_status_code = $2,
+                completed_at = NOW()
+            WHERE id = $1
+            "#,
+        )
+        .bind(delivery_id)
+        .bind(status_code.map(i32::from))
+        .execute(&self.pool)
+        .await
+        .context("Failed to mark OpenClaw webhook delivery as completed")?;
+        Ok(())
+    }
+
+    async fn mark_webhook_delivery_failed(
+        &self,
+        delivery_id: Uuid,
+        attempt_count: i32,
+        status_code: Option<u16>,
+        error: &anyhow::Error,
+    ) -> Result<()> {
+        sqlx::query(
+            r#"
+            UPDATE openclaw_webhook_deliveries
+            SET
+                status = 'failed',
+                attempt_count = $2,
+                last_status_code = $3,
+                last_error = $4
+            WHERE id = $1
+            "#,
+        )
+        .bind(delivery_id)
+        .bind(attempt_count)
+        .bind(status_code.map(i32::from))
+        .bind(error.to_string())
+        .execute(&self.pool)
+        .await
+        .context("Failed to mark OpenClaw webhook delivery as failed")?;
+        Ok(())
+    }
+
+    async fn mark_webhook_delivery_pending_retry(
+        &self,
+        delivery_id: Uuid,
+        attempt_count: i32,
+        status_code: Option<u16>,
+        error: &anyhow::Error,
+    ) -> Result<()> {
+        let retry_delay_seconds = 2_i64.pow((attempt_count.saturating_sub(1)).min(5) as u32);
+        let next_attempt_at = Utc::now() + Duration::seconds(retry_delay_seconds.max(1));
+
+        sqlx::query(
+            r#"
+            UPDATE openclaw_webhook_deliveries
+            SET
+                status = 'pending',
+                attempt_count = $2,
+                next_attempt_at = $3,
+                last_status_code = $4,
+                last_error = $5
+            WHERE id = $1
+            "#,
+        )
+        .bind(delivery_id)
+        .bind(attempt_count)
+        .bind(next_attempt_at)
+        .bind(status_code.map(i32::from))
+        .bind(error.to_string())
+        .execute(&self.pool)
+        .await
+        .context("Failed to requeue OpenClaw webhook delivery")?;
         Ok(())
     }
 }
