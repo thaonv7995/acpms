@@ -140,6 +140,10 @@ pub async fn create_test_app_state(pool: PgPool) -> AppState {
             )
             .with_metrics_observer(Arc::new(metrics.clone())),
     );
+    openclaw_event_service
+        .sync_retained_event_row_count_metric()
+        .await
+        .expect("Failed to initialize OpenClaw retained-row metric for tests");
 
     // Initialize Services (GitLabService returns Result)
     let gitlab_service =

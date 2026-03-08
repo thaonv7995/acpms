@@ -325,6 +325,188 @@ async fn openclaw_event_stream_returns_sse_content_type() {
 }
 
 #[tokio::test]
+async fn openclaw_event_service_publishes_live_events_to_subscribers() {
+    let _guard = env_lock().lock().unwrap_or_else(|error| error.into_inner());
+    configure_openclaw_env();
+    if !test_database_ready().await {
+        eprintln!("skipping openclaw gateway test because DATABASE_URL is not reachable");
+        return;
+    }
+
+    let pool = setup_test_db().await;
+    sqlx::query("DELETE FROM openclaw_gateway_events")
+        .execute(&pool)
+        .await
+        .expect("clear openclaw events");
+
+    let state = create_test_app_state(pool).await;
+    let mut live_rx = state.openclaw_event_service.subscribe_live();
+
+    let event = state
+        .openclaw_event_service
+        .record_event(NewOpenClawGatewayEvent {
+            event_type: "attempt.started".to_string(),
+            project_id: None,
+            task_id: None,
+            attempt_id: None,
+            source: "test.live".to_string(),
+            payload: serde_json::json!({ "status": "running" }),
+        })
+        .await
+        .expect("record live event");
+
+    let received = tokio::time::timeout(Duration::from_secs(1), live_rx.recv())
+        .await
+        .expect("timed out waiting for live event")
+        .expect("live event should be delivered");
+
+    assert_eq!(received.sequence_id, event.sequence_id);
+    assert_eq!(received.event_type, "attempt.started");
+}
+
+#[tokio::test]
+async fn openclaw_event_service_lists_replay_events_in_sequence_order() {
+    let _guard = env_lock().lock().unwrap_or_else(|error| error.into_inner());
+    configure_openclaw_env();
+    if !test_database_ready().await {
+        eprintln!("skipping openclaw gateway test because DATABASE_URL is not reachable");
+        return;
+    }
+
+    let pool = setup_test_db().await;
+    sqlx::query("DELETE FROM openclaw_gateway_events")
+        .execute(&pool)
+        .await
+        .expect("clear openclaw events");
+
+    let state = create_test_app_state(pool).await;
+    let first_event = state
+        .openclaw_event_service
+        .record_event(NewOpenClawGatewayEvent {
+            event_type: "attempt.started".to_string(),
+            project_id: None,
+            task_id: None,
+            attempt_id: None,
+            source: "test.replay".to_string(),
+            payload: serde_json::json!({ "step": 1 }),
+        })
+        .await
+        .expect("record first event");
+    let second_event = state
+        .openclaw_event_service
+        .record_event(NewOpenClawGatewayEvent {
+            event_type: "attempt.needs_input".to_string(),
+            project_id: None,
+            task_id: None,
+            attempt_id: None,
+            source: "test.replay".to_string(),
+            payload: serde_json::json!({ "step": 2 }),
+        })
+        .await
+        .expect("record second event");
+    let third_event = state
+        .openclaw_event_service
+        .record_event(NewOpenClawGatewayEvent {
+            event_type: "attempt.completed".to_string(),
+            project_id: None,
+            task_id: None,
+            attempt_id: None,
+            source: "test.replay".to_string(),
+            payload: serde_json::json!({ "step": 3 }),
+        })
+        .await
+        .expect("record third event");
+
+    let replay_events = state
+        .openclaw_event_service
+        .list_events_after(first_event.sequence_id, 10)
+        .await
+        .expect("load replay events");
+
+    let replay_ids = replay_events
+        .iter()
+        .map(|event| event.sequence_id)
+        .collect::<Vec<_>>();
+    assert_eq!(
+        replay_ids,
+        vec![second_event.sequence_id, third_event.sequence_id]
+    );
+    assert_eq!(replay_events[0].event_type, "attempt.needs_input");
+    assert_eq!(replay_events[1].event_type, "attempt.completed");
+}
+
+#[tokio::test]
+async fn openclaw_event_cleanup_removes_expired_rows_and_updates_retained_metric() {
+    let _guard = env_lock().lock().unwrap_or_else(|error| error.into_inner());
+    configure_openclaw_env();
+    if !test_database_ready().await {
+        eprintln!("skipping openclaw gateway test because DATABASE_URL is not reachable");
+        return;
+    }
+
+    let pool = setup_test_db().await;
+    sqlx::query("DELETE FROM openclaw_gateway_events")
+        .execute(&pool)
+        .await
+        .expect("clear openclaw events");
+
+    let state = create_test_app_state(pool.clone()).await;
+    sqlx::query(
+        r#"
+        INSERT INTO openclaw_gateway_events (
+            event_type,
+            occurred_at,
+            project_id,
+            task_id,
+            attempt_id,
+            source,
+            payload
+        )
+        VALUES ($1, NOW() - INTERVAL '10 days', NULL, NULL, NULL, $2, $3)
+        "#,
+    )
+    .bind("attempt.failed")
+    .bind("test.cleanup.expired")
+    .bind(serde_json::json!({ "status": "failed" }))
+    .execute(&pool)
+    .await
+    .expect("insert expired event");
+    state
+        .openclaw_event_service
+        .record_event(NewOpenClawGatewayEvent {
+            event_type: "attempt.completed".to_string(),
+            project_id: None,
+            task_id: None,
+            attempt_id: None,
+            source: "test.cleanup.live".to_string(),
+            payload: serde_json::json!({ "status": "success" }),
+        })
+        .await
+        .expect("record retained event");
+    state
+        .openclaw_event_service
+        .sync_retained_event_row_count_metric()
+        .await
+        .expect("sync retained row metric");
+
+    let deleted = state
+        .openclaw_event_service
+        .cleanup_expired_events()
+        .await
+        .expect("cleanup expired events");
+    let retained_rows = state
+        .openclaw_event_service
+        .retained_event_row_count()
+        .await
+        .expect("count retained rows");
+    let encoded_metrics = state.metrics.encode().expect("encode metrics");
+
+    assert_eq!(deleted, 1);
+    assert_eq!(retained_rows, 1);
+    assert!(encoded_metrics.contains("acpms_openclaw_retained_event_rows 1"));
+}
+
+#[tokio::test]
 async fn openclaw_ws_routes_require_openclaw_auth() {
     let _guard = env_lock().lock().unwrap_or_else(|error| error.into_inner());
     configure_openclaw_env();

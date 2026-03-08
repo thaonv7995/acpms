@@ -1701,6 +1701,15 @@ async fn main() -> anyhow::Result<()> {
             )
             .with_metrics_observer(Arc::new(metrics.clone())),
     );
+    if let Err(error) = openclaw_event_service
+        .sync_retained_event_row_count_metric()
+        .await
+    {
+        tracing::warn!(
+            "Failed to initialize OpenClaw retained-row metric: {}",
+            error
+        );
+    }
 
     // Initialize Services
     let gitlab_service = Arc::new(GitLabService::new(pool.clone())?);

@@ -6,7 +6,13 @@ use hmac::{Hmac, Mac};
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 use sha2::Sha256;
-use std::{sync::Arc, time::Instant};
+use std::{
+    sync::{
+        atomic::{AtomicI64, Ordering},
+        Arc,
+    },
+    time::Instant,
+};
 use tokio::sync::broadcast;
 use uuid::Uuid;
 
@@ -16,6 +22,7 @@ type HmacSha256 = Hmac<Sha256>;
 pub trait OpenClawGatewayMetricsObserver: Send + Sync {
     fn on_event_recorded(&self, event_type: &str);
     fn on_webhook_delivery(&self, success: bool, status_code: Option<u16>, duration_seconds: f64);
+    fn on_retained_event_rows_changed(&self, total_rows: i64);
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, sqlx::FromRow)]
@@ -54,6 +61,7 @@ pub struct OpenClawGatewayEventService {
     http_client: reqwest::Client,
     webhook: Option<OpenClawGatewayWebhookConfig>,
     metrics_observer: Option<Arc<dyn OpenClawGatewayMetricsObserver>>,
+    retained_event_rows: Arc<AtomicI64>,
 }
 
 impl OpenClawGatewayEventService {
@@ -66,6 +74,7 @@ impl OpenClawGatewayEventService {
             http_client: reqwest::Client::new(),
             webhook: None,
             metrics_observer: None,
+            retained_event_rows: Arc::new(AtomicI64::new(-1)),
         }
     }
 
@@ -144,6 +153,9 @@ impl OpenClawGatewayEventService {
         if let Some(observer) = &self.metrics_observer {
             observer.on_event_recorded(&stored.event_type);
         }
+        if let Err(error) = self.bump_retained_event_rows(1).await {
+            tracing::warn!("Failed to update OpenClaw retained-row metric after insert: {error}");
+        }
         self.dispatch_optional_webhook(stored.clone());
         Ok(stored)
     }
@@ -184,6 +196,23 @@ impl OpenClawGatewayEventService {
             .context("Failed to read oldest OpenClaw gateway event cursor")
     }
 
+    pub async fn retained_event_row_count(&self) -> Result<i64> {
+        sqlx::query_scalar("SELECT COUNT(*)::bigint FROM openclaw_gateway_events")
+            .fetch_one(&self.pool)
+            .await
+            .context("Failed to count retained OpenClaw gateway events")
+    }
+
+    pub async fn sync_retained_event_row_count_metric(&self) -> Result<i64> {
+        let total_rows = self.retained_event_row_count().await?;
+        self.retained_event_rows
+            .store(total_rows, Ordering::Relaxed);
+        if let Some(observer) = &self.metrics_observer {
+            observer.on_retained_event_rows_changed(total_rows);
+        }
+        Ok(total_rows)
+    }
+
     pub async fn cleanup_expired_events(&self) -> Result<u64> {
         let cutoff = Utc::now() - Duration::hours(self.retention_hours);
         let deleted = sqlx::query(
@@ -204,6 +233,14 @@ impl OpenClawGatewayEventService {
         .await
         .context("Failed to cleanup expired OpenClaw gateway events")?
         .rows_affected();
+
+        if deleted > 0 {
+            if let Err(error) = self.bump_retained_event_rows(-(deleted as i64)).await {
+                tracing::warn!(
+                    "Failed to update OpenClaw retained-row metric after cleanup: {error}"
+                );
+            }
+        }
 
         Ok(deleted)
     }
@@ -375,6 +412,21 @@ impl OpenClawGatewayEventService {
                 );
             }
         });
+    }
+
+    async fn bump_retained_event_rows(&self, delta: i64) -> Result<()> {
+        let current = self.retained_event_rows.load(Ordering::Relaxed);
+        if current < 0 {
+            self.sync_retained_event_row_count_metric().await?;
+            return Ok(());
+        }
+
+        let next = (current + delta).max(0);
+        self.retained_event_rows.store(next, Ordering::Relaxed);
+        if let Some(observer) = &self.metrics_observer {
+            observer.on_retained_event_rows_changed(next);
+        }
+        Ok(())
     }
 }
 

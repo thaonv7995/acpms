@@ -605,6 +605,14 @@ pub async fn events_stream(
     }
 
     let live_rx = state.openclaw_event_service.subscribe_live();
+    if let Some(after) = after_cursor {
+        tracing::info!(
+            after_cursor = after,
+            user_agent = user_agent.as_deref().unwrap_or("-"),
+            forwarded_for = forwarded_for.as_deref().unwrap_or("-"),
+            "OpenClaw event stream replay started"
+        );
+    }
     let replay_events = if let Some(after) = after_cursor {
         state
             .openclaw_event_service
@@ -614,6 +622,15 @@ pub async fn events_stream(
     } else {
         Vec::new()
     };
+    if let Some(after) = after_cursor {
+        tracing::info!(
+            after_cursor = after,
+            replay_count = replay_events.len(),
+            user_agent = user_agent.as_deref().unwrap_or("-"),
+            forwarded_for = forwarded_for.as_deref().unwrap_or("-"),
+            "OpenClaw event stream replay completed"
+        );
+    }
     let stream_mode = if after_cursor.is_some() {
         "resume"
     } else {

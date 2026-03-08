@@ -85,6 +85,8 @@ pub struct Metrics {
     #[allow(dead_code)]
     pub openclaw_event_stream_cursor_expired_total: IntCounterVec,
     #[allow(dead_code)]
+    pub openclaw_retained_event_rows: IntGauge,
+    #[allow(dead_code)]
     pub openclaw_events_recorded_total: IntCounterVec,
     #[allow(dead_code)]
     pub openclaw_webhook_deliveries_total: IntCounterVec,
@@ -351,6 +353,12 @@ impl Metrics {
         )?;
         registry.register(Box::new(openclaw_event_stream_cursor_expired_total.clone()))?;
 
+        let openclaw_retained_event_rows = IntGauge::new(
+            "acpms_openclaw_retained_event_rows",
+            "Number of retained OpenClaw gateway event rows after cleanup",
+        )?;
+        registry.register(Box::new(openclaw_retained_event_rows.clone()))?;
+
         let openclaw_events_recorded_total = IntCounterVec::new(
             Opts::new(
                 "openclaw_events_recorded_total",
@@ -413,6 +421,7 @@ impl Metrics {
             openclaw_event_stream_active_connections,
             openclaw_event_stream_replay_events_total,
             openclaw_event_stream_cursor_expired_total,
+            openclaw_retained_event_rows,
             openclaw_events_recorded_total,
             openclaw_webhook_deliveries_total,
             openclaw_webhook_duration_seconds,
@@ -456,6 +465,10 @@ impl OpenClawGatewayMetricsObserver for Metrics {
         self.openclaw_webhook_duration_seconds
             .with_label_values(&[result])
             .observe(duration_seconds);
+    }
+
+    fn on_retained_event_rows_changed(&self, total_rows: i64) {
+        self.openclaw_retained_event_rows.set(total_rows);
     }
 }
 
@@ -538,6 +551,7 @@ mod tests {
             .openclaw_event_stream_cursor_expired_total
             .with_label_values(&["stale_cursor"])
             .inc();
+        metrics.on_retained_event_rows_changed(7);
         metrics.on_event_recorded("attempt.completed");
         metrics.on_webhook_delivery(true, Some(200), 0.12);
 
@@ -560,6 +574,7 @@ mod tests {
         assert!(encoded.contains("acpms_openclaw_event_stream_active_connections"));
         assert!(encoded.contains("acpms_openclaw_event_stream_replay_events_total"));
         assert!(encoded.contains("acpms_openclaw_event_stream_cursor_expired_total"));
+        assert!(encoded.contains("acpms_openclaw_retained_event_rows"));
         assert!(encoded.contains("acpms_openclaw_events_recorded_total"));
         assert!(encoded.contains("acpms_openclaw_webhook_deliveries_total"));
         assert!(encoded.contains("acpms_openclaw_webhook_duration_seconds_bucket"));

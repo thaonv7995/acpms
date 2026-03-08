@@ -22,7 +22,6 @@ Implementation status after the first code delivery:
     *   custom OpenClaw OpenAPI entries are present, but not yet modeled with full `utoipa` path annotations
     *   lifecycle emission is wired for the main ACPMS and GitLab merge flows, but not yet for every possible status mutation path across the whole system
 *   **Still open**:
-    *   operational metrics for the stream and webhook transport
     *   a few higher-order replay/live-delivery integration scenarios
 
 ## 1. Goal
@@ -382,8 +381,8 @@ These rules should be implemented exactly to avoid ambiguous client behavior.
 
 - [x] Event serialization/deserialization
 - [x] Cursor parsing and validation
-- [ ] Replay query ordering
-- [ ] Retention cutoff cleanup
+- [x] Replay query ordering
+- [x] Retention cutoff cleanup
 - [x] Installer prompt rendering from runtime config
 - [x] Bootstrap response serialization including `operating_rules`
 
@@ -415,12 +414,12 @@ These rules should be implemented exactly to avoid ambiguous client behavior.
 
 ## 8. Operational Checklist
 
-- [ ] Add metrics:
+- [x] Add metrics:
   - active OpenClaw event stream connections
   - replayed event count
   - retained event row count
   - replay cursor expired count
-- [ ] Add structured logs for stream open, replay start, replay end, disconnect, and auth failure.
+- [x] Add structured logs for stream open, replay start, replay end, disconnect, and auth failure.
 - [x] Add a retention cleanup schedule.
 - [ ] Add a feature flag only if rollout needs staged enablement beyond `OPENCLAW_GATEWAY_ENABLED`.
 
@@ -483,4 +482,4 @@ Actual implementation progress so far:
 4.  **Completed (main flows)**: attempt lifecycle + task status emission wiring
 5.  **Completed (first pass)**: installer handoff prompt and saved prompt file
 6.  **Completed**: optional webhook compatibility, cursor-expiry handling, richer auth/expiry/WS tests, and additional GitLab merge task-status coverage
-7.  **Remaining**: stream/webhook metrics and fuller manual replay/live-delivery verification
+7.  **Remaining**: fuller manual replay/live-delivery verification
