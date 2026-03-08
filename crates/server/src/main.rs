@@ -1690,13 +1690,16 @@ async fn main() -> anyhow::Result<()> {
     // Initialize encryption service
     let encryption_key = std::env::var("ENCRYPTION_KEY").context("ENCRYPTION_KEY must be set")?;
     let encryption_service = Arc::new(EncryptionService::new(&encryption_key)?);
+    let metrics = Metrics::new()?;
+    tracing::info!("Prometheus metrics initialized");
     let openclaw_gateway = Arc::new(OpenClawGatewayConfig::from_env());
     let openclaw_event_service = Arc::new(
         OpenClawGatewayEventService::new(pool.clone(), openclaw_gateway.event_retention_hours)
             .with_optional_webhook(
                 openclaw_gateway.webhook_url.clone(),
                 openclaw_gateway.webhook_secret.clone(),
-            ),
+            )
+            .with_metrics_observer(Arc::new(metrics.clone())),
     );
 
     // Initialize Services
@@ -1847,10 +1850,6 @@ async fn main() -> anyhow::Result<()> {
         .ok()
         .and_then(|s| s.parse().ok())
         .unwrap_or(4);
-
-    // Initialize metrics
-    let metrics = Metrics::new()?;
-    tracing::info!("Prometheus metrics initialized");
 
     // Phase 3: Initialize JSON Patch streaming infrastructure
     let patch_store = Arc::new(acpms_services::PatchStore::new(100)); // Keep last 100 patches

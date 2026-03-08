@@ -6,11 +6,17 @@ use hmac::{Hmac, Mac};
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 use sha2::Sha256;
+use std::{sync::Arc, time::Instant};
 use tokio::sync::broadcast;
 use uuid::Uuid;
 
 const OPENCLAW_WEBHOOK_SIGNATURE_HEADER: &str = "X-Agentic-Signature";
 type HmacSha256 = Hmac<Sha256>;
+
+pub trait OpenClawGatewayMetricsObserver: Send + Sync {
+    fn on_event_recorded(&self, event_type: &str);
+    fn on_webhook_delivery(&self, success: bool, status_code: Option<u16>, duration_seconds: f64);
+}
 
 #[derive(Debug, Clone, Serialize, Deserialize, sqlx::FromRow)]
 pub struct OpenClawGatewayEvent {
@@ -47,6 +53,7 @@ pub struct OpenClawGatewayEventService {
     retention_hours: i64,
     http_client: reqwest::Client,
     webhook: Option<OpenClawGatewayWebhookConfig>,
+    metrics_observer: Option<Arc<dyn OpenClawGatewayMetricsObserver>>,
 }
 
 impl OpenClawGatewayEventService {
@@ -58,6 +65,7 @@ impl OpenClawGatewayEventService {
             retention_hours,
             http_client: reqwest::Client::new(),
             webhook: None,
+            metrics_observer: None,
         }
     }
 
@@ -77,6 +85,14 @@ impl OpenClawGatewayEventService {
             (Some(url), Some(secret)) => Some(OpenClawGatewayWebhookConfig { url, secret }),
             _ => None,
         };
+        self
+    }
+
+    pub fn with_metrics_observer(
+        mut self,
+        metrics_observer: Arc<dyn OpenClawGatewayMetricsObserver>,
+    ) -> Self {
+        self.metrics_observer = Some(metrics_observer);
         self
     }
 
@@ -125,6 +141,9 @@ impl OpenClawGatewayEventService {
         .context("Failed to insert OpenClaw gateway event")?;
 
         let _ = self.live_tx.send(stored.clone());
+        if let Some(observer) = &self.metrics_observer {
+            observer.on_event_recorded(&stored.event_type);
+        }
         self.dispatch_optional_webhook(stored.clone());
         Ok(stored)
     }
@@ -336,8 +355,18 @@ impl OpenClawGatewayEventService {
         };
 
         let client = self.http_client.clone();
+        let metrics_observer = self.metrics_observer.clone();
         tokio::spawn(async move {
-            if let Err(error) = send_webhook_event(client, webhook, event.clone()).await {
+            let started_at = Instant::now();
+            let (status_code, result) = send_webhook_event(client, webhook, event.clone()).await;
+            if let Some(observer) = &metrics_observer {
+                observer.on_webhook_delivery(
+                    result.is_ok(),
+                    status_code,
+                    started_at.elapsed().as_secs_f64(),
+                );
+            }
+            if let Err(error) = result {
                 tracing::warn!(
                     sequence_id = event.sequence_id,
                     event_type = %event.event_type,
@@ -360,9 +389,15 @@ async fn send_webhook_event(
     client: reqwest::Client,
     webhook: OpenClawGatewayWebhookConfig,
     event: OpenClawGatewayEvent,
-) -> Result<()> {
-    let payload = serde_json::to_vec(&event).context("Failed to serialize OpenClaw webhook")?;
-    let signature = build_webhook_signature(&webhook.secret, &payload)?;
+) -> (Option<u16>, Result<()>) {
+    let payload = match serde_json::to_vec(&event).context("Failed to serialize OpenClaw webhook") {
+        Ok(payload) => payload,
+        Err(error) => return (None, Err(error)),
+    };
+    let signature = match build_webhook_signature(&webhook.secret, &payload) {
+        Ok(signature) => signature,
+        Err(error) => return (None, Err(error)),
+    };
 
     let response = client
         .post(&webhook.url)
@@ -373,16 +408,23 @@ async fn send_webhook_event(
         .body(payload)
         .send()
         .await
-        .context("Failed to send OpenClaw webhook")?;
+        .context("Failed to send OpenClaw webhook");
+
+    let response = match response {
+        Ok(response) => response,
+        Err(error) => return (None, Err(error)),
+    };
+
+    let status_code = response.status().as_u16();
 
     if !response.status().is_success() {
-        anyhow::bail!(
+        return (Some(status_code), Err(anyhow::anyhow!(
             "OpenClaw webhook returned non-success status {}",
             response.status()
-        );
+        )));
     }
 
-    Ok(())
+    (Some(status_code), Ok(()))
 }
 
 #[derive(Debug, sqlx::FromRow)]

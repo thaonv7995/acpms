@@ -75,7 +75,14 @@ pub async fn authenticate_openclaw_token(
     state: &AppState,
     token: &str,
 ) -> Result<AuthUser, ApiError> {
-    ensure_gateway_enabled(&state.openclaw_gateway)?;
+    if let Err(error) = ensure_gateway_enabled(&state.openclaw_gateway) {
+        state
+            .metrics
+            .openclaw_gateway_auth_total
+            .with_label_values(&["forbidden"])
+            .inc();
+        return Err(error);
+    }
 
     let expected = state
         .openclaw_gateway
@@ -84,10 +91,30 @@ pub async fn authenticate_openclaw_token(
         .ok_or_else(|| ApiError::Forbidden("OpenClaw gateway is not configured".to_string()))?;
 
     if token != expected {
+        state
+            .metrics
+            .openclaw_gateway_auth_total
+            .with_label_values(&["unauthorized"])
+            .inc();
         return Err(ApiError::Unauthorized);
     }
 
-    let actor_user_id = resolve_actor_user_id(state).await?;
+    let actor_user_id = match resolve_actor_user_id(state).await {
+        Ok(actor_user_id) => actor_user_id,
+        Err(error) => {
+            state
+                .metrics
+                .openclaw_gateway_auth_total
+                .with_label_values(&["internal_error"])
+                .inc();
+            return Err(error);
+        }
+    };
+    state
+        .metrics
+        .openclaw_gateway_auth_total
+        .with_label_values(&["success"])
+        .inc();
     Ok(AuthUser {
         id: actor_user_id,
         jti: "openclaw-gateway".to_string(),

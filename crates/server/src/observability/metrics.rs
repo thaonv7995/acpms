@@ -3,6 +3,8 @@ use prometheus::{
 };
 use std::sync::Arc;
 
+use acpms_services::OpenClawGatewayMetricsObserver;
+
 /// Application metrics for Prometheus monitoring
 #[derive(Clone)]
 pub struct Metrics {
@@ -70,6 +72,24 @@ pub struct Metrics {
     pub repository_backfill_total: IntCounterVec,
     #[allow(dead_code)]
     pub repository_attempt_blocks_total: IntCounterVec,
+
+    // OpenClaw gateway metrics
+    #[allow(dead_code)]
+    pub openclaw_gateway_auth_total: IntCounterVec,
+    #[allow(dead_code)]
+    pub openclaw_event_stream_connections_total: IntCounterVec,
+    #[allow(dead_code)]
+    pub openclaw_event_stream_active_connections: IntGauge,
+    #[allow(dead_code)]
+    pub openclaw_event_stream_replay_events_total: IntCounterVec,
+    #[allow(dead_code)]
+    pub openclaw_event_stream_cursor_expired_total: IntCounterVec,
+    #[allow(dead_code)]
+    pub openclaw_events_recorded_total: IntCounterVec,
+    #[allow(dead_code)]
+    pub openclaw_webhook_deliveries_total: IntCounterVec,
+    #[allow(dead_code)]
+    pub openclaw_webhook_duration_seconds: HistogramVec,
 }
 
 impl Metrics {
@@ -285,6 +305,85 @@ impl Metrics {
         )?;
         registry.register(Box::new(repository_attempt_blocks_total.clone()))?;
 
+        let openclaw_gateway_auth_total = IntCounterVec::new(
+            Opts::new(
+                "openclaw_gateway_auth_total",
+                "Total number of OpenClaw gateway auth attempts by result",
+            )
+            .namespace("acpms"),
+            &["result"],
+        )?;
+        registry.register(Box::new(openclaw_gateway_auth_total.clone()))?;
+
+        let openclaw_event_stream_connections_total = IntCounterVec::new(
+            Opts::new(
+                "openclaw_event_stream_connections_total",
+                "Total number of OpenClaw event stream connections by mode",
+            )
+            .namespace("acpms"),
+            &["mode"],
+        )?;
+        registry.register(Box::new(openclaw_event_stream_connections_total.clone()))?;
+
+        let openclaw_event_stream_active_connections = IntGauge::new(
+            "acpms_openclaw_event_stream_active_connections",
+            "Number of active OpenClaw event stream connections",
+        )?;
+        registry.register(Box::new(openclaw_event_stream_active_connections.clone()))?;
+
+        let openclaw_event_stream_replay_events_total = IntCounterVec::new(
+            Opts::new(
+                "openclaw_event_stream_replay_events_total",
+                "Total number of replayed OpenClaw events by stream mode",
+            )
+            .namespace("acpms"),
+            &["mode"],
+        )?;
+        registry.register(Box::new(openclaw_event_stream_replay_events_total.clone()))?;
+
+        let openclaw_event_stream_cursor_expired_total = IntCounterVec::new(
+            Opts::new(
+                "openclaw_event_stream_cursor_expired_total",
+                "Total number of stale OpenClaw event stream cursor failures",
+            )
+            .namespace("acpms"),
+            &["reason"],
+        )?;
+        registry.register(Box::new(
+            openclaw_event_stream_cursor_expired_total.clone(),
+        ))?;
+
+        let openclaw_events_recorded_total = IntCounterVec::new(
+            Opts::new(
+                "openclaw_events_recorded_total",
+                "Total number of OpenClaw gateway events persisted by event type",
+            )
+            .namespace("acpms"),
+            &["event_type"],
+        )?;
+        registry.register(Box::new(openclaw_events_recorded_total.clone()))?;
+
+        let openclaw_webhook_deliveries_total = IntCounterVec::new(
+            Opts::new(
+                "openclaw_webhook_deliveries_total",
+                "Total number of OpenClaw webhook delivery attempts by result and status class",
+            )
+            .namespace("acpms"),
+            &["result", "status_class"],
+        )?;
+        registry.register(Box::new(openclaw_webhook_deliveries_total.clone()))?;
+
+        let openclaw_webhook_duration_seconds = HistogramVec::new(
+            HistogramOpts::new(
+                "openclaw_webhook_duration_seconds",
+                "OpenClaw webhook delivery duration in seconds",
+            )
+            .namespace("acpms")
+            .buckets(vec![0.001, 0.01, 0.05, 0.1, 0.5, 1.0, 5.0, 10.0]),
+            &["result"],
+        )?;
+        registry.register(Box::new(openclaw_webhook_duration_seconds.clone()))?;
+
         Ok(Self {
             registry,
             http_requests_total,
@@ -311,6 +410,14 @@ impl Metrics {
             repository_fork_operations_total,
             repository_backfill_total,
             repository_attempt_blocks_total,
+            openclaw_gateway_auth_total,
+            openclaw_event_stream_connections_total,
+            openclaw_event_stream_active_connections,
+            openclaw_event_stream_replay_events_total,
+            openclaw_event_stream_cursor_expired_total,
+            openclaw_events_recorded_total,
+            openclaw_webhook_deliveries_total,
+            openclaw_webhook_duration_seconds,
         })
     }
 
@@ -325,8 +432,39 @@ impl Metrics {
     }
 }
 
+impl OpenClawGatewayMetricsObserver for Metrics {
+    fn on_event_recorded(&self, event_type: &str) {
+        self.openclaw_events_recorded_total
+            .with_label_values(&[event_type])
+            .inc();
+    }
+
+    fn on_webhook_delivery(&self, success: bool, status_code: Option<u16>, duration_seconds: f64) {
+        let result = if success { "success" } else { "failure" };
+        let status_class = match status_code {
+            Some(code) => match code / 100 {
+                2 => "2xx",
+                3 => "3xx",
+                4 => "4xx",
+                5 => "5xx",
+                _ => "other",
+            },
+            None => "none",
+        };
+
+        self.openclaw_webhook_deliveries_total
+            .with_label_values(&[result, status_class])
+            .inc();
+        self.openclaw_webhook_duration_seconds
+            .with_label_values(&[result])
+            .observe(duration_seconds);
+    }
+}
+
 #[cfg(test)]
 mod tests {
+    use acpms_services::OpenClawGatewayMetricsObserver;
+
     use super::Metrics;
 
     #[test]
@@ -385,6 +523,25 @@ mod tests {
             .repository_attempt_blocks_total
             .with_label_values(&["unknown", "unknown"])
             .inc();
+        metrics
+            .openclaw_gateway_auth_total
+            .with_label_values(&["success"])
+            .inc();
+        metrics
+            .openclaw_event_stream_connections_total
+            .with_label_values(&["resume"])
+            .inc();
+        metrics.openclaw_event_stream_active_connections.inc();
+        metrics
+            .openclaw_event_stream_replay_events_total
+            .with_label_values(&["resume"])
+            .inc_by(3);
+        metrics
+            .openclaw_event_stream_cursor_expired_total
+            .with_label_values(&["stale_cursor"])
+            .inc();
+        metrics.on_event_recorded("attempt.completed");
+        metrics.on_webhook_delivery(true, Some(200), 0.12);
 
         let encoded = metrics.encode().expect("metrics should encode");
 
@@ -400,6 +557,14 @@ mod tests {
         assert!(encoded.contains("acpms_repository_fork_operations_total"));
         assert!(encoded.contains("acpms_repository_backfill_total"));
         assert!(encoded.contains("acpms_repository_attempt_blocks_total"));
+        assert!(encoded.contains("acpms_openclaw_gateway_auth_total"));
+        assert!(encoded.contains("acpms_openclaw_event_stream_connections_total"));
+        assert!(encoded.contains("acpms_openclaw_event_stream_active_connections"));
+        assert!(encoded.contains("acpms_openclaw_event_stream_replay_events_total"));
+        assert!(encoded.contains("acpms_openclaw_event_stream_cursor_expired_total"));
+        assert!(encoded.contains("acpms_openclaw_events_recorded_total"));
+        assert!(encoded.contains("acpms_openclaw_webhook_deliveries_total"));
+        assert!(encoded.contains("acpms_openclaw_webhook_duration_seconds_bucket"));
         assert!(encoded.contains("environment=\"dev\""));
     }
 }

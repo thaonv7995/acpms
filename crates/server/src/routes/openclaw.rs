@@ -144,6 +144,7 @@ struct OpenClawEventCursorExpiredData {
 }
 
 struct OpenClawEventStreamDisconnectGuard {
+    metrics: crate::observability::Metrics,
     after_cursor: Option<i64>,
     replay_count: usize,
     user_agent: Option<String>,
@@ -152,6 +153,7 @@ struct OpenClawEventStreamDisconnectGuard {
 
 impl Drop for OpenClawEventStreamDisconnectGuard {
     fn drop(&mut self) {
+        self.metrics.openclaw_event_stream_active_connections.dec();
         tracing::info!(
             after_cursor = self.after_cursor,
             replay_count = self.replay_count,
@@ -525,6 +527,11 @@ pub async fn events_stream(
             .map_err(|error| crate::error::ApiError::Internal(error.to_string()))?
         {
             if after < oldest.saturating_sub(1) {
+                state
+                    .metrics
+                    .openclaw_event_stream_cursor_expired_total
+                    .with_label_values(&["stale_cursor"])
+                    .inc();
                 tracing::warn!(
                     after_cursor = after,
                     oldest_available_event_id = oldest,
@@ -547,6 +554,20 @@ pub async fn events_stream(
     } else {
         Vec::new()
     };
+    let stream_mode = if after_cursor.is_some() { "resume" } else { "live" };
+    state
+        .metrics
+        .openclaw_event_stream_connections_total
+        .with_label_values(&[stream_mode])
+        .inc();
+    state.metrics.openclaw_event_stream_active_connections.inc();
+    if !replay_events.is_empty() {
+        state
+            .metrics
+            .openclaw_event_stream_replay_events_total
+            .with_label_values(&[stream_mode])
+            .inc_by(replay_events.len() as u64);
+    }
     tracing::info!(
         after_cursor = after_cursor,
         replay_count = replay_events.len(),
@@ -561,6 +582,7 @@ pub async fn events_stream(
             .unwrap_or(after_cursor.unwrap_or(0)),
     ));
     let disconnect_guard = Arc::new(OpenClawEventStreamDisconnectGuard {
+        metrics: state.metrics.clone(),
         after_cursor,
         replay_count: replay_events.len(),
         user_agent,

@@ -129,13 +129,16 @@ pub async fn create_test_app_state(pool: PgPool) -> AppState {
         .expect("Failed to create orchestrator")
         .with_skill_knowledge(acpms_executors::SkillKnowledgeHandle::disabled()),
     );
+    let metrics = acpms_server::observability::Metrics::new()
+        .expect("Failed to initialize metrics for tests");
     let openclaw_gateway = Arc::new(OpenClawGatewayConfig::from_env());
     let openclaw_event_service = Arc::new(
         OpenClawGatewayEventService::new(pool.clone(), openclaw_gateway.event_retention_hours)
             .with_optional_webhook(
                 openclaw_gateway.webhook_url.clone(),
                 openclaw_gateway.webhook_secret.clone(),
-            ),
+            )
+            .with_metrics_observer(Arc::new(metrics.clone())),
     );
 
     // Initialize Services (GitLabService returns Result)
@@ -214,8 +217,7 @@ pub async fn create_test_app_state(pool: PgPool) -> AppState {
     let mut state = AppState {
         worktrees_path: worktrees_path.clone(),
         db: pool,
-        metrics: acpms_server::observability::Metrics::new()
-            .expect("Failed to initialize metrics for tests"),
+        metrics,
         orchestrator,
         worker_pool: None,
         deployment_worker_pool: None,
