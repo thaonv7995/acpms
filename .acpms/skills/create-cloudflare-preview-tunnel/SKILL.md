@@ -1,60 +1,82 @@
 ---
 name: create-cloudflare-preview-tunnel
-description: Create Cloudflare tunnel for preview. Use when agent needs to expose local runtime for preview. On config missing or error, agent must log a user-friendly message (see Log for User).
+description: Create a public Cloudflare preview URL for an already-running local preview runtime, then persist the correct ACPMS preview contract.
 ---
 
 # Create Cloudflare Preview Tunnel
 
 ## Objective
-Create Cloudflare tunnel to expose local runtime for preview. Read config from ACPMS-injected env vars (`CLOUDFLARE_ACCOUNT_ID`, `CLOUDFLARE_API_TOKEN`, `CLOUDFLARE_ZONE_ID`, `CLOUDFLARE_BASE_DOMAIN`). When config is missing or tunnel creation fails, **agent must output a message** that appears in the attempt log for the user.
+Expose a working local preview runtime through a public Cloudflare URL and
+persist the result without breaking the local preview contract.
+
+This skill runs after the local runtime is already healthy. It should never be
+used as a substitute for starting the runtime itself.
+
+## When This Applies
+- Local preview is already reachable
+- ACPMS wants a public preview URL
+- Cloudflare configuration is available
+- The task is allowed to create or refresh preview routing
 
 ## Inputs
-- Local runtime port (e.g. from dev-server)
-- Env vars injected by ACPMS:
+- Local runtime URL such as `http://127.0.0.1:<port>`
+- ACPMS-injected env vars:
   - `CLOUDFLARE_ACCOUNT_ID`
   - `CLOUDFLARE_API_TOKEN`
   - `CLOUDFLARE_ZONE_ID`
   - `CLOUDFLARE_BASE_DOMAIN`
+- Existing `.acpms/preview-output.json`, if the preview contract already exists
 
 ## Workflow
-1. Read Cloudflare config from the env vars above.
-2. If config missing or invalid → output message for user (see Log for User).
-3. Create tunnel route to `http://127.0.0.1:<port>`.
-4. Validate route responds.
-5. Emit preview fields.
-
-## Required Output (Success)
-
-### Option A — File contract (recommended)
-Ghi `.acpms/preview-output.json`: `{"preview_target": "http://127.0.0.1:<port>", "preview_url": "https://..."}`
-
-### Option B — Log output (fallback)
-- `PREVIEW_TARGET: http://127.0.0.1:<port>`
-- `PREVIEW_URL: https://...` (when tunnel created)
-
-## Log for User
-**Agent must output these messages** when they occur—they appear in the attempt log (chat session). Do not rely on backend to log; the agent reports to the user.
-
-| Condition | Message to output |
-|-----------|-------------------|
-| Config missing (account_id or api_token) | Cloudflare is not configured. Configure in System Settings (/settings) to enable preview. Task completed successfully. |
-| Token invalid / tunnel creation failed | Cloudflare tunnel could not be created. Check System Settings (/settings). Task completed successfully. |
-| Local runtime not reachable | Local service is not reachable. Check that the dev server is running. |
-
-Also emit machine-parseable lines when applicable:
-- `CLOUDFLARE_CONFIG_NEEDED: true` (when config missing)
-- `CLOUDFLARE_TUNNEL_ERROR: <short reason>` (when tunnel failed)
+1. Confirm the local runtime is reachable with a real HTTP check.
+2. Read and normalize Cloudflare env vars.
+3. If Cloudflare config is incomplete, stop public preview work and keep local
+   preview only.
+4. Create the Cloudflare tunnel/public route for the local runtime.
+5. Verify the resulting public preview URL.
+6. Write `.acpms/preview-output.json` with:
+   - local `preview_target`
+   - public `preview_url`
+   - runtime control metadata when available
+7. Emit machine-parseable preview lines.
 
 ## Decision Rules
 | Situation | Action |
-|-----------|--------|
-| Config present, tunnel OK | Emit PREVIEW_TARGET + PREVIEW_URL |
-| Config missing | Output Log for User message + CLOUDFLARE_CONFIG_NEEDED |
-| Token invalid / tunnel failed | Output Log for User message + CLOUDFLARE_TUNNEL_ERROR |
-| Local runtime not reachable | Output Log for User message; do not blame Cloudflare |
+|---|---|
+| Local runtime not reachable | Stop; do not attempt Cloudflare |
+| Cloudflare config missing | Keep local preview only and emit a clear message |
+| Tunnel creation succeeds | Use public URL in `PREVIEW_URL` |
+| Tunnel creation fails | Keep local preview only and emit `CLOUDFLARE_TUNNEL_ERROR` |
 
 ## Guardrails
-- Never hardcode credentials; read only from the ACPMS-injected env vars.
-- On error: agent must output the Log for User message—do not assume backend will log.
-- Tunnel/deployment errors must not fail the attempt (handled by backend).
-- When Cloudflare config is present, do not silently stop at local preview only. Try to create the public URL first, then fall back only if tunnel creation really fails.
+- Never output a public URL as `PREVIEW_TARGET`
+- Never claim public preview success before verifying the public URL
+- Never hide a tunnel failure; emit the reason clearly
+- Never fail the entire task only because public preview failed if local preview
+  is still healthy and the wider task can continue
+
+## Log for User
+- `Cloudflare is not configured. Local preview is available, but public preview URL could not be created.`
+- `Cloudflare tunnel could not be created. Local preview is still available.`
+- `Local preview runtime is not reachable. Fix the runtime before creating a public preview URL.`
+
+## Output Contract
+Preferred file output:
+
+```json
+{
+  "preview_target": "http://127.0.0.1:3000",
+  "preview_url": "https://preview.example.com"
+}
+```
+
+Required log lines:
+- `PREVIEW_TARGET: http://127.0.0.1:<port>`
+- `PREVIEW_URL: <public-or-local-url>`
+- `CLOUDFLARE_TUNNEL_ERROR: <reason>` when applicable
+
+## Related Skills
+- `cloudflare-config-validate`
+- `setup-cloudflare-tunnel`
+- `cloudflare-dns-route`
+- `preview-docker-runtime`

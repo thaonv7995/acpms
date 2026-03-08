@@ -6,39 +6,53 @@ description: Gate Web/API auto-deploy by checking Cloudflare readiness and apply
 # Deploy Precheck Cloudflare
 
 ## Objective
-Enforce safe deploy gating for Web/API auto-deploy so attempts can still complete when Cloudflare is not configured. When Cloudflare is missing, **agent must output a message** for the user in the attempt log.
+Gate Cloudflare preview or auto-deploy safely so a task can still succeed when
+Cloudflare is intentionally not configured. This skill decides whether the
+Cloudflare path is ready, not whether the whole task should fail.
+
+## When This Applies
+- ACPMS has `preview_enabled` or `auto_deploy` semantics for a web or API project
+- The flow needs to decide whether to attempt Cloudflare preview/public deploy
+- A task should still complete cleanly when Cloudflare is unavailable
 
 ## Inputs
-- `auto_deploy` flag resolved from task/project settings.
-- Project type.
-- Cloudflare configuration availability from env vars injected by ACPMS:
+- `auto_deploy` and preview-related flags resolved from task or project settings
+- Project type
+- ACPMS-injected Cloudflare env:
   - `CLOUDFLARE_ACCOUNT_ID`
   - `CLOUDFLARE_API_TOKEN`
   - `CLOUDFLARE_ZONE_ID`
   - `CLOUDFLARE_BASE_DOMAIN`
 
-## Decision Table
-| Condition | Result |
+## Workflow
+1. Resolve whether the current task actually requires deploy or preview gating.
+2. Check project type before touching Cloudflare-specific logic.
+3. Validate whether all required Cloudflare env vars are present.
+4. Emit one clear status:
+   - `ready`
+   - `not_required`
+   - `skipped_cloudflare_not_configured`
+5. If skipped, log the user-facing message and let the broader task continue.
+
+## Decision Rules
+| Situation | Action |
 |---|---|
-| `auto_deploy=false` | `DEPLOY_PRECHECK=not_required` |
-| project type not `web` or `api` | `DEPLOY_PRECHECK=not_required` |
-| `preview_enabled/auto_deploy` and all 4 Cloudflare env vars present | `DEPLOY_PRECHECK=ready` |
-| `preview_enabled/auto_deploy` and any Cloudflare env var missing | `DEPLOY_PRECHECK=skipped_cloudflare_not_configured` |
+| Web/API project with preview/deploy enabled and all vars present | Mark `DEPLOY_PRECHECK=ready`. |
+| Preview/deploy is not required for this task | Mark `DEPLOY_PRECHECK=not_required`. |
+| Any required Cloudflare var is missing | Mark `skipped_cloudflare_not_configured`, emit the user-facing log message, and stop Cloudflare steps only. |
 
 ## Log for User
-**Agent must output this message** when Cloudflare is not configured—it appears in the attempt log (chat session). Do not use technical wording.
+When Cloudflare is missing, emit:
 
-| Condition | Message to output |
-|-----------|-------------------|
-| Cloudflare missing (auto_deploy=true) | Cloudflare is not configured. Configure in System Settings (/settings) to enable preview. Task completed successfully. |
-
-## Required Behavior When Cloudflare Missing
-1. Do not execute deploy/tunnel steps.
-2. **Output the Log for User message** so the user sees it in the attempt log.
-3. Emit `DEPLOY_PRECHECK=skipped_cloudflare_not_configured`.
-4. Continue completion flow (attempt succeeds).
+`Cloudflare is not configured. Configure it in System Settings (/settings) to enable preview. Task completed successfully.`
 
 ## Output Contract
-Include:
-- `DEPLOY_PRECHECK`: `ready` | `not_required` | `skipped_cloudflare_not_configured`.
-- `DEPLOY_PRECHECK_REASON`: one-line reason.
+Emit:
+- `DEPLOY_PRECHECK`
+- `DEPLOY_PRECHECK_REASON`
+
+## Related Skills
+- `preview-docker-runtime`
+- `setup-cloudflare-tunnel`
+- `create-cloudflare-preview-tunnel`
+- `update-deployment-metadata`

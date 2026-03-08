@@ -6,35 +6,43 @@ description: Prepare complete handoff package when require-review mode is enable
 # Review Handoff
 
 ## Objective
-Hand over task output to human review with enough evidence to approve safely.
+Hand over task output to human review with enough evidence to approve safely,
+without pretending the task is fully merge-ready when key gaps remain.
+
+## When This Applies
+- `require_review` is enabled and ACPMS should not auto-complete by merging or pushing further
+- The task is ready for human review but still needs a clear handoff summary
+- Verification is complete enough to review, even if one or two explicit gaps remain
 
 ## Inputs
-- Task output in worktree.
-- Verification results.
-- Review-required policy state.
+- Task output in the worktree
+- Verification results
+- Review-required policy state
 
 ## Workflow
-1. Ensure code changes are complete and scoped.
-2. Do not commit or push in review-required mode.
-3. Prepare reviewer summary with changed files and rationale.
-4. Highlight risks, TODOs, and validation gaps.
-5. Mark clear approval instructions.
+1. Ensure the change set is complete and scoped.
+2. Do not commit or push in review-required mode unless the workflow explicitly allows it.
+3. Prepare a reviewer summary with changed files and rationale.
+4. Highlight known risks, TODOs, and validation gaps.
+5. State the reviewer action needed to move forward.
 
 ## Decision Rules
 | Situation | Action |
 |---|---|
-| Verification incomplete due environment limits | Report exact gap and impact before handoff. |
-| Unrelated diff exists | Exclude from handoff scope and call out explicitly. |
-| Follow-up required before merge | Mark as `needs_followup` with owner/action. |
-
-## Guardrails
-- Never claim release-ready if essential checks were skipped.
-- Do not include hidden assumptions.
+| Verification is incomplete due to environment limits | Report the exact gap and impact before handoff. |
+| Unrelated diff exists | Exclude it from handoff scope and call it out explicitly. |
+| Follow-up is required before merge | Mark `needs_followup` with a concrete action. |
 
 ## Output Contract
-Include:
+Emit:
 - `handoff_status`: `ready_for_review` | `needs_followup`
 - `changed_files`
 - `verification_summary`
 - `known_risks`
 - `reviewer_actions`
+
+## Related Skills
+- `verify-test-build`
+- `gitlab-merge-request`
+- `final-report`
+- `update-deployment-metadata`

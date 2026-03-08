@@ -1,75 +1,104 @@
 ---
 name: cloudflare-tunnel-setup-guide
-description: Guide for Cloudflare tunnel preview. Use when agent needs to output PREVIEW_TARGET or when Cloudflare tunnel/preview is involved. Agent must verify and report all 4 required System Settings fields (Account ID, API Token, Zone ID, Base Domain).
+description: Explain and enforce the ACPMS contract for public preview tunnels: local runtime first, Cloudflare public URL second, and machine-parseable preview fields at the end.
 ---
 
 # Cloudflare Tunnel Setup Guide
 
-## Constraint (Required)
-When this skill is active (auto_deploy enabled), you **MUST** output PREVIEW_TARGET before finishing. Without it, the preview tunnel will be skipped.
-- Start the preview runtime first (e.g. `docker compose up -d`, `npm run dev`).
-- Then emit `PREVIEW_TARGET: http://127.0.0.1:<port>` or create `.acpms/preview-output.json`.
-
 ## Objective
-Ensure preview tunnel works by guiding the agent to output correct fields and report when System Settings are incomplete. The **backend** creates the tunnel after the agent outputs `PREVIEW_TARGET`; if backend fails, the agent must help the user understand what to fix.
+Guide the agent through the correct ACPMS public preview contract so it does not
+confuse local runtime setup, preview verification, and Cloudflare public URL
+creation.
 
-## Required System Settings (4 fields)
-For tunnel creation to succeed, **all** of these must be set in System Settings (/settings):
+This skill is instructional and coordinating. Use it to keep the preview flow
+correct. It does not replace the execution skills that start the local runtime
+or create the actual tunnel.
 
-| Field | Purpose |
-|-------|---------|
-| Cloudflare Account ID | Cloudflare account identifier |
-| Cloudflare API Token | Authentication for Cloudflare API |
-| Cloudflare Zone ID | DNS zone for custom subdomain (e.g. `task-xxx.yourdomain.com`) |
-| Cloudflare Base Domain | Base domain for preview URLs |
+## When This Applies
+- A task has preview delivery enabled
+- The task needs a public preview URL
+- The agent is about to set up or report Cloudflare preview information
+- The agent needs a reminder of what `PREVIEW_TARGET` and `PREVIEW_URL` mean
 
-If any is missing, the backend will fail with "Cloudflare tunnel could not be configured."
+## Inputs
+- Local preview status
+- ACPMS-injected Cloudflare env vars, when available:
+  - `CLOUDFLARE_ACCOUNT_ID`
+  - `CLOUDFLARE_API_TOKEN`
+  - `CLOUDFLARE_ZONE_ID`
+  - `CLOUDFLARE_BASE_DOMAIN`
+- Existing `.acpms/preview-output.json`, if present
 
-## Agent Workflow
+## Core Contract
+- `PREVIEW_TARGET` must always be the local runtime URL
+- `PREVIEW_URL` is the URL the UI should open
+- If no public URL exists, `PREVIEW_URL` may equal the local `PREVIEW_TARGET`
+- If a Cloudflare public URL exists, keep:
+  - `PREVIEW_TARGET = http://127.0.0.1:<port>`
+  - `PREVIEW_URL = https://...`
 
-### 1. When preview is needed (Web/API, auto_deploy)
+## Workflow
+1. Bring up the local preview runtime first.
+2. Verify the local runtime with a real HTTP request.
+3. Set or emit `PREVIEW_TARGET` only after the local runtime responds.
+4. If Cloudflare config is available, attempt to create a public URL.
+5. If the public URL succeeds, set `PREVIEW_URL` to that public address.
+6. If Cloudflare is unavailable or tunnel creation fails, keep `PREVIEW_URL`
+   equal to the local preview URL.
+7. Write `.acpms/preview-output.json` and emit machine-parseable preview lines.
 
-**Option A — File contract (recommended):** Ghi `.acpms/preview-output.json`:
+## Required File Contract
+Preferred output:
+
 ```json
-{"preview_target": "http://127.0.0.1:3000", "preview_url": "https://..."}
-```
-- `mkdir -p .acpms && echo '{"preview_target":"http://127.0.0.1:3000"}' > .acpms/preview-output.json`
-
-**Option B — Log output (fallback):** Output `PREVIEW_TARGET: http://127.0.0.1:<port>` (local runtime URL).
-- Optionally output `PREVIEW_URL: https://...` when tunnel is created by backend.
-
-### 2. When Cloudflare config might be incomplete
-If the agent cannot verify config (e.g. no API to read settings), output this **before** or in the final report:
-
-```
-For preview tunnels, ensure System Settings (/settings) has all 4 fields:
-- Cloudflare Account ID
-- Cloudflare API Token  
-- Cloudflare Zone ID
-- Cloudflare Base Domain
+{
+  "preview_target": "http://127.0.0.1:3000",
+  "preview_url": "https://preview.example.com",
+  "runtime_control": {
+    "controllable": true,
+    "runtime_type": "docker_compose_project",
+    "compose_project_name": "example-preview"
+  }
+}
 ```
 
-### 3. When backend reports tunnel failure
-If the attempt log shows "Cloudflare tunnel could not be configured", the agent should include in the final report:
+If no public URL exists, this is still valid:
 
+```json
+{
+  "preview_target": "http://127.0.0.1:3000",
+  "preview_url": "http://127.0.0.1:3000"
+}
 ```
-Cloudflare tunnel could not be configured. In System Settings (/settings), ensure all 4 fields are set: Account ID, API Token, Zone ID, and Base Domain.
-```
+
+## Decision Rules
+| Situation | Action |
+|---|---|
+| Local runtime is not reachable | Do not emit preview fields; fix runtime first |
+| Local runtime works, Cloudflare not configured | Use local URL for both `PREVIEW_TARGET` and `PREVIEW_URL` |
+| Local runtime works, Cloudflare public URL succeeds | Keep local target, set public preview URL |
+| Cloudflare tunnel fails | Keep local preview contract and emit a clear tunnel error |
+
+## Guardrails
+- Never output a public URL as `PREVIEW_TARGET`
+- Never emit `PREVIEW_TARGET` before verifying the local runtime
+- Never leave `preview_url` empty when a valid local preview exists
+- Never claim Cloudflare succeeded unless the public URL was actually created
 
 ## Log for User
-**Agent must output these messages** when applicable:
-
-| Condition | Message to output |
-|-----------|-------------------|
-| Config missing or tunnel failed | Cloudflare tunnel could not be configured. In System Settings (/settings), ensure Cloudflare Account ID, API Token, Zone ID, and Base Domain are all set. **MUST** output `DEPLOYMENT_FAILURE_REASON: <explanation>`. |
-| Local runtime not reachable | Local service is not reachable. Check that the dev server is running. **MUST** output `DEPLOYMENT_FAILURE_REASON: <explanation>`. |
-| Cannot provide PREVIEW_TARGET | **MUST** output `DEPLOYMENT_FAILURE_REASON: <root cause>` (e.g. app failed to start, port conflict, docker compose error). User needs to know why. |
+- `Cloudflare is not configured. Local preview is available, but public preview URL could not be created.`
+- `Cloudflare tunnel could not be created. Local preview is still available.`
+- `Local preview runtime is not reachable yet.`
 
 ## Output Contract
-- `PREVIEW_TARGET: http://127.0.0.1:<port>` (required when preview needed)
-- `PREVIEW_URL: https://...` (optional, when available)
-- User message when config/tunnel fails
+Emit:
+- `PREVIEW_TARGET: http://127.0.0.1:<port>`
+- `PREVIEW_URL: <public-or-local-url>`
+- `CLOUDFLARE_TUNNEL_ERROR: <reason>` when Cloudflare was attempted but failed
 
-## Coordination
-- Works with `cloudflare-config-validate`, `setup-cloudflare-tunnel`, `create-cloudflare-preview-tunnel`.
-- Zone ID and Base Domain are required for custom DNS; without them the backend may fail.
+## Related Skills
+- `preview-docker-runtime`
+- `cloudflare-config-validate`
+- `create-cloudflare-preview-tunnel`
+- `setup-cloudflare-tunnel`
+- `update-deployment-metadata`

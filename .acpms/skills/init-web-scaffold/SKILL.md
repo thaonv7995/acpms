@@ -6,40 +6,52 @@ description: Type-specific scaffolding requirements for Web Application projects
 # Init Web Application Scaffold
 
 ## Objective
-Define scaffolding requirements for a new web application project. Use the project name and description from the Project Details section in the instruction. Follow Required Tech Stack or Required Stack By Layer if specified.
+Define the scaffold requirements for a new web application project. Use the
+project name and description from the init instruction. Follow required stack
+constraints when they are explicit.
 
-## Your Tasks
+## When This Applies
+- The init flow is creating a new web project
+- The project type is `web` and ACPMS needs a runnable first scaffold
+- A repo already exists but needs to be normalized into a web-app baseline
 
-1. **Analyze the repository structure** (if existing) or create a new project scaffold
-2. **Set up the development environment**:
-   - Create/update `package.json` with appropriate dependencies
-   - Configure build tools (Vite, Next.js, or similar)
-   - Set up TypeScript configuration if applicable
-3. **Create essential project files**:
-   - `README.md` with project overview and setup instructions
-   - `.gitignore` for web projects
-   - Environment configuration (`.env.example`)
-4. **Set up code quality tools**:
-   - ESLint configuration
-   - Prettier configuration
-   - Pre-commit hooks (optional)
-5. **Create initial project structure**:
-   - `src/` directory with entry point
-   - `public/` directory for static assets
-   - Basic routing setup if framework supports it
+## Inputs
+- Project name, description, and any required stack from the init instruction
+- Existing repository state, if the project is not empty
+- Expected deliverables such as `README.md`, `.env.example`, source entry points,
+  and verification commands
 
-## Tech Stack Recommendations
+## Workflow
+1. Analyze the current repository structure or create a new scaffold.
+2. Set up the development environment:
+   - `package.json`
+   - build tooling (Vite, Next.js, or similar)
+   - TypeScript config when applicable
+3. Create essential project files:
+   - `README.md`
+   - `.gitignore`
+   - `.env.example`
+4. Create initial source structure:
+   - `src/`
+   - `public/`
+   - basic routing if the chosen framework supports it
+5. Add lightweight quality tooling only when it helps the baseline scaffold.
+6. Verify the scaffold with the lightest useful command set.
 
-For new projects, consider:
-- **Framework**: Next.js 14+ (App Router), Vite + React, or SvelteKit
-- **Language**: TypeScript
-- **Styling**: Tailwind CSS or CSS Modules
-- **State Management**: React Query for server state, Zustand for client state
-- **Testing**: Vitest + Testing Library
+## Decision Rules
+| Situation | Action |
+|---|---|
+| Required stack is explicitly specified | Follow it; do not silently substitute a preferred framework. |
+| Existing scaffold is mostly viable | Patch it instead of recreating the project from scratch. |
+| Optional tooling slows bootstrap materially | Keep the scaffold lean and add extras only if required. |
 
-## Output
+## Output Contract
+- Identify created or modified files
+- Explain the selected stack and any important assumption
+- Leave the project in a verifiable runnable state for the next init step
 
-After completing initialization:
-1. List all created/modified files
-2. Provide setup instructions
-3. Highlight any decisions made and rationale
+## Related Skills
+- `init-project-bootstrap`
+- `init-source-repository`
+- `verify-test-build`
+- `build-artifact`

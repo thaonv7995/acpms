@@ -8,133 +8,64 @@ description: Use when a task needs a live preview URL for Web/API/Microservice a
 ## Objective
 - Start preview from Docker, not from a host-level process.
 - Keep preview controllable by ACPMS through `.acpms/preview-output.json`.
-- Make follow-up preview updates predictable: stop old runtime, start new runtime, verify URL, update contract.
-
-## Non-Negotiable Rules
-- Do **not** run preview as a bare host process like `npm run dev`, `vite preview`, `python app.py`, or `cargo run` directly in the worktree shell.
-- Do **not** leave orphan preview processes outside Docker.
-- Preview **must** run inside either:
-  - `docker compose`
-  - `docker run`
-- Preview **must** publish machine-readable control metadata in `.acpms/preview-output.json`.
+- Make follow-up preview updates predictable: stop old runtime, start new
+  runtime, verify the URL, then update the contract.
 
 ## When This Applies
-- User asks to start, deploy, rebuild, restart, or stop preview.
-- ACPMS asks the agent to produce `PREVIEW_TARGET`.
-- A Web/API/Microservice task needs a local live URL for preview.
+- User asks to start, deploy, rebuild, restart, or stop preview
+- ACPMS asks the agent to produce `PREVIEW_TARGET`
+- A web, API, or microservice task needs a local live URL for preview
 
-## Preferred Runtime Order
-1. Existing repo `docker-compose.yml` / `compose.yml`
-2. Existing repo `Dockerfile` + small compose wrapper
-3. Temporary preview compose file under `.acpms/preview/`
+## Inputs
+- Current repo runtime files: `docker-compose.yml`, `compose.yml`, `Dockerfile`,
+  framework manifests, and any existing build output
+- Existing `.acpms/preview-output.json` if a preview already exists
+- ACPMS env such as `CLOUDFLARE_ACCOUNT_ID`, `CLOUDFLARE_API_TOKEN`,
+  `CLOUDFLARE_ZONE_ID`, and `CLOUDFLARE_BASE_DOMAIN` when public preview is expected
+- Attempt/worktree context so container names and compose project names are unique
 
-## Start / Rebuild Workflow
-1. Inspect repo for:
-   - `docker-compose.yml`, `docker-compose.yaml`, `compose.yml`, `compose.yaml`
-   - `Dockerfile`
-   - framework/runtime hints (`package.json`, `requirements.txt`, `go.mod`, `Cargo.toml`)
-2. If an old preview exists, read `.acpms/preview-output.json` and stop/remove the old runtime first.
-3. Prefer a bind-mounted Docker workflow so code changes in the worktree are reflected in preview.
-4. Start the preview runtime with a stable ACPMS-specific name:
-   - container example: `acpms-preview-<attempt-id-short>`
-   - compose project example: `acpms-preview-<attempt-id-short>`
-5. Actually start the runtime. Creating only `Dockerfile`, `docker-compose.yml`, or `.acpms/preview-output.json` is not enough.
-   - For Compose: run `docker compose -p <project> up -d --build`
-   - For a single container: run `docker rm -f <old-container>` if needed, then `docker run -d ...`
-6. Verify the app responds from the host before you claim preview is ready:
-   - `curl -I http://127.0.0.1:<port>`
-   - or `curl -sf http://127.0.0.1:<port>/health`
-   - or another real HTTP check against the actual app route
-7. Only after the HTTP check succeeds, write `.acpms/preview-output.json`.
-8. Only after the HTTP check succeeds, print `PREVIEW_TARGET` / `PREVIEW_URL`.
-
-## Stop Workflow
-1. Read `.acpms/preview-output.json` if present.
-2. If `runtime_control.runtime_type=docker_compose_project`:
-   - stop with `docker compose -p <project> down --remove-orphans`
-3. If `runtime_control.runtime_type=docker_container`:
-   - stop with `docker rm -f <container_name>`
-4. Verify the old preview URL no longer responds.
-5. Update `.acpms/preview-output.json` to mark the runtime stopped or rewrite it with the new runtime after restart.
-
-## Required File Contract
-For local-only preview, write `.acpms/preview-output.json` with this shape:
-
-```json
-{
-  "preview_target": "http://127.0.0.1:3000",
-  "preview_url": "http://127.0.0.1:3000",
-  "runtime_control": {
-    "controllable": true,
-    "runtime_type": "docker_compose_project",
-    "compose_project_name": "acpms-preview-ab12cd34",
-    "control_source": "preview-docker-runtime"
-  }
-}
-```
-
-When a public tunnel such as Cloudflare is also available, keep `preview_target`
-as the local Docker URL and write the public address to `preview_url`:
-
-```json
-{
-  "preview_target": "http://127.0.0.1:3000",
-  "preview_url": "https://task-abc.trycloudflare.com",
-  "runtime_control": {
-    "controllable": true,
-    "runtime_type": "docker_compose_project",
-    "compose_project_name": "acpms-preview-ab12cd34",
-    "control_source": "preview-docker-runtime"
-  }
-}
-```
-
-For a single container:
-
-```json
-{
-  "preview_target": "http://127.0.0.1:3000",
-  "preview_url": "http://127.0.0.1:3000",
-  "runtime_control": {
-    "controllable": true,
-    "runtime_type": "docker_container",
-    "container_name": "acpms-preview-ab12cd34",
-    "control_source": "preview-docker-runtime"
-  }
-}
-```
-
-## Output Requirements
-- Also print:
-  - `PREVIEW_TARGET: http://127.0.0.1:<port>`
-- Always print:
-  - `PREVIEW_URL: <url>`
-- `PREVIEW_TARGET` is allowed only after the local runtime is already reachable.
-- If `curl http://127.0.0.1:<port>` fails, do not output `PREVIEW_TARGET`.
-- If a public URL exists, `PREVIEW_URL` should be that public URL.
-- If only a local preview exists, `PREVIEW_URL` should be the same local URL as `PREVIEW_TARGET`.
-- If ACPMS injected `CLOUDFLARE_ACCOUNT_ID`, `CLOUDFLARE_API_TOKEN`, `CLOUDFLARE_ZONE_ID`, and `CLOUDFLARE_BASE_DOMAIN`, you should try to create the public Cloudflare preview URL after the local Docker preview is reachable.
+## Workflow
+1. Inspect the repo for existing compose or Docker runtime files.
+2. If an old preview exists, stop or replace it first.
+3. Prefer a bind-mounted Docker workflow when code changes must reflect quickly.
+4. Start the runtime for real:
+   - `docker compose -p <project> up -d --build`, or
+   - `docker run -d ...`
+5. Verify the local runtime with a real HTTP check before claiming success.
+6. Write `.acpms/preview-output.json` only after the HTTP check passes.
+7. Emit `PREVIEW_TARGET` and `PREVIEW_URL` only after verification succeeds.
 
 ## Decision Rules
 | Situation | Action |
 |---|---|
-| Repo already has compose | Reuse it if it can start a live preview safely |
-| Repo has only Dockerfile | Create a small compose wrapper for stable restart/stop |
-| Repo has neither compose nor Dockerfile | Create temporary `.acpms/preview/docker-compose.preview.yml` |
-| Old preview container exists | Stop/remove it before starting new preview |
-| Port conflict | Pick a new host port, then update `preview-output.json` |
-| Docker build is slow but app can run with bind mount | Prefer bind mount dev/preview mode |
-| Runtime files exist but container is not running | Start it; do not report success from config/build validation alone |
-| Cannot start preview in Docker | Output `DEPLOYMENT_FAILURE_REASON: <root cause>` |
+| Repo already has a safe compose file | Reuse it. |
+| Repo only has `Dockerfile` | Create a small compose wrapper if needed for controllable restarts. |
+| Repo has neither compose nor `Dockerfile` | Create temporary preview runtime files under `.acpms/preview/`. |
+| Old preview container exists | Stop or remove it before starting the new one. |
+| Port conflict exists | Pick a new host port and update the contract. |
+| Runtime files exist but no container is serving traffic | Start the runtime; do not report success from config validation alone. |
+| Docker preview cannot be started | Emit `DEPLOYMENT_FAILURE_REASON: <root cause>`. |
+
+## Output Contract
+Write `.acpms/preview-output.json` with:
+- `preview_target`: always the reachable local Docker URL
+- `preview_url`: local URL for local-only preview, or public URL when a tunnel exists
+- `runtime_control`: enough metadata to stop/restart the runtime later
+
+Also emit:
+- `PREVIEW_TARGET: http://127.0.0.1:<port>`
+- `PREVIEW_URL: <public-or-local-url>`
 
 ## Guardrails
+- Do not run preview as a bare host process like `npm run dev`, `vite preview`,
+  `python app.py`, or `cargo run` directly in the worktree shell.
 - Never claim preview is ready without a real HTTP check.
-- Never confuse `docker compose config`, `docker build`, or file creation with a running preview.
-- Never output fake or placeholder URLs.
-- Never rely on worktree-local background processes outside Docker.
-- Prefer names that are unique per attempt to avoid collision between follow-ups.
-- When preview is rebuilt, overwrite old contract values with the new runtime metadata.
+- Never confuse `docker compose config`, `docker build`, or file creation with a
+  running preview.
+- Never emit fake or placeholder URLs.
 
 ## Related Skills
-- `setup-cloudflare-tunnel`: use after local Docker preview is reachable and ACPMS needs `PREVIEW_TARGET`
-- `deploy-cancel-stop-cleanup`: use when cleanup/stop requires extra Docker shutdown steps
+- `setup-cloudflare-tunnel`
+- `deploy-cancel-stop-cleanup`
+- `deploy-precheck-cloudflare`
+- `update-deployment-metadata`

@@ -1,84 +1,59 @@
 ---
 name: init-microservice-scaffold
-description: Type-specific scaffolding requirements for Microservice projects.
+description: Create a microservice baseline with service entrypoint, health endpoints, containerization, and observability-ready structure.
 ---
 
 # Init Microservice Scaffold
 
 ## Objective
-Define scaffolding requirements for a new microservice project. Use the project name and description from the Project Details section in the instruction. Follow Required Tech Stack or Required Stack By Layer if specified.
+Bootstrap a microservice that is container-ready, health-checkable, and
+structured for future production deployment without adding unnecessary
+complexity on day one.
 
-## Your Tasks
+## When This Applies
+- Project type is microservice
+- A service baseline needs containerization and operational structure from the
+  start
 
-1. **Analyze the repository structure** (if existing) or create a new project scaffold
-2. **Set up the microservice development environment**:
-   - Initialize project (go.mod for Go, Cargo.toml for Rust)
-   - Configure the service framework
-   - Set up dependency injection if applicable
-3. **Create essential project files**:
-   - `README.md` with service overview, setup, and deployment instructions
-   - `.gitignore` appropriate for the language
-   - Environment configuration (`.env.example`)
-4. **Configure containerization**:
-   - `Dockerfile` (multi-stage build, minimal base image)
-   - `docker-compose.yml` for local development
-   - `.dockerignore` for efficient builds
-5. **Set up service structure**:
-   - Entry point with graceful shutdown
-   - Configuration management
-   - Logging setup (structured JSON logs)
-   - Health check endpoints (`/health`, `/ready`, `/live`)
-   - Metrics endpoint (`/metrics`)
-6. **Configure communication**:
-   - REST API endpoints (if applicable)
-   - gRPC service definitions (if applicable)
-   - Message queue integration (if applicable)
-7. **Set up observability**:
-   - Structured logging
-   - Prometheus metrics
-   - Distributed tracing setup (OpenTelemetry)
-8. **Set up code quality tools**:
-   - Linting (golangci-lint, clippy)
-   - Formatting (gofmt, rustfmt)
-   - Testing setup
-9. **Create initial service structure**:
-   - `cmd/` or `src/main.rs` - Entry point
-   - `internal/` or `src/` - Business logic
-   - `api/` - API definitions (proto files, OpenAPI)
-   - `configs/` - Configuration files
+## Inputs
+- Project brief
+- Language/runtime constraints
+- Communication style, if known:
+  - REST
+  - gRPC
+  - async jobs
 
-## Tech Stack Recommendations
+## Workflow
+1. Choose the runtime stack that matches explicit requirements.
+2. Create the service entrypoint and configuration handling.
+3. Add health endpoints and structured logging baseline.
+4. Add containerization files and local run defaults.
+5. Stub metrics or observability entrypoints when appropriate.
+6. Leave the service runnable and health-checkable.
 
-For new projects, consider:
-- **Go**: Standard library + Chi/Gin, gRPC, sqlx
-- **Rust**: Axum/Actix, tonic for gRPC, sqlx
-- **Observability**: Prometheus, Jaeger/Zipkin, structured logging
-- **Container**: Alpine-based or distroless images
+## Required Baseline
+- service entrypoint
+- `.env.example`
+- health endpoint
+- Dockerfile
+- README
 
-## Microservice Best Practices
+## Decision Rules
+| Situation | Action |
+|---|---|
+| Communication pattern is unclear | Start with a health endpoint and simplest external interface |
+| Database need is unclear | Leave config hooks, avoid schema overcommit |
+| Observability stack is unspecified | Add lightweight health/logging baseline first |
 
-- Follow 12-factor app principles
-- Implement proper graceful shutdown
-- Use environment variables for configuration
-- Design for horizontal scaling
-- Implement circuit breakers for external calls
-- Use connection pooling for databases
-- Plan for service discovery and load balancing
-- Implement idempotency for critical operations
+## Output Contract
+Emit:
+- `scaffold_status`
+- `selected_stack`
+- `created_files`
+- `container_strategy`
+- `verification_commands`
 
-## Container Optimization
-
-- Use multi-stage builds
-- Minimize image size (Alpine, distroless, scratch)
-- Run as non-root user
-- Properly handle signals (SIGTERM, SIGINT)
-- Set resource limits in container spec
-
-## Output
-
-After completing initialization:
-1. List all created/modified files
-2. Provide Docker build and run instructions
-3. Document API endpoints and contracts
-4. Include observability setup instructions
-5. Highlight decisions made and rationale
+## Related Skills
+- `init-project-bootstrap`
+- `verify-test-build`
+- `build-artifact`

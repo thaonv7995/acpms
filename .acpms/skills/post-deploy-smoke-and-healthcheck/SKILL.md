@@ -1,35 +1,48 @@
 ---
 name: post-deploy-smoke-and-healthcheck
-description: Run post-deploy smoke and health checks to validate availability and critical path behavior.
+description: Validate a deployment with a small set of real health and smoke checks before it is reported as good.
 ---
 
 # Post Deploy Smoke And Healthcheck
 
 ## Objective
-Validate that deployment is reachable and core flows function before declaring success.
+Confirm that a deployment is actually reachable and that the most important
+paths still work before ACPMS reports the deploy as healthy.
+
+## When This Applies
+- A preview or production deployment just completed
+- A route was changed and needs verification
+- A rollback finished and needs confirmation
 
 ## Inputs
-- Deployment URL or API endpoint.
-- Critical endpoints/routes for the project.
-- Expected healthy response criteria.
+- Deployment URL or endpoint
+- Health path, if available
+- One to three critical smoke checks
 
 ## Workflow
-1. Verify DNS/URL reachability.
-2. Run health endpoint check (`/health` or equivalent).
-3. Execute 1-3 critical smoke checks.
-4. Capture response code, latency, and basic payload assertions.
-5. Classify outcome and recommend rollback if critical checks fail.
+1. Check basic reachability for the deployment URL.
+2. Run the health endpoint when one exists.
+3. Run one to three critical smoke checks.
+4. Record status code, key assertion, and any obvious regression.
+5. Decide whether deploy is validated, degraded, or failed.
 
 ## Decision Rules
 | Situation | Action |
 |---|---|
-| Health check fails hard | Mark deploy unstable and trigger rollback evaluation. |
-| Non-critical smoke check fails | Mark degraded and report risk. |
-| All critical checks pass | Mark deploy validated. |
+| Base URL is unreachable | Mark `failed` |
+| Health endpoint fails | Mark `failed` and consider rollback |
+| Non-critical smoke check fails | Mark `degraded` |
+| All critical checks pass | Mark `validated` |
 
 ## Output Contract
-Include:
+Emit:
 - `smoke_status`: `validated` | `degraded` | `failed`
 - `healthcheck_url`
 - `critical_checks`
 - `rollback_recommended`: `true` | `false`
+
+## Related Skills
+- `deploy-cloudflare-pages`
+- `deploy-cloudflare-workers`
+- `deploy-ssh-remote`
+- `rollback-deploy`

@@ -1,34 +1,48 @@
 ---
 name: deploy-cloudflare-workers
-description: Deploy API runtime to Cloudflare Workers and report endpoint/deployment metadata.
+description: Deploy an API or edge runtime to Cloudflare Workers, verify the endpoint, and report stable deployment metadata only after it is reachable.
 ---
 
 # Deploy Cloudflare Workers
 
 ## Objective
-Deploy API runtime to Workers with clear endpoint and deployment status reporting.
+Deploy a Workers runtime safely and report the resulting public endpoint only
+after the worker or route is actually reachable.
+
+## When This Applies
+- The project deploy target is Cloudflare Workers
+- A deployable worker package or config already exists
+- The runtime should expose an HTTP endpoint or route
 
 ## Inputs
-- Build artifact or deployable worker package.
-- Worker configuration/routes/environment bindings.
+- Worker source or built package
+- Worker configuration and bindings
+- Cloudflare account credentials
+- Expected endpoint or health path
 
 ## Workflow
-1. Validate worker configuration and required env bindings.
-2. Run Worker deploy command.
-3. Capture endpoint URL, deployment ID/version, and route mapping.
-4. Run smoke/health check against deployed endpoint.
+1. Validate the worker configuration and required bindings.
+2. Run the Workers deploy command.
+3. Capture the resulting endpoint, route, or deployment reference.
+4. Verify the deployed endpoint with a real HTTP request.
+5. Only then report deployment success.
 
 ## Decision Rules
 | Situation | Action |
 |---|---|
-| Build artifact missing | Mark `no_artifact`. |
-| Build failed before deploy | Mark `build_failed`. |
-| Worker deploy fails | Mark `deploy_failed` and include failing phase. |
-| Success | Mark active and include endpoint + deployment ref. |
+| Worker build/package is missing | Stop with `no_artifact` |
+| Deploy command fails | Report `deploy_failed` |
+| Deploy succeeds but route is unreachable | Report `verification_failed` |
+| Deploy and endpoint verification succeed | Report `active` |
 
 ## Output Contract
-Include `Production Deploy` section:
-- `production_deployment_status`: `active` | `deploy_failed` | `no_artifact` | `build_failed`.
-- `production_deployment_url`: endpoint URL when success.
-- `production_deployment_type`: provider/type label when available.
-- `production_deployment_id`: deployment ref when available.
+Emit:
+- `production_deployment_status`: `active` | `deploy_failed` | `no_artifact` | `build_failed` | `verification_failed`
+- `production_deployment_url`
+- `production_deployment_type`
+- `production_deployment_id`
+
+## Related Skills
+- `build-artifact`
+- `post-deploy-smoke-and-healthcheck`
+- `rollback-deploy`

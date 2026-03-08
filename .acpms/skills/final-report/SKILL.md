@@ -8,30 +8,37 @@ description: Produce a short final report that highlights outcome, verification,
 ## Objective
 Deliver a short completion report that a human can scan in a few seconds.
 
-## Required Format
+## When This Applies
+- At the end of a successful or partially successful attempt
+- After review handoff when ACPMS needs one final human-readable summary
+- After deploy or preview flow when outcome and next action must be obvious
+
+## Inputs
+- Final change summary
+- Relevant verification outcomes
+- Deploy or preview status when applicable
+- Real blocker or next action, if one exists
+
+## Workflow
+1. Collect only the high-signal facts from the attempt.
+2. Convert them into two to four short bullets.
+3. Drop repetitive transcript and low-signal detail.
+4. Stop after the final report; do not restate it in extra prose.
+
+## Decision Rules
+| Situation | Action |
+|---|---|
+| Task is tiny or docs-only | Use two short bullets; do not inflate the report. |
+| Verification failed for an unrelated baseline issue | Mention it once in `Next:` and tie it to scope. |
+| No real risk or next step exists | Omit `Next:` entirely. |
+
+## Output Contract
 - Use `## Final Report`
-- Then use only the sections that matter for this task
-- Prefer 2 to 4 bullets total
-- Keep the whole report to about 6 lines when possible
+- Prefer only `Done:`, `Verified:`, `Deploy:`, `Next:` when they add value
+- Keep the report concise enough for the attempt timeline
 
-## Preferred Content
-- `Done:` what changed in one sentence
-- `Verified:` only the checks that actually matter
-- `Deploy:` only when preview/deploy is relevant
-- `Next:` only when there is a real blocker, risk, or follow-up
-
-## Rules
-- Omit empty or irrelevant sections entirely
-- Do not include `Metadata Patch Summary` unless metadata itself was the task
-- Do not include a generic risk/follow-up section when there is no real issue
-- Do not list commands verbatim; summarize outcomes instead
-- For docs-only or tiny tasks, 2 bullets is enough
-- If deploy/preview succeeded, include the final URL only
-- If deploy/preview was skipped, give a one-line reason only
-- If a check failed because of a pre-existing unrelated issue, mention it briefly in `Next:`
-- After the final report, stop. Do not repeat the same summary in extra prose
-
-## Minimum Quality Bar
-- No vague statements like "done" without evidence.
-- Every skipped or failed step must include why.
-- Keep concise and concrete.
+## Related Skills
+- `verify-test-build`
+- `review-handoff`
+- `release-note-and-delivery-summary`
+- `update-deployment-metadata`
