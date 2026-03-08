@@ -1,65 +1,60 @@
 ---
 name: init-api-scaffold
-description: Type-specific scaffolding requirements for API Service projects.
+description: Create a minimal but production-shaped API service scaffold with a runnable entrypoint, health endpoint, env/config structure, and verification-ready project layout.
 ---
 
-# Init API Service Scaffold
+# Init API Scaffold
 
 ## Objective
-Define scaffolding requirements for a new API service project. Use the project name and description from the Project Details section in the instruction. Follow Required Tech Stack or Required Stack By Layer if specified.
+Create a new API service baseline that is runnable, structured, and easy to
+extend without overbuilding infrastructure before the first useful endpoint
+exists.
 
-## Your Tasks
+## When This Applies
+- Project type is API or backend service
+- ACPMS is bootstrapping a new service from scratch
 
-1. **Analyze the repository structure** (if existing) or create a new project scaffold
-2. **Set up the API development environment**:
-   - Initialize project (Cargo.toml for Rust, package.json for Node, requirements.txt for Python)
-   - Configure the web framework (Axum, Express, FastAPI, etc.)
-   - Set up database connectivity if needed
-3. **Create essential project files**:
-   - `README.md` with API overview, setup, and usage instructions
-   - `.gitignore` appropriate for the language/framework
-   - Environment configuration (`.env.example`)
-   - Docker configuration for local development
-4. **Set up API structure**:
-   - Route/endpoint organization
-   - Middleware setup (auth, logging, CORS, rate limiting)
-   - Error handling patterns
-   - Request/response validation
-5. **Configure database (if applicable)**:
-   - Migration system setup
-   - Connection pooling
-   - Initial schema design
-6. **Set up code quality tools**:
-   - Linting configuration
-   - Formatting configuration
-   - Type checking
-7. **Create initial API structure**:
-   - Health check endpoint (`/health`)
-   - API versioning (`/api/v1/`)
-   - Basic CRUD endpoint template
+## Inputs
+- Project name and brief
+- Required language/framework, if specified
+- Expected persistence or auth needs, if known
 
-## Tech Stack Recommendations
+## Workflow
+1. Choose the safest baseline stack that matches explicit requirements.
+2. Create the core project manifest and entrypoint.
+3. Add configuration handling and `.env.example`.
+4. Create at least:
+   - health endpoint
+   - versioned API root
+   - structured error handling shape
+5. Add Docker/dev defaults only when they support the baseline immediately.
+6. Leave the project in a runnable, verifiable state.
 
-For new projects, consider:
-- **Rust**: Axum + SQLx + tokio
-- **Node.js**: Express/Fastify + TypeScript + Prisma
-- **Python**: FastAPI + SQLAlchemy + Pydantic
-- **Go**: Gin/Echo + GORM
+## Required Baseline
+- project manifest
+- source entrypoint
+- health endpoint
+- API version prefix
+- README
+- `.gitignore`
+- `.env.example`
 
-## API Best Practices
+## Decision Rules
+| Situation | Action |
+|---|---|
+| Framework is explicitly requested | Follow it |
+| Database need is unclear | Stub config, do not invent a full schema |
+| Auth is not in scope yet | Leave auth-ready structure but do not over-implement |
 
-- Use RESTful conventions or GraphQL schema design
-- Implement proper HTTP status codes
-- Add request validation and sanitization
-- Include OpenAPI/Swagger documentation
-- Plan for authentication (JWT, OAuth2)
-- Consider rate limiting and caching strategies
+## Output Contract
+Emit:
+- `scaffold_status`
+- `selected_stack`
+- `created_files`
+- `verification_commands`
+- `assumptions`
 
-## Output
-
-After completing initialization:
-1. List all created/modified files
-2. Provide API endpoint documentation
-3. Include example requests/responses
-4. Document database setup if applicable
-5. Highlight decisions made and rationale
+## Related Skills
+- `init-project-bootstrap`
+- `verify-test-build`
+- `init-project-context-file`

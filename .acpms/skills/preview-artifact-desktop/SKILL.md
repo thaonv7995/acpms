@@ -1,38 +1,45 @@
 ---
 name: preview-artifact-desktop
-description: Use when a desktop project has task preview enabled and the agent must make the post-task preview artifact installable, reproducible, and easy for QA to download and test.
+description: Produce a QA-usable desktop build artifact for task preview, aligned with the project’s real packaging flow and output paths.
 ---
 
-# Desktop Preview Artifact
+# Preview Artifact Desktop
 
-Use this after `build-artifact` for desktop projects where task preview is delivered as a downloadable artifact, not a live URL.
+## Objective
+Generate a downloadable desktop artifact that QA can actually run or install,
+without confusing artifact preview with live URL preview.
 
-## Goal
-- Make sure the repository can produce a stable desktop preview package from the standard build pipeline.
-- Keep the package discoverable by ACPMS through the configured build command and output directory.
+## When This Applies
+- Project type is desktop
+- Task preview should be delivered as downloadable artifacts
+
+## Inputs
+- Desktop packaging stack
+- Actual package/build command
+- Real output directory
 
 ## Workflow
-1. Inspect the existing packaging stack first: Electron, Tauri, Wails, Flutter Desktop, or native tooling.
-2. Reuse the current packaging command when it already works. If it does not, fix the repo so the canonical build command succeeds.
-3. Make sure the project metadata stays aligned with the real package output:
-   - default command is `npm run package`
-   - default output directory is `out`
-   - if the project uses another command or folder, update project metadata instead of relying on guesswork
-4. Prefer installable outputs when the stack supports them:
-   - macOS: `.dmg` or `.pkg`
-   - Windows: `.exe` or `.msi`
-   - otherwise keep a runnable packaged app inside the output directory
-5. Validate that the output directory is non-empty and contains at least one QA-usable build.
+1. Detect the packaging stack and current package command.
+2. Reuse the real packaging flow where it already works.
+3. Fix the packaging flow if the current command is broken.
+4. Align preview metadata with the actual output path.
+5. Verify that the output directory contains a QA-usable artifact.
 
-## Guardrails
-- Do not convert desktop preview into a live preview URL.
-- Do not leave packaging dependent on manual local steps that the build pipeline cannot repeat.
-- If signing or notarization is unavailable, say so clearly and still produce the best unsigned QA artifact possible.
+## Decision Rules
+| Situation | Action |
+|---|---|
+| Installable package exists | Prefer it |
+| Only unpacked runnable app exists | Use it and document how QA should run it |
+| Signing/notarization unavailable | Produce unsigned artifact and document the limitation |
 
-## Final Report
-Include:
-- build command used
-- output directory
-- artifact types produced
-- platform coverage
-- install notes or known limitations for testers
+## Output Contract
+Emit:
+- `artifact_preview_status`
+- `artifact_build_command`
+- `artifact_output_directory`
+- `artifact_types`
+- `qa_install_notes`
+
+## Related Skills
+- `build-artifact`
+- `init-desktop-scaffold`

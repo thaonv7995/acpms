@@ -6,30 +6,41 @@ description: Produce metadata-aligned deploy summary fields for preview and prod
 # Update Deployment Metadata
 
 ## Objective
-Ensure deploy outcomes are represented with clear, machine-readable metadata semantics.
+Represent deploy outcomes with clear, machine-readable metadata semantics so the
+backend, UI, and final report stay aligned.
 
-## Context
-In this system, backend persists task metadata patch before marking attempt success. Agent should emit consistent values so backend and reports stay aligned.
+## When This Applies
+- Preview or production deploy state changed during the attempt
+- ACPMS needs metadata-aligned summary fields for UI, logs, or downstream automation
+- A deploy was skipped, failed, or only partially succeeded and the reason must stay machine-readable
 
-## Metadata Semantics
-Use these keys and value patterns in report content when applicable:
-- `deployment_status`: `active` | `missing_preview_target` | `skipped_cloudflare_not_configured`
-- `deployment_error`: reason when deployment preview/status is not active
-- `deployment_kind`: `agent_preview_url` | `preview_tunnel` | `artifact_downloads`
-- `preview_target`: `http://127.0.0.1:<port>` when available
-- `preview_url`: public preview URL when available
-- `production_deployment_status`: `active` | `build_failed` | `deploy_failed` | `no_artifact` | `skipped_cloudflare_not_configured`
-- `production_deployment_error`: reason when production deploy not active
-- `production_deployment_url`, `production_deployment_type`, `production_deployment_id`: success fields
+## Inputs
+- Final preview outcome (`PREVIEW_TARGET`, `PREVIEW_URL`, runtime state)
+- Production deploy outcome when applicable
+- Skip or failure reason if a deploy stage did not succeed
+- Current task type and whether deploy was actually in scope
 
 ## Workflow
-1. Determine deploy outcome class: success, failed, or skipped.
-2. Map outcome to canonical statuses above.
-3. Emit a compact metadata-aligned summary in final report.
+1. Determine the deploy outcome class: success, failed, skipped, or stale.
+2. Map the outcome to ACPMS canonical metadata values.
+3. Emit a compact metadata-aligned summary in the final report or metadata block.
+
+## Decision Rules
+| Situation | Action |
+|---|---|
+| Local preview exists but no public URL exists | Keep `preview_target` local and set `preview_url` to the same local URL unless a public URL was really created. |
+| Deploy was intentionally skipped by policy | Mark it as skipped and include the explicit reason. |
+| Preview/runtime was stale or cleaned up | Do not mark deployment active; preserve the stop or failure reason. |
 
 ## Output Contract
-Provide `Metadata Patch Summary` as YAML-like lines for easy parsing, for example:
+Provide `Metadata Patch Summary` as YAML-like lines, for example:
 - `deployment_status: active`
 - `deployment_kind: preview_tunnel`
 - `production_deployment_status: deploy_failed`
 - `production_deployment_error: Auto-deploy failed: ...`
+
+## Related Skills
+- `deploy-precheck-cloudflare`
+- `preview-docker-runtime`
+- `setup-cloudflare-tunnel`
+- `final-report`

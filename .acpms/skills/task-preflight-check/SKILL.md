@@ -6,54 +6,62 @@ description: Validate references and environment before execution. Block and rep
 # Task Preflight Check
 
 ## Objective
-Run **first** before any implementation work. Verify that references are available and the environment is ready. If any blocking issue exists, **stop immediately** and report to the user so the task can be fixed before retrying.
+Run first before implementation, deploy, or retry work. Confirm that the repo,
+references, and execution environment are usable. If a blocking issue exists,
+stop immediately so ACPMS does not waste the attempt on predictable failure.
 
 ## When This Applies
-- Every task execution (init and non-init)
-- Must run before code-implement, init-project-bootstrap, or any other implementation skill
+- Every task execution, including init, follow-up, retry, and deploy flows
+- Before `code-implement`, `init-project-bootstrap`, preview/deploy work, or
+  any expensive verification step
+
+## Inputs
+- Task description and any mention of uploaded files or attachments
+- `.acpms/references/refs_manifest.json` and files under `.acpms/references/`
+  when present
+- Current git/worktree state
+- Project manifests such as `package.json`, `Cargo.toml`, `pyproject.toml`,
+  `Dockerfile`, or other runtime hints when relevant
 
 ## Workflow
+1. Check whether the task depends on references or uploaded files.
+2. Validate reference manifests and referenced files if they exist.
+3. Validate the repository state:
+   - `git status` works
+   - the worktree is not broken
+   - no merge conflict or detached-head state blocks progress
+4. Check for obvious environment blockers that would make the next skill fail
+   immediately.
+5. Either stop with a clear preflight block, or continue silently.
 
-### 1. Check References (if task has attachments)
-- If `.acpms/references/refs_manifest.json` exists:
-  - Read the manifest.
-  - If `failures` array is non-empty → **BLOCK**. Output preflight report and stop.
-  - If `files` array lists files → verify each file exists and is readable.
-  - If any listed file is missing or unreadable → **BLOCK**. Output preflight report and stop.
-- If task description mentions attachments but `.acpms/references/` is missing or empty → **BLOCK**.
-
-### 2. Check Environment
-- Verify current directory is a valid git repository (`git status` succeeds).
-- Verify worktree is not in a broken state (e.g. merge conflicts, detached HEAD without clear branch).
-- If project has `package.json` / `Cargo.toml` / similar: verify lockfile or dependency manifest exists (optional, warn only).
-
-### 3. Decision
+## Decision Rules
 | Situation | Action |
-|-----------|--------|
-| All checks pass | Proceed with implementation. No output needed. |
-| Reference download failures | **STOP**. Output preflight report. |
-| Reference files missing/unreadable | **STOP**. Output preflight report. |
-| Git repo broken or missing | **STOP**. Output preflight report. |
-| Merge conflicts or dirty state that blocks work | **STOP**. Output preflight report. |
+|---|---|
+| Reference download failures exist | Stop and emit a preflight block. |
+| Referenced files are missing or unreadable | Stop and emit a preflight block. |
+| Repository is broken or unusable | Stop and emit a preflight block. |
+| Advisory issue only | Warn only if useful; do not block the task. |
+| All checks pass | Continue silently to the next skill. |
 
-## Preflight Report Format (when blocking)
+## Output Contract
+If blocking, emit:
 
-When blocking, output a clear section:
-
-```
+```md
 ## PREFLIGHT BLOCKED
 
 Task cannot proceed. Please resolve the following before retrying:
 
 ### Issues
-- [List each blocking issue with actionable detail]
+- ...
 
 ### Suggested Actions
-- [What the user should do to fix each issue]
+- ...
 ```
 
-Include this in the final report so the user is notified that the task has issues requiring resolution before execution.
+If passing, produce no extra chatter and hand off to the next skill.
 
-## Output Contract
-- If blocking: emit preflight report and **do not** proceed with implementation.
-- If passing: continue to next skill silently.
+## Related Skills
+- `env-and-secrets-validate`
+- `code-implement`
+- `verify-test-build`
+- `retry-triage-and-recovery`

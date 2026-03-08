@@ -6,44 +6,48 @@ description: Execute safe Git/GitLab branch, staging, commit, and push workflow 
 # GitLab Branch And Commit
 
 ## Objective
-Create a clean, traceable Git history for task delivery without leaking unrelated changes.
+Create a clean, traceable Git history for task delivery without leaking
+unrelated changes or staging ACPMS internal files by accident.
+
+## When This Applies
+- ACPMS is ready to stage, commit, and push task-scoped changes
+- The workflow allows commit/push for the current attempt
+- Branch state must be normalized before MR/PR creation
 
 ## Inputs
-- Task context (title, type, scope).
-- Current repo status and branch.
-- Review policy (`require_review` behavior from workflow).
+- Task context and touched files
+- Current branch and git status
+- Review policy (`require_review`)
+- Remote branch expectations for the current attempt
 
 ## Workflow
 1. Inspect `git status --short` and identify only task-relevant files.
-2. Ensure current branch is task-safe; if creating a branch, use `codex/<task-slug>` prefix.
+2. Ensure the current branch is safe for this task.
 3. Stage only intended files.
-4. Commit with clear message (`feat:`, `fix:`, `refactor:`, `docs:`, `test:`).
-5. Push to remote branch.
-
-## Never Stage or Commit
-Never add or commit these paths (testing artifacts, internal tooling, config):
-- `.playwright-cli/` — Playwright CLI output (screenshots, traces, YAML)
-- `.acpms/` — ACPMS agent config, references, skills
-- `node_modules/`, `dist/`, `target/`, `.env*`
-- `*.log`, `tmp/`, `temp/`
-- IDE/OS: `.idea/`, `.vscode/`, `.DS_Store`
-
-Before staging, run `git status` and exclude any paths matching the above. Prefer `git add <file>` for specific files over `git add .`.
+4. Commit with a clear, scoped message.
+5. Push to the correct remote branch.
 
 ## Decision Rules
 | Situation | Action |
 |---|---|
 | Review mode forbids commit/push | Do not commit or push; report ready-for-review state. |
-| Unrelated modified files exist | Exclude from staging and mention in report. |
-| Push rejected (non-fast-forward) | Pull/rebase safely or stop and report branch divergence. |
+| Unrelated modified files exist | Exclude them from staging and mention them in the report if needed. |
+| Push is rejected | Re-sync safely or stop and report branch divergence. |
 
 ## Guardrails
 - Never use `git add .` when unrelated changes are present.
+- Never stage `.acpms/`, `node_modules/`, `dist/`, `target/`, `.env*`, logs, or IDE artifacts.
 - Never rewrite shared branch history unless explicitly requested.
 
 ## Output Contract
-Include:
+Emit:
 - `git_branch`
 - `git_commit`
 - `git_push`: `success` | `skipped` | `failed`
-- `git_push_reason` when skipped/failed
+- `git_push_reason` when skipped or failed
+
+## Related Skills
+- `verify-test-build`
+- `gitlab-merge-request`
+- `review-handoff`
+- `release-note-and-delivery-summary`

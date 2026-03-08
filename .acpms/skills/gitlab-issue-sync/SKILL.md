@@ -1,40 +1,44 @@
 ---
 name: gitlab-issue-sync
-description: Sync task execution outcome back to related GitLab issue with clear status and evidence.
+description: Post a structured status update back to the linked GitLab issue so issue tracking reflects what really happened in the task.
 ---
 
 # GitLab Issue Sync
 
 ## Objective
-Keep issue tracking accurate by posting outcome, links, and next actions.
+Keep the linked GitLab issue aligned with the actual task outcome, including
+what changed, what was verified, and what remains blocked.
+
+## When This Applies
+- The task is linked to a GitLab issue
+- A meaningful delivery or failure update should be posted back to the issue
 
 ## Inputs
-- Related issue reference (if available in task metadata/context).
-- Task execution report.
-- MR/deploy links.
+- Linked issue reference
+- Task outcome
+- MR link, preview link, or deploy result when available
 
 ## Workflow
-1. Resolve linked issue reference.
-2. Post structured update comment.
-3. Include MR link, deployment status, and verification summary.
-4. If blocked/skipped, include exact blocker and required owner action.
-
-## Comment Structure
-- `Status`
-- `What changed`
-- `Verification`
-- `Deployment`
-- `Links`
-- `Blockers/Next steps`
+1. Resolve the linked GitLab issue.
+2. Build a short structured update with status, changes, verification, and
+   links.
+3. If the task is blocked or partial, include the exact blocker and next action.
+4. Post the comment and record whether sync succeeded.
 
 ## Decision Rules
 | Situation | Action |
 |---|---|
-| No linked issue | Skip and report `issue_sync_skipped_no_issue`. |
-| Issue is closed but task still active | Post note without reopening unless policy requires. |
+| No linked issue exists | Skip sync |
+| Issue is linked and update is ready | Post comment |
+| GitLab post fails | Mark sync failed and report why |
 
 ## Output Contract
-Include:
+Emit:
 - `issue_sync_status`: `posted` | `skipped` | `failed`
 - `issue_sync_reason`
 - `issue_ref`
+
+## Related Skills
+- `gitlab-merge-request`
+- `release-note-and-delivery-summary`
+- `final-report`

@@ -1,71 +1,88 @@
 ---
 name: deploy-cancel-stop-cleanup
-description: Cancel deployment run, stop containers/processes on remote or local server, and clean up resources.
+description: Cancel or stop a deployment/preview safely, clean up only the resources that belong to the current flow, and report exactly what was stopped or left running.
 ---
 
-# Deploy Cancel, Stop & Cleanup
+# Deploy Cancel Stop Cleanup
 
 ## Objective
-Cancel an active deployment run, stop running containers or processes on the target server (remote SSH or local), and optionally remove/clean resources.
+Stop an in-flight or already-running deployment or preview safely, without
+accidentally deleting unrelated runtime, data, or user-managed infrastructure.
 
 ## When This Applies
-- Task asks to cancel deploy, stop deployment, dừng container/process, xoá resource
-- User wants to rollback or tear down a deployment
+- User asks to stop or cancel a deploy
+- User asks to stop preview runtime or tear down preview resources
+- An auto-fix or recovery flow needs to clean up stale deployment state before
+  retrying
+- A preview container or compose project should be stopped and removed
+
+## Inputs
+- Current runtime control metadata, when available:
+  - compose project name
+  - container name
+  - local port
+  - process identifier
+- Deployment context under `.acpms/deploy/`, when using SSH deploy flows
+- User intent:
+  - cancel only
+  - stop runtime
+  - remove runtime resources
+  - aggressive cleanup
 
 ## Workflow
+1. Determine whether the request is:
+   - cancel orchestration only,
+   - stop running runtime,
+   - or stop and remove runtime resources.
+2. Identify the narrowest owned resource set:
+   - ACPMS-managed compose project
+   - ACPMS-managed container
+   - preview process by known port or PID
+   - remote runtime via SSH deploy context
+3. Stop the runtime cleanly using the owning tool first.
+4. Remove containers or transient resources only when the task actually asks for
+   cleanup.
+5. Keep persistent data unless the task explicitly authorizes destructive
+   cleanup.
+6. Report exactly what was stopped, removed, skipped, or left intact.
 
-### 1. Cancel Deployment Run (ACPMS)
-- User cancels via UI: Project → Deployments tab → chọn run đang chạy (queued/running) → nút **Cancel**
-- Nếu task cung cấp run_id và API token: `curl -X POST "<API_URL>/api/v1/deployment-runs/<run_id>/cancel" -H "Authorization: Bearer <token>"`
+## Stop Order
+Prefer this order:
 
-### 2. Stop on Remote Server (SSH)
-When deploy context exists (`.acpms/deploy/`):
-- Read `.acpms/deploy/config.json` for host, port, username, deploy_path
-- SSH: `ssh -i .acpms/deploy/ssh_key -o StrictHostKeyChecking=accept-new -p <port> <user>@<host>`
-
-**Stop containers:**
-- Docker Compose: `docker compose -f <path>/docker-compose.yml down` or `docker-compose down`
-- Docker: `docker stop <container>` or `docker stop $(docker ps -q)`
-- Docker Compose in deploy_path: `cd <deploy_path> && docker compose down`
-
-**Stop processes:**
-- `pkill -f <process_name>` (e.g. `pkill -f "node"`, `pkill -f "deploy.sh"`)
-- `kill <pid>` if PID known
-- `systemctl stop <service>` for systemd services
-
-### 3. Stop on Local
-- Same commands without SSH: `docker compose down`, `docker stop`, `pkill`, `systemctl stop`
-
-### 4. Clean Up Resources
-- Remove containers: `docker rm -f <container_id>`
-- Remove images: `docker rmi <image>` (if safe)
-- Remove volumes: `docker volume rm <name>` (caution: data loss)
-- Remove deploy directory contents: `rm -rf <deploy_path>/*` (if task explicitly asks to remove)
-- Prune: `docker system prune -f` (removes unused containers, networks)
-
-### 5. Report
-- List what was stopped/cancelled/removed
-- Include `cleanup_status`: `success` or `failed`
-- Include any errors
+1. cancel orchestration run if still active
+2. `docker compose down` for owned compose projects
+3. `docker stop` for owned containers
+4. process kill by known PID or local port
+5. remote stop via SSH context
 
 ## Decision Rules
 | Situation | Action |
-|-----------|--------|
-| No deploy context | Report blocked. Cannot SSH without .acpms/deploy/ |
-| Task says "cancel only" | Cancel run via API/UI; do not stop containers |
-| Task says "stop containers" | SSH and run docker compose down / docker stop |
-| Task says "remove all" | Stop first, then remove with caution. Confirm scope. |
-| Docker not found | Report: Docker not installed on target. |
+|---|---|
+| No owned runtime or deploy context can be identified | Report blocked; do not guess |
+| User asked to cancel only | Cancel orchestration and keep runtime intact |
+| Runtime belongs to current compose project | Use `docker compose down` |
+| Runtime is a single owned container | Stop container directly |
+| User did not request destructive cleanup | Do not remove volumes or unrelated images |
 
-## Safety
-- Do **not** remove data volumes without explicit user confirmation
-- Do **not** run `docker system prune -a` (removes all unused images) unless task says so
-- Prefer `docker compose down` over `docker rm -f` for clean shutdown
+## Guardrails
+- Never remove data volumes without explicit authorization
+- Never run broad destructive commands such as `docker system prune -a` unless
+  the user explicitly asks
+- Never kill unrelated containers or processes just because they use Docker
+- Never claim cleanup succeeded unless stop/remove commands actually returned
+  success
 
 ## Output Contract
-Include in final report:
-- `cancel_status`: `success` or `skipped` or `failed`
-- `containers_stopped`: list of stopped containers
-- `processes_killed`: list of killed processes
-- `resources_removed`: list of removed resources (if any)
-- `cleanup_status`: `success` or `failed`
+Emit:
+- `cancel_status`: `success` | `skipped` | `failed`
+- `cleanup_status`: `success` | `partial` | `failed` | `blocked`
+- `containers_stopped`
+- `processes_killed`
+- `resources_removed`
+- `cleanup_reason`
+
+## Related Skills
+- `preview-docker-runtime`
+- `rollback-deploy`
+- `retry-triage-and-recovery`
+- `deploy-ssh-remote`
