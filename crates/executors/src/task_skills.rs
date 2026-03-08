@@ -2210,7 +2210,13 @@ fn builtin_skill_content(skill_id: &str) -> Option<&'static str> {
 - Use Project Details for name/description."#,
         ),
         "init-mobile-scaffold" => Some(
-            r#"Mobile scaffold: React Native/Expo/Flutter, platform config, README, .gitignore, Info.plist, AndroidManifest, src/lib/, navigation, screens. Use Project Details for name/description."#,
+            r#"Mobile scaffold: choose stack from app shape, not from a hard-coded default.
+- Cross-platform MVP: prefer a fast-iteration stack.
+- Native-heavy cross-platform app: prefer a stack with deeper native control.
+- Mobile-first polished product: prefer the stack that best fits the requested runtime and team.
+- Imported existing app: preserve the current viable stack.
+- Decide whether this is a standalone mobile repo or a mobile app inside a monorepo.
+- Deliver platform config, entrypoint, navigation/screens structure, README, .gitignore, and preview/build commands appropriate for simulator, device, or artifact workflows. Use Project Details for name/description."#,
         ),
         "init-extension-scaffold" => Some(
             r#"Extension scaffold: manifest.json V3, build tools, README, background/content/popup/options, permissions, multi-browser. Use Project Details for name/description."#,
