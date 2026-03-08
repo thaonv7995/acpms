@@ -2219,7 +2219,8 @@ fn builtin_skill_content(skill_id: &str) -> Option<&'static str> {
             r#"Desktop scaffold: Electron/Tauri, main/renderer, README, .gitignore, IPC, packaging, code signing. Use Project Details for name/description."#,
         ),
         "init-microservice-scaffold" => Some(
-            r#"Microservice scaffold: go.mod/Cargo.toml, Dockerfile, health/ready/live, metrics, logging, cmd/, api/, configs/.
+            r#"Microservice scaffold: decide first whether this is a standalone service repo or one service inside a monorepo.
+- Scaffold health/ready/live, logging, config, and container runtime for the targeted service only.
 - Include docker-compose.yml when the service depends on supporting services or local orchestration.
 - Use Project Details for name/description."#,
         ),
