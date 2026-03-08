@@ -9,6 +9,10 @@ description: Produce a QA-usable desktop build artifact for task preview, aligne
 Generate a downloadable desktop artifact that QA can actually run or install,
 without confusing artifact preview with live URL preview.
 
+Desktop preview is not a browser URL by default. Prefer the most honest preview
+surface for the current stack and environment: runnable dev app, unpacked app,
+or packaged installer/bundle.
+
 ## When This Applies
 - Project type is desktop
 - Task preview should be delivered as downloadable artifacts
@@ -17,20 +21,32 @@ without confusing artifact preview with live URL preview.
 - Desktop packaging stack
 - Actual package/build command
 - Real output directory
+- Available preview surfaces:
+  - runnable dev app
+  - unpacked runnable app
+  - packaged installer or bundle
+  - screenshots or evidence captured from a successful run
 
 ## Workflow
-1. Detect the packaging stack and current package command.
-2. Reuse the real packaging flow where it already works.
-3. Fix the packaging flow if the current command is broken.
-4. Align preview metadata with the actual output path.
-5. Verify that the output directory contains a QA-usable artifact.
+1. Detect the packaging stack and the real preview surface for that stack.
+2. Prefer the best preview surface available in this order:
+   - runnable dev app when that is the intended validation path
+   - unpacked runnable app
+   - packaged installer or bundle
+3. Reuse the real packaging flow where it already works.
+4. Fix the packaging flow if the current command is broken.
+5. Align preview metadata with the actual output path.
+6. Verify that the output directory contains a QA-usable artifact or that the
+   runnable app path really works.
 
 ## Decision Rules
 | Situation | Action |
 |---|---|
+| Dev run is the only realistic preview path in this environment | Report the runnable app path instead of pretending an installer exists |
 | Installable package exists | Prefer it |
 | Only unpacked runnable app exists | Use it and document how QA should run it |
 | Signing/notarization unavailable | Produce unsigned artifact and document the limitation |
+| Platform packaging is unsupported in the current environment | Report the limitation and fall back to the nearest truthful preview surface |
 
 ## Output Contract
 Emit:
@@ -38,6 +54,7 @@ Emit:
 - `artifact_build_command`
 - `artifact_output_directory`
 - `artifact_types`
+- `preview_surface`: `dev_app` | `unpacked_app` | `installer` | `bundle`
 - `qa_install_notes`
 
 ## Related Skills

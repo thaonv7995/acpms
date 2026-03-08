@@ -2222,7 +2222,12 @@ fn builtin_skill_content(skill_id: &str) -> Option<&'static str> {
             r#"Extension scaffold: manifest.json V3, build tools, README, background/content/popup/options, permissions, multi-browser. Use Project Details for name/description."#,
         ),
         "init-desktop-scaffold" => Some(
-            r#"Desktop scaffold: Electron/Tauri, main/renderer, README, .gitignore, IPC, packaging, code signing. Use Project Details for name/description."#,
+            r#"Desktop scaffold: choose stack from app shape, not from a hard-coded default.
+- Lightweight native-feeling app: prefer a lighter desktop runtime.
+- JS/TS app with complex shell/native module needs: prefer a broader desktop shell stack.
+- Imported existing app: preserve the current viable stack.
+- Decide whether this is a standalone desktop repo or a desktop app inside a monorepo.
+- Deliver runtime entrypoint, UI entrypoint, package/build config, README, .gitignore, and truthful preview/build commands for dev app or packaged artifact workflows. Use Project Details for name/description."#,
         ),
         "init-microservice-scaffold" => Some(
             r#"Microservice scaffold: decide first whether this is a standalone service repo or one service inside a monorepo.
