@@ -11,7 +11,7 @@ initial scaffold simple enough to iterate on safely.
 
 Do not hard-code one desktop framework for all apps. If the user does not
 explicitly specify a stack, choose the desktop stack that best fits the product
-shape, native/runtime needs, and team constraints.
+shape, native/runtime depth, platform targets, and team constraints.
 
 ## When This Applies
 - Project type is desktop
@@ -26,6 +26,10 @@ shape, native/runtime needs, and team constraints.
   - native-heavy desktop app
   - JS/TS desktop app with complex shell integrations
   - imported existing desktop app
+- Native integration depth inferred from the brief:
+  - light shell only
+  - moderate OS integration
+  - deep platform/system integration
 - Repo-shape clues:
   - standalone desktop repo
   - desktop app inside a monorepo
@@ -36,9 +40,12 @@ shape, native/runtime needs, and team constraints.
    - desktop app inside a monorepo
 2. Select the desktop stack:
    - explicit stack requirement -> follow it
-   - lightweight native-feeling app -> prefer Tauri or equivalent
+   - lightweight native-feeling cross-platform app -> prefer Tauri or equivalent
    - JS/TS app with broad Node/native module ecosystem needs -> prefer Electron
    - Go-heavy desktop stack -> prefer Wails or equivalent
+   - macOS-first app with deep system integration -> prefer Swift/SwiftUI/AppKit
+   - Windows-first app with deep system integration -> prefer .NET/WinUI/WPF or equivalent
+   - Linux-first app with deep native desktop requirements -> prefer the native toolkit/runtime most appropriate to the distro target
    - imported existing app -> preserve the current viable stack
 3. Create the desktop runtime shell and frontend/backend split appropriate to
    the selected stack.
@@ -61,6 +68,11 @@ shape, native/runtime needs, and team constraints.
 | Stack explicitly specified | Follow it |
 | Brief implies the app lives with other apps/services in one repo | Preserve or create a monorepo-friendly layout; do not force standalone structure |
 | Imported existing app already has a viable stack | Preserve it instead of re-platforming |
+| App is cross-platform and mostly UI/shell logic | Prefer a cross-platform desktop stack before reaching for a platform-native one |
+| App needs moderate native integration but still targets multiple OSes | Prefer a cross-platform runtime with a credible native bridge story |
+| App is platform-specific and must integrate deeply with the OS | Prefer the platform-native language/toolkit over Electron/Tauri/Wails |
+| macOS app needs deep system hooks, privileged APIs, or native UX fidelity | Prefer Swift/SwiftUI/AppKit unless the user explicitly requires another stack |
+| Windows app needs deep shell/system integration | Prefer a Windows-native stack such as .NET/WinUI/WPF unless the user explicitly requires another stack |
 | Signing/notarization unavailable | Document it; do not pretend it is solved |
 | Native integrations are not required yet | Stub structure, do not overbuild |
 | ACPMS only needs artifact or app-run preview | Do not add Docker runtime files by default |
@@ -69,6 +81,7 @@ shape, native/runtime needs, and team constraints.
 Emit:
 - `scaffold_status`
 - `selected_stack`
+- `stack_selection_reason`
 - `repo_shape_selected`
 - `created_files`
 - `package_strategy`

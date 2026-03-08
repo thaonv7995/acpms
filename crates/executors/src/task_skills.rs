@@ -2230,6 +2230,9 @@ fn builtin_skill_content(skill_id: &str) -> Option<&'static str> {
             r#"Desktop scaffold: choose stack from app shape, not from a hard-coded default.
 - Lightweight native-feeling app: prefer a lighter desktop runtime.
 - JS/TS app with complex shell/native module needs: prefer a broader desktop shell stack.
+- Platform-specific app with deep OS integration: prefer the platform-native language/toolkit.
+- macOS + deep system integration: strongly consider Swift/SwiftUI/AppKit.
+- Windows + deep system integration: strongly consider .NET/WinUI/WPF.
 - Imported existing app: preserve the current viable stack.
 - Decide whether this is a standalone desktop repo or a desktop app inside a monorepo.
 - Deliver runtime entrypoint, UI entrypoint, package/build config, README, .gitignore, and truthful preview/build commands for dev app or packaged artifact workflows. Use Project Details for name/description."#,
