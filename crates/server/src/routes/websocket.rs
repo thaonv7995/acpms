@@ -1,5 +1,7 @@
 use crate::api::AgentActivityStatusDto;
-use crate::middleware::{authenticate_bearer_token, Permission, RbacChecker};
+use crate::middleware::{
+    authenticate_bearer_token, authenticate_openclaw_token, Permission, RbacChecker,
+};
 use crate::routes::agent::AgentAuthSessionDoc;
 use crate::services::agent_auth::AuthSessionStatus;
 use crate::{error::ApiError, AppState};
@@ -59,6 +61,77 @@ fn ws_upgrade_with_protocol(ws: WebSocketUpgrade, headers: &HeaderMap) -> WebSoc
     } else {
         ws
     }
+}
+
+fn extract_ws_token(
+    headers: &HeaderMap,
+    auth_header: Option<TypedHeader<Authorization<Bearer>>>,
+) -> Result<String, ApiError> {
+    extract_token_from_ws_protocol(headers)
+        .or_else(|| auth_header.map(|h| h.token().to_string()))
+        .ok_or(ApiError::Unauthorized)
+}
+
+async fn authorize_attempt_ws_access(
+    state: &AppState,
+    attempt_id: Uuid,
+    user_id: Uuid,
+) -> Result<(), ApiError> {
+    #[derive(sqlx::FromRow)]
+    struct AttemptRow {
+        task_id: Uuid,
+    }
+
+    #[derive(sqlx::FromRow)]
+    struct TaskRow {
+        project_id: Uuid,
+    }
+
+    let attempt = sqlx::query_as::<_, AttemptRow>(
+        r#"
+        SELECT task_id FROM task_attempts WHERE id = $1
+        "#,
+    )
+    .bind(attempt_id)
+    .fetch_optional(&state.db)
+    .await
+    .map_err(|e| ApiError::Internal(format!("Database error: {}", e)))?
+    .ok_or_else(|| ApiError::NotFound(format!("Task attempt {} not found", attempt_id)))?;
+
+    let task = sqlx::query_as::<_, TaskRow>(
+        r#"
+        SELECT project_id FROM tasks WHERE id = $1
+        "#,
+    )
+    .bind(attempt.task_id)
+    .fetch_optional(&state.db)
+    .await
+    .map_err(|e| ApiError::Internal(format!("Database error: {}", e)))?
+    .ok_or_else(|| ApiError::NotFound(format!("Task {} not found", attempt.task_id)))?;
+
+    RbacChecker::check_permission(user_id, task.project_id, Permission::ViewTask, &state.db).await
+}
+
+async fn authorize_project_ws_access(
+    state: &AppState,
+    project_id: Uuid,
+    user_id: Uuid,
+) -> Result<(), ApiError> {
+    let project_exists: bool =
+        sqlx::query_scalar("SELECT EXISTS(SELECT 1 FROM projects WHERE id = $1)")
+            .bind(project_id)
+            .fetch_one(&state.db)
+            .await
+            .map_err(|e| ApiError::Internal(format!("Database error: {}", e)))?;
+
+    if !project_exists {
+        return Err(ApiError::NotFound(format!(
+            "Project {} not found",
+            project_id
+        )));
+    }
+
+    RbacChecker::check_permission(user_id, project_id, Permission::ViewProject, &state.db).await
 }
 
 /// Client-to-server messages for bidirectional WebSocket communication
@@ -952,54 +1025,27 @@ pub async fn ws_handler(
     headers: HeaderMap,
     auth_header: Option<TypedHeader<Authorization<Bearer>>>,
 ) -> Result<impl IntoResponse, ApiError> {
-    // Browser WebSocket clients should send token via subprotocol:
-    // new WebSocket(url, ["acpms-bearer", token])
-    let token = extract_token_from_ws_protocol(&headers)
-        .or_else(|| auth_header.map(|h| h.token().to_string()))
-        .ok_or(ApiError::Unauthorized)?;
+    let token = extract_ws_token(&headers, auth_header)?;
 
     let auth_user = authenticate_bearer_token(&token, &state).await?;
-    let user_id = auth_user.id;
-
-    #[derive(sqlx::FromRow)]
-    struct AttemptRow {
-        task_id: Uuid,
-    }
-
-    #[derive(sqlx::FromRow)]
-    struct TaskRow {
-        project_id: Uuid,
-    }
-
-    // Fetch task attempt to verify it exists and get task_id
-    let attempt = sqlx::query_as::<_, AttemptRow>(
-        r#"
-        SELECT task_id FROM task_attempts WHERE id = $1
-        "#,
-    )
-    .bind(attempt_id)
-    .fetch_optional(&state.db)
-    .await
-    .map_err(|e| ApiError::Internal(format!("Database error: {}", e)))?
-    .ok_or_else(|| ApiError::NotFound(format!("Task attempt {} not found", attempt_id)))?;
-
-    // Fetch task to get project_id
-    let task = sqlx::query_as::<_, TaskRow>(
-        r#"
-        SELECT project_id FROM tasks WHERE id = $1
-        "#,
-    )
-    .bind(attempt.task_id)
-    .fetch_optional(&state.db)
-    .await
-    .map_err(|e| ApiError::Internal(format!("Database error: {}", e)))?
-    .ok_or_else(|| ApiError::NotFound(format!("Task {} not found", attempt.task_id)))?;
-
-    // Check permission using RBAC (includes system admin bypass).
-    RbacChecker::check_permission(user_id, task.project_id, Permission::ViewTask, &state.db)
-        .await?;
+    authorize_attempt_ws_access(&state, attempt_id, auth_user.id).await?;
 
     // User is authenticated and authorized - upgrade to WebSocket
+    let ws = ws_upgrade_with_protocol(ws, &headers);
+    Ok(ws.on_upgrade(move |socket| handle_socket(socket, attempt_id, state)))
+}
+
+pub async fn openclaw_ws_handler(
+    ws: WebSocketUpgrade,
+    Path(attempt_id): Path<Uuid>,
+    State(state): State<AppState>,
+    headers: HeaderMap,
+    auth_header: Option<TypedHeader<Authorization<Bearer>>>,
+) -> Result<impl IntoResponse, ApiError> {
+    let token = extract_ws_token(&headers, auth_header)?;
+    let auth_user = authenticate_openclaw_token(&state, &token).await?;
+    authorize_attempt_ws_access(&state, attempt_id, auth_user.id).await?;
+
     let ws = ws_upgrade_with_protocol(ws, &headers);
     Ok(ws.on_upgrade(move |socket| handle_socket(socket, attempt_id, state)))
 }
@@ -1296,11 +1342,27 @@ pub async fn agent_activity_ws_handler(
     headers: HeaderMap,
     auth_header: Option<TypedHeader<Authorization<Bearer>>>,
 ) -> Result<impl IntoResponse, ApiError> {
-    let token = extract_token_from_ws_protocol(&headers)
-        .or_else(|| auth_header.map(|h| h.token().to_string()))
-        .ok_or(ApiError::Unauthorized)?;
+    let token = extract_ws_token(&headers, auth_header)?;
 
     let auth_user = authenticate_bearer_token(&token, &state).await?;
+    let user_id = auth_user.id;
+    let is_admin = RbacChecker::is_system_admin(user_id, &state.db).await?;
+
+    let ws = ws_upgrade_with_protocol(ws, &headers);
+    Ok(ws.on_upgrade(move |socket| {
+        handle_agent_activity_status_socket(socket, state, user_id, is_admin)
+    }))
+}
+
+pub async fn openclaw_agent_activity_ws_handler(
+    ws: WebSocketUpgrade,
+    State(state): State<AppState>,
+    headers: HeaderMap,
+    auth_header: Option<TypedHeader<Authorization<Bearer>>>,
+) -> Result<impl IntoResponse, ApiError> {
+    let token = extract_ws_token(&headers, auth_header)?;
+
+    let auth_user = authenticate_openclaw_token(&state, &token).await?;
     let user_id = auth_user.id;
     let is_admin = RbacChecker::is_system_admin(user_id, &state.db).await?;
 
@@ -2319,32 +2381,27 @@ pub async fn project_ws_handler(
     headers: HeaderMap,
     auth_header: Option<TypedHeader<Authorization<Bearer>>>,
 ) -> Result<impl IntoResponse, ApiError> {
-    let token = extract_token_from_ws_protocol(&headers)
-        .or_else(|| auth_header.map(|h| h.token().to_string()))
-        .ok_or(ApiError::Unauthorized)?;
+    let token = extract_ws_token(&headers, auth_header)?;
 
     let auth_user = authenticate_bearer_token(&token, &state).await?;
-    let user_id = auth_user.id;
-
-    // Check if project exists
-    let project_exists: bool =
-        sqlx::query_scalar("SELECT EXISTS(SELECT 1 FROM projects WHERE id = $1)")
-            .bind(project_id)
-            .fetch_one(&state.db)
-            .await
-            .map_err(|e| ApiError::Internal(format!("Database error: {}", e)))?;
-
-    if !project_exists {
-        return Err(ApiError::NotFound(format!(
-            "Project {} not found",
-            project_id
-        )));
-    }
-
-    // Check permission using RBAC (includes system admin bypass).
-    RbacChecker::check_permission(user_id, project_id, Permission::ViewProject, &state.db).await?;
+    authorize_project_ws_access(&state, project_id, auth_user.id).await?;
 
     // User is authenticated and authorized - upgrade to WebSocket
+    let ws = ws_upgrade_with_protocol(ws, &headers);
+    Ok(ws.on_upgrade(move |socket| handle_project_socket(socket, project_id, state)))
+}
+
+pub async fn openclaw_project_ws_handler(
+    ws: WebSocketUpgrade,
+    Path(project_id): Path<Uuid>,
+    State(state): State<AppState>,
+    headers: HeaderMap,
+    auth_header: Option<TypedHeader<Authorization<Bearer>>>,
+) -> Result<impl IntoResponse, ApiError> {
+    let token = extract_ws_token(&headers, auth_header)?;
+    let auth_user = authenticate_openclaw_token(&state, &token).await?;
+    authorize_project_ws_access(&state, project_id, auth_user.id).await?;
+
     let ws = ws_upgrade_with_protocol(ws, &headers);
     Ok(ws.on_upgrade(move |socket| handle_project_socket(socket, project_id, state)))
 }

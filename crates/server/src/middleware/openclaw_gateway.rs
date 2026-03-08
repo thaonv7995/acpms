@@ -71,13 +71,12 @@ async fn resolve_actor_user_id(state: &AppState) -> Result<uuid::Uuid, ApiError>
     })
 }
 
-pub async fn authenticate_openclaw_request(
+pub async fn authenticate_openclaw_token(
     state: &AppState,
-    headers: &HeaderMap,
+    token: &str,
 ) -> Result<AuthUser, ApiError> {
     ensure_gateway_enabled(&state.openclaw_gateway)?;
 
-    let token = extract_bearer_token(headers)?;
     let expected = state
         .openclaw_gateway
         .api_key
@@ -93,6 +92,14 @@ pub async fn authenticate_openclaw_request(
         id: actor_user_id,
         jti: "openclaw-gateway".to_string(),
     })
+}
+
+pub async fn authenticate_openclaw_request(
+    state: &AppState,
+    headers: &HeaderMap,
+) -> Result<AuthUser, ApiError> {
+    let token = extract_bearer_token(headers)?;
+    authenticate_openclaw_token(state, token).await
 }
 
 pub async fn require_openclaw_auth(

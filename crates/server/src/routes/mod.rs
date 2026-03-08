@@ -516,6 +516,20 @@ fn build_root_ws_routes() -> Router<AppState> {
         )
 }
 
+fn build_openclaw_ws_routes() -> Router<AppState> {
+    Router::new()
+        .route("/attempts/:id/logs", get(websocket::openclaw_ws_handler))
+        .route("/attempts/:id/diffs", get(websocket::openclaw_ws_handler))
+        .route(
+            "/projects/:project_id/agents",
+            get(websocket::openclaw_project_ws_handler),
+        )
+        .route(
+            "/agent-activity/status",
+            get(websocket::openclaw_agent_activity_ws_handler),
+        )
+}
+
 pub fn create_router(state: AppState) -> Router {
     let health_routes = Router::new()
         .route("/health", get(health::health_check))
@@ -529,6 +543,7 @@ pub fn create_router(state: AppState) -> Router {
         .with_state(state.clone());
 
     let openclaw_routes = openclaw::create_router(state.clone());
+    let openclaw_ws_routes = build_openclaw_ws_routes().with_state(state.clone());
 
     let ws_routes = build_root_ws_routes().with_state(state.clone());
 
@@ -545,6 +560,7 @@ pub fn create_router(state: AppState) -> Router {
         .merge(health_routes)
         .nest("/api/v1", api_routes)
         .nest("/api/openclaw", openclaw_routes)
+        .nest("/api/openclaw/ws", openclaw_ws_routes)
         .nest("/ws", ws_routes)
         .merge(s3_routes);
 

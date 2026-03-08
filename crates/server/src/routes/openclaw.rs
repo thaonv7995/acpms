@@ -1,9 +1,9 @@
 use axum::{
     extract::{Query, State},
-    http::HeaderMap,
+    http::{HeaderMap, StatusCode},
     response::{
         sse::{Event, KeepAlive, Sse},
-        Json,
+        IntoResponse, Json, Response,
     },
     routing::{get, post},
     Router,
@@ -23,7 +23,7 @@ use tokio_stream::wrappers::BroadcastStream;
 use uuid::Uuid;
 
 use crate::{
-    api::{openapi_spec::build_openclaw_openapi_json, ApiResponse},
+    api::{openapi_spec::build_openclaw_openapi_json, ApiErrorDetail, ApiResponse, ResponseCode},
     error::ApiResult,
     middleware::AuthUser,
     AppState,
@@ -134,6 +134,13 @@ pub struct OpenClawNextCall {
 #[derive(Debug, Deserialize)]
 pub struct OpenClawEventStreamParams {
     pub after: Option<String>,
+}
+
+#[derive(Debug, Serialize)]
+struct OpenClawEventCursorExpiredData {
+    error_type: &'static str,
+    requested_after: i64,
+    oldest_available_event_id: Option<i64>,
 }
 
 fn header_value(headers: &HeaderMap, name: &str) -> Option<String> {
@@ -409,6 +416,32 @@ fn to_sse_event(event: acpms_services::OpenClawGatewayEvent) -> Result<Event, In
         .data(data))
 }
 
+fn event_cursor_expired_response(
+    requested_after: i64,
+    oldest_available_event_id: Option<i64>,
+) -> Response {
+    let response = ApiResponse {
+        success: false,
+        code: ResponseCode::StateConflict,
+        message: "Event cursor expired".to_string(),
+        data: Some(OpenClawEventCursorExpiredData {
+            error_type: "EventCursorExpired",
+            requested_after,
+            oldest_available_event_id,
+        }),
+        metadata: None,
+        error: Some(ApiErrorDetail {
+            details: Some(
+                "Reconnect without Last-Event-ID or resume from the oldest available event cursor"
+                    .to_string(),
+            ),
+            trace_id: None,
+        }),
+    };
+
+    (StatusCode::CONFLICT, Json(response)).into_response()
+}
+
 pub fn task_status_label(status: TaskStatus) -> &'static str {
     match status {
         TaskStatus::Backlog => "backlog",
@@ -459,7 +492,7 @@ pub async fn events_stream(
     headers: HeaderMap,
     _auth_user: AuthUser,
     Query(params): Query<OpenClawEventStreamParams>,
-) -> Result<Sse<impl futures::Stream<Item = Result<Event, Infallible>>>, crate::error::ApiError> {
+) -> Result<Response, crate::error::ApiError> {
     let after_cursor = parse_resume_cursor(&headers, &params)?;
 
     if let Some(after) = after_cursor {
@@ -470,9 +503,7 @@ pub async fn events_stream(
             .map_err(|error| crate::error::ApiError::Internal(error.to_string()))?
         {
             if after < oldest.saturating_sub(1) {
-                return Err(crate::error::ApiError::Conflict(
-                    "Event cursor expired".to_string(),
-                ));
+                return Ok(event_cursor_expired_response(after, Some(oldest)));
             }
         }
     }
@@ -509,11 +540,13 @@ pub async fn events_stream(
         }
     });
 
-    Ok(Sse::new(replay_stream.chain(live_stream)).keep_alive(
-        KeepAlive::new()
-            .interval(Duration::from_secs(15))
-            .text("keep-alive"),
-    ))
+    Ok(Sse::new(replay_stream.chain(live_stream))
+        .keep_alive(
+            KeepAlive::new()
+                .interval(Duration::from_secs(15))
+                .text("keep-alive"),
+        )
+        .into_response())
 }
 
 pub fn create_router(state: AppState) -> Router {
