@@ -6,7 +6,9 @@ This checklist turns the stream-first OpenClaw design into an implementation pla
 
 The immediate target is:
 
+*   `install.sh` generates a copy-paste OpenClaw bootstrap prompt for the human operator.
 *   OpenClaw connects to ACPMS without exposing any inbound domain.
+*   OpenClaw can bootstrap from the installer prompt without the human manually explaining ACPMS.
 *   OpenClaw receives lifecycle events through `GET /api/openclaw/v1/events/stream`.
 *   OpenClaw can reconnect and recover missed terminal events by cursor.
 *   Attempt-specific logs remain available through `GET /api/openclaw/v1/attempts/{attempt_id}/stream`.
@@ -16,6 +18,9 @@ The immediate target is:
 
 The MVP is complete only when all of the following are true:
 
+*   `install.sh` prints a ready-to-send OpenClaw prompt and the same prompt can be saved to a local file.
+*   OpenClaw can read that prompt and know that its first authoritative action is `POST /api/openclaw/guide-for-openclaw`.
+*   The bootstrap response includes `events_stream_url`, `operating_rules`, and reporting-policy guidance.
 *   OpenClaw can create a task attempt and receive `attempt.started`.
 *   OpenClaw can observe `attempt.completed`, `attempt.failed`, or `attempt.needs_input` on the global event stream.
 *   OpenClaw can disconnect, reconnect with `Last-Event-ID` or `?after=<cursor>`, and recover missed events.
@@ -27,6 +32,9 @@ The MVP is complete only when all of the following are true:
 ### 3.1 In Scope
 
 *   Gateway auth for the global event stream
+*   Installer-generated bootstrap prompt
+*   Bootstrap guide response contract
+*   Structured operating-rules payload for OpenClaw behavior
 *   Canonical OpenClaw event model
 *   Durable replay store in the main Postgres database
 *   Replay cursor semantics
@@ -45,6 +53,21 @@ The MVP is complete only when all of the following are true:
 *   Rich event filtering syntax beyond basic cursor resume
 
 ## 4. Recommended Implementation Order
+
+### 4.0 Phase 0: Human Handoff Contract
+
+- [ ] Keep `install.sh` prompt default disabled with `Do you want to enable the OpenClaw Integration Gateway for external AI control? [y/N]`.
+- [ ] When enabled, generate:
+  - `OPENCLAW_API_KEY`
+  - `OPENCLAW_WEBHOOK_SECRET` (optional transport support)
+  - a rendered OpenClaw bootstrap prompt
+- [ ] Print both:
+  - operator reference connection details
+  - a single ready-to-send prompt block for OpenClaw
+- [ ] Optionally save the rendered prompt to `~/.acpms/config/openclaw_bootstrap_prompt.txt`.
+- [ ] If saved to disk, create the file with restrictive permissions where practical.
+- [ ] Ensure the installer prompt tells OpenClaw to call `POST /api/openclaw/guide-for-openclaw` first.
+- [ ] Ensure the installer prompt tells OpenClaw to use only `/api/openclaw/v1/*` and `/api/openclaw/ws/*`.
 
 ### 4.1 Phase 1: Define the Canonical Event Contract
 
@@ -210,17 +233,61 @@ OpenClaw should use:
 ### 4.7 Phase 7: Update Bootstrap and OpenAPI Surface
 
 - [ ] Add `events_stream_url` to the bootstrap response.
+- [ ] Add `operating_rules` to the bootstrap response.
+- [ ] Add reporting-policy fields that tell OpenClaw what must be reported to the user.
+- [ ] Keep the bootstrap response consistent with the installer-generated prompt.
 - [ ] Add resume guidance to `instruction_prompt`.
 - [ ] Document `GET /api/openclaw/v1/events/stream` in OpenAPI and Swagger UI.
 - [ ] Keep Webhook fields optional, not required.
 - [ ] Ensure installer output includes `Global Event SSE`.
 
-### 4.8 Phase 8: Optional Webhook Compatibility
+### 4.8 Phase 8: Implement ACPMS Operating-Rule Contract
+
+- [ ] Return rulebook metadata such as:
+  - `rulebook_version`
+  - `default_autonomy_mode`
+  - `must_load_acpms_context_before_mutation`
+  - `must_report_material_changes`
+  - `must_confirm_before_destructive_actions`
+  - `high_priority_report_events`
+  - `recommended_reporting_template`
+- [ ] Keep the bootstrap response aligned with the OpenClaw operating-rule doc.
+- [ ] Ensure the rule payload distinguishes:
+  - read/report-only actions
+  - analysis/proposal actions
+  - work-creation actions
+  - execution actions
+  - control/admin actions
+- [ ] Ensure the rule payload makes OpenClaw report:
+  - what the user asked
+  - what ACPMS context was checked
+  - what was concluded
+  - what ACPMS action was taken, if any
+  - current status
+  - next step / approval needed
+
+### 4.9 Phase 9: Optional Webhook Compatibility
 
 - [ ] Keep the event payload schema identical between SSE and Webhook delivery where possible.
 - [ ] Reuse the same event service as the source for Webhook dispatch.
 - [ ] Do not require `webhook_receiver_url` for bootstrap success.
 - [ ] Report `webhook_registered=false` without treating it as a setup failure in stream-first mode.
+
+### 4.10 Phase 10: Installer Prompt Rendering
+
+- [ ] Render the installer prompt from the same canonical field set used by the bootstrap response.
+- [ ] Avoid hand-maintaining two divergent prompt templates.
+- [ ] Ensure the prompt includes:
+  - Base endpoint
+  - OpenAPI URL
+  - Guide endpoint
+  - Global Event SSE URL
+  - API key
+  - optional webhook secret
+  - first-step instructions
+  - human reporting obligations
+- [ ] Ensure the prompt is concise enough to paste into OpenClaw directly.
+- [ ] Ensure the prompt does not inline the entire long-form rulebook.
 
 ## 5. Cursor and Replay Rules
 
@@ -264,11 +331,15 @@ These rules should be implemented exactly to avoid ambiguous client behavior.
 - [ ] Cursor parsing and validation
 - [ ] Replay query ordering
 - [ ] Retention cutoff cleanup
+- [ ] Installer prompt rendering from runtime config
+- [ ] Bootstrap response serialization including `operating_rules`
 
 ### 7.2 Integration Tests
 
 - [ ] Unauthorized stream request returns `401`
 - [ ] Disabled gateway returns `403`
+- [ ] `guide-for-openclaw` returns required runtime fields for stream-first mode
+- [ ] Installer-generated prompt and bootstrap response stay field-consistent
 - [ ] Connect with no cursor and receive live event
 - [ ] Reconnect with `Last-Event-ID` and receive missed events
 - [ ] Expired cursor returns structured conflict error
@@ -279,6 +350,9 @@ These rules should be implemented exactly to avoid ambiguous client behavior.
 ### 7.3 Manual Verification
 
 - [ ] Start ACPMS locally with OpenClaw gateway enabled
+- [ ] Verify installer prints a ready-to-send OpenClaw prompt
+- [ ] Verify prompt file is created when that behavior is enabled
+- [ ] Paste the installer prompt into OpenClaw and verify it calls `Guide Endpoint` first
 - [ ] Open one terminal with `curl -N -H "Authorization: Bearer ..."` against `/api/openclaw/v1/events/stream`
 - [ ] Create and run a task attempt
 - [ ] Verify `attempt.started` arrives
@@ -310,12 +384,15 @@ These rules should be implemented exactly to avoid ambiguous client behavior.
 - [ ] `OpenClawEventService`
 - [ ] Event row DTO + domain DTO
 - [ ] Broadcast integration
+- [ ] Bootstrap-guide builder / serializer
+- [ ] Installer-prompt renderer from canonical runtime config
 
 ### 9.3 Server Routes
 
 - [ ] `routes/openclaw/events.rs`
 - [ ] Router registration in `routes/openclaw/mod.rs`
 - [ ] OpenAPI annotations
+- [ ] `routes/openclaw/guide.rs` returns `operating_rules` and transport metadata
 
 ### 9.4 Event Producers
 
@@ -329,14 +406,18 @@ These rules should be implemented exactly to avoid ambiguous client behavior.
 - [ ] Keep `/api/openclaw/guide-for-openclaw` aligned with the final stream endpoint
 - [ ] Keep `/api/openclaw/openapi.json` aligned with runtime behavior
 - [ ] Update `install.sh` output when implementation lands
+- [ ] Update `install.sh` to print the ready-to-send prompt block
+- [ ] Update `install.sh` to save the rendered prompt to a file if that behavior is enabled
+- [ ] Keep installer prompt content aligned with the OpenClaw operating rules and guide contract
 
 ## 10. Recommended Shipping Sequence
 
-Ship this in four PRs if possible:
+Ship this in five PRs if possible:
 
-1.  **PR 1**: event model + DB migration + event service
-2.  **PR 2**: `GET /api/openclaw/v1/events/stream` + replay logic + tests
-3.  **PR 3**: orchestrator/task/HITL event emission wiring
-4.  **PR 4**: bootstrap/OpenAPI/install updates + optional Webhook compatibility cleanup
+1.  **PR 1**: installer prompt renderer + guide-response contract + shared config fields
+2.  **PR 2**: event model + DB migration + event service
+3.  **PR 3**: `GET /api/openclaw/v1/events/stream` + replay logic + tests
+4.  **PR 4**: orchestrator/task/HITL event emission wiring
+5.  **PR 5**: bootstrap/OpenAPI/install updates + optional Webhook compatibility cleanup
 
 This sequence keeps the work reviewable and reduces the chance of mixing transport design, persistence, and orchestration bugs in one large change.

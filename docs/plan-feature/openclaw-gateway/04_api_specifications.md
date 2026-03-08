@@ -132,6 +132,14 @@ Example response shape:
         "approval_required",
         "deployment_risk",
         "system_health_issue"
+      ],
+      "recommended_reporting_template": [
+        "what the user asked",
+        "what ACPMS context was checked",
+        "what was concluded",
+        "what ACPMS action was taken, if any",
+        "current status",
+        "next step or approval needed"
       ]
     },
     "connection_status": {
