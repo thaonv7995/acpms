@@ -23,6 +23,10 @@ description: Use when a task needs a live preview URL for Web/API/Microservice a
 - ACPMS env such as `CLOUDFLARE_ACCOUNT_ID`, `CLOUDFLARE_API_TOKEN`,
   `CLOUDFLARE_ZONE_ID`, and `CLOUDFLARE_BASE_DOMAIN` when public preview is expected
 - Attempt/worktree context so container names and compose project names are unique
+- Runtime verification target appropriate to the project type:
+  - web page response
+  - API health endpoint
+  - OpenAPI/docs endpoint when the service exposes one
 
 ## Workflow
 1. Inspect the repo for existing compose or Docker runtime files.
@@ -31,7 +35,10 @@ description: Use when a task needs a live preview URL for Web/API/Microservice a
 4. Start the runtime for real:
    - `docker compose -p <project> up -d --build`, or
    - `docker run -d ...`
-5. Verify the local runtime with a real HTTP check before claiming success.
+5. Verify the local runtime with a real project-appropriate check before claiming success:
+   - web app -> page response
+   - API service -> health endpoint, and docs/OpenAPI when expected
+   - microservice -> health/readiness endpoint
 6. Write `.acpms/preview-output.json` only after the HTTP check passes.
 7. Emit `PREVIEW_TARGET` and `PREVIEW_URL` only after verification succeeds.
 
@@ -43,6 +50,8 @@ description: Use when a task needs a live preview URL for Web/API/Microservice a
 | Repo has neither compose nor `Dockerfile` | Create temporary preview runtime files under `.acpms/preview/`. |
 | Old preview container exists | Stop or remove it before starting the new one. |
 | Port conflict exists | Pick a new host port and update the contract. |
+| Project type is API or microservice | Verify `/health`, `/ready`, or the documented health route before reporting success. |
+| API exposes docs/OpenAPI and the route is part of the expected runtime contract | Verify docs/spec route in addition to health. |
 | Runtime files exist but no container is serving traffic | Start the runtime; do not report success from config validation alone. |
 | Docker preview cannot be started | Emit `DEPLOYMENT_FAILURE_REASON: <root cause>`. |
 
@@ -60,6 +69,7 @@ Also emit:
 - Do not run preview as a bare host process like `npm run dev`, `vite preview`,
   `python app.py`, or `cargo run` directly in the worktree shell.
 - Never claim preview is ready without a real HTTP check.
+- For API or microservice projects, do not treat `GET /` as sufficient unless the service contract actually uses `/` as its health surface.
 - Never confuse `docker compose config`, `docker build`, or file creation with a
   running preview.
 - Never emit fake or placeholder URLs.
