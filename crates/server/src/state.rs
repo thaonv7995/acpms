@@ -44,7 +44,7 @@ impl OpenClawGatewayConfig {
                 Err(error) => {
                     tracing::warn!(
                         error = %error,
-                        "Ignoring invalid OPENCLAW_ACTOR_USER_ID; falling back to first system admin"
+                        "Ignoring invalid OPENCLAW_ACTOR_USER_ID; falling back to the default OpenClaw service principal id"
                     );
                     None
                 }

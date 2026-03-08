@@ -3,7 +3,9 @@ mod helpers;
 use std::sync::{Mutex, OnceLock};
 use std::time::Duration;
 
+use acpms_db::models::{SystemRole, User};
 use acpms_executors::{AgentEvent, ApprovalRequestMessage, StatusManager, StatusMessage};
+use acpms_server::middleware::authenticate_openclaw_token;
 use acpms_services::NewOpenClawGatewayEvent;
 use axum::{
     body::{Body, Bytes},
@@ -12,9 +14,9 @@ use axum::{
 use chrono::Utc;
 use futures::StreamExt;
 use helpers::{
-    create_router, create_test_app_state, create_test_attempt, create_test_project,
-    create_test_router, create_test_task, create_test_user, make_request_with_string_headers,
-    setup_test_db,
+    create_router, create_test_admin, create_test_app_state, create_test_attempt,
+    create_test_project, create_test_router, create_test_task, create_test_user,
+    make_request_with_string_headers, setup_test_db,
 };
 use serde_json::Value;
 use sqlx::PgPool;
@@ -291,6 +293,56 @@ async fn openclaw_gateway_returns_forbidden_when_disabled() {
     )
     .await;
     assert_eq!(stream_status, StatusCode::FORBIDDEN, "{stream_body}");
+}
+
+#[tokio::test]
+async fn openclaw_auth_uses_dedicated_service_principal() {
+    let _guard = env_lock().lock().unwrap_or_else(|error| error.into_inner());
+    configure_openclaw_env();
+    if !test_database_ready().await {
+        eprintln!("skipping openclaw gateway test because DATABASE_URL is not reachable");
+        return;
+    }
+
+    let pool = setup_test_db().await;
+    sqlx::query("DELETE FROM users WHERE email = 'openclaw-gateway@acpms.local'")
+        .execute(&pool)
+        .await
+        .expect("clear openclaw service user");
+    let (admin_user_id, _) = create_test_admin(&pool).await;
+
+    let state = create_test_app_state(pool.clone()).await;
+    let auth_user = authenticate_openclaw_token(&state, "oc_test_phase1_key")
+        .await
+        .expect("authenticate openclaw token");
+
+    let service_user = sqlx::query_as::<_, User>(
+        r#"
+        SELECT
+            id,
+            email,
+            name,
+            avatar_url,
+            gitlab_id,
+            gitlab_username,
+            password_hash,
+            global_roles,
+            created_at,
+            updated_at
+        FROM users
+        WHERE id = $1
+        "#,
+    )
+    .bind(auth_user.id)
+    .fetch_one(&pool)
+    .await
+    .expect("load OpenClaw service principal");
+
+    assert_eq!(service_user.email, "openclaw-gateway@acpms.local");
+    assert_eq!(service_user.name, "OpenClaw Gateway");
+    assert_eq!(service_user.password_hash, None);
+    assert!(service_user.global_roles.contains(&SystemRole::Admin));
+    assert_ne!(service_user.id, admin_user_id);
 }
 
 #[tokio::test]

@@ -4,12 +4,21 @@ use axum::{
     middleware::Next,
     response::Response,
 };
+use uuid::Uuid;
 
 use crate::{
     error::ApiError,
     middleware::AuthUser,
     state::{AppState, OpenClawGatewayConfig},
 };
+use acpms_db::models::SystemRole;
+
+const OPENCLAW_SERVICE_USER_EMAIL: &str = "openclaw-gateway@acpms.local";
+const OPENCLAW_SERVICE_USER_NAME: &str = "OpenClaw Gateway";
+
+fn default_openclaw_service_user_id() -> Uuid {
+    Uuid::from_u128(0x6a962b11c7df4b5d8f31e1cb7606aa10)
+}
 
 fn extract_bearer_token(headers: &HeaderMap) -> Result<&str, ApiError> {
     let value = headers
@@ -47,27 +56,59 @@ fn ensure_gateway_enabled(config: &OpenClawGatewayConfig) -> Result<(), ApiError
     Ok(())
 }
 
-async fn resolve_actor_user_id(state: &AppState) -> Result<uuid::Uuid, ApiError> {
-    if let Some(user_id) = state.openclaw_gateway.actor_user_id {
-        return Ok(user_id);
+async fn resolve_actor_user_id(state: &AppState) -> Result<Uuid, ApiError> {
+    let desired_user_id = state
+        .openclaw_gateway
+        .actor_user_id
+        .unwrap_or_else(default_openclaw_service_user_id);
+
+    if let Some(existing_email) = sqlx::query_scalar::<_, String>(
+        r#"
+        SELECT email
+        FROM users
+        WHERE id = $1
+        "#,
+    )
+    .bind(desired_user_id)
+    .fetch_optional(&state.db)
+    .await
+    .map_err(ApiError::Database)?
+    {
+        if existing_email != OPENCLAW_SERVICE_USER_EMAIL {
+            return Err(ApiError::Internal(
+                "OPENCLAW_ACTOR_USER_ID must reference the dedicated OpenClaw service principal"
+                    .to_string(),
+            ));
+        }
     }
 
     sqlx::query_scalar(
         r#"
-        SELECT id
-        FROM users
-        WHERE global_roles @> ARRAY['admin']::system_role[]
-        ORDER BY created_at ASC
-        LIMIT 1
+        INSERT INTO users (id, email, name, password_hash, global_roles)
+        VALUES ($1, $2, $3, NULL, $4)
+        ON CONFLICT (email) DO UPDATE
+        SET
+            name = EXCLUDED.name,
+            global_roles = (
+                SELECT ARRAY(
+                    SELECT DISTINCT role_value
+                    FROM unnest(users.global_roles || EXCLUDED.global_roles) AS role_value
+                )
+            ),
+            updated_at = NOW()
+        RETURNING id
         "#,
     )
-    .fetch_optional(&state.db)
+    .bind(desired_user_id)
+    .bind(OPENCLAW_SERVICE_USER_EMAIL)
+    .bind(OPENCLAW_SERVICE_USER_NAME)
+    .bind(vec![SystemRole::Admin])
+    .fetch_one(&state.db)
     .await
-    .map_err(ApiError::Database)?
-    .ok_or_else(|| {
-        ApiError::Internal(
-            "OpenClaw gateway could not resolve a system admin actor user".to_string(),
-        )
+    .map_err(|error| {
+        ApiError::Internal(format!(
+            "OpenClaw gateway could not provision its service principal: {error}"
+        ))
     })
 }
 
