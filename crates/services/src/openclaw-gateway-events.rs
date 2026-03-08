@@ -2,10 +2,15 @@ use acpms_db::{models::AttemptStatus, PgPool};
 use acpms_executors::{AgentEvent, ApprovalRequestMessage, StatusMessage};
 use anyhow::{Context, Result};
 use chrono::{DateTime, Duration, Utc};
+use hmac::{Hmac, Mac};
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
+use sha2::Sha256;
 use tokio::sync::broadcast;
 use uuid::Uuid;
+
+const OPENCLAW_WEBHOOK_SIGNATURE_HEADER: &str = "X-Agentic-Signature";
+type HmacSha256 = Hmac<Sha256>;
 
 #[derive(Debug, Clone, Serialize, Deserialize, sqlx::FromRow)]
 pub struct OpenClawGatewayEvent {
@@ -29,11 +34,19 @@ pub struct NewOpenClawGatewayEvent {
     pub payload: Value,
 }
 
+#[derive(Debug, Clone)]
+struct OpenClawGatewayWebhookConfig {
+    url: String,
+    secret: String,
+}
+
 #[derive(Clone)]
 pub struct OpenClawGatewayEventService {
     pool: PgPool,
     live_tx: broadcast::Sender<OpenClawGatewayEvent>,
     retention_hours: i64,
+    http_client: reqwest::Client,
+    webhook: Option<OpenClawGatewayWebhookConfig>,
 }
 
 impl OpenClawGatewayEventService {
@@ -43,7 +56,28 @@ impl OpenClawGatewayEventService {
             pool,
             live_tx,
             retention_hours,
+            http_client: reqwest::Client::new(),
+            webhook: None,
         }
+    }
+
+    pub fn with_optional_webhook(
+        mut self,
+        webhook_url: Option<String>,
+        webhook_secret: Option<String>,
+    ) -> Self {
+        let webhook_url = webhook_url
+            .map(|value| value.trim().to_string())
+            .filter(|value| !value.is_empty());
+        let webhook_secret = webhook_secret
+            .map(|value| value.trim().to_string())
+            .filter(|value| !value.is_empty());
+
+        self.webhook = match (webhook_url, webhook_secret) {
+            (Some(url), Some(secret)) => Some(OpenClawGatewayWebhookConfig { url, secret }),
+            _ => None,
+        };
+        self
     }
 
     pub fn subscribe_live(&self) -> broadcast::Receiver<OpenClawGatewayEvent> {
@@ -91,6 +125,7 @@ impl OpenClawGatewayEventService {
         .context("Failed to insert OpenClaw gateway event")?;
 
         let _ = self.live_tx.send(stored.clone());
+        self.dispatch_optional_webhook(stored.clone());
         Ok(stored)
     }
 
@@ -294,6 +329,60 @@ impl OpenClawGatewayEventService {
         })
         .await
     }
+
+    fn dispatch_optional_webhook(&self, event: OpenClawGatewayEvent) {
+        let Some(webhook) = self.webhook.clone() else {
+            return;
+        };
+
+        let client = self.http_client.clone();
+        tokio::spawn(async move {
+            if let Err(error) = send_webhook_event(client, webhook, event.clone()).await {
+                tracing::warn!(
+                    sequence_id = event.sequence_id,
+                    event_type = %event.event_type,
+                    error = %error,
+                    "Failed to deliver OpenClaw webhook"
+                );
+            }
+        });
+    }
+}
+
+fn build_webhook_signature(secret: &str, payload: &[u8]) -> Result<String> {
+    let mut mac = HmacSha256::new_from_slice(secret.as_bytes())
+        .context("Invalid OpenClaw webhook secret")?;
+    mac.update(payload);
+    Ok(hex::encode(mac.finalize().into_bytes()))
+}
+
+async fn send_webhook_event(
+    client: reqwest::Client,
+    webhook: OpenClawGatewayWebhookConfig,
+    event: OpenClawGatewayEvent,
+) -> Result<()> {
+    let payload = serde_json::to_vec(&event).context("Failed to serialize OpenClaw webhook")?;
+    let signature = build_webhook_signature(&webhook.secret, &payload)?;
+
+    let response = client
+        .post(&webhook.url)
+        .header(reqwest::header::CONTENT_TYPE, "application/json")
+        .header(OPENCLAW_WEBHOOK_SIGNATURE_HEADER, signature)
+        .header("X-Agentic-Event-Id", event.sequence_id.to_string())
+        .header("X-Agentic-Event-Type", &event.event_type)
+        .body(payload)
+        .send()
+        .await
+        .context("Failed to send OpenClaw webhook")?;
+
+    if !response.status().is_success() {
+        anyhow::bail!(
+            "OpenClaw webhook returned non-success status {}",
+            response.status()
+        );
+    }
+
+    Ok(())
 }
 
 #[derive(Debug, sqlx::FromRow)]

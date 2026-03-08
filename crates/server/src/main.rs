@@ -1848,10 +1848,14 @@ async fn main() -> anyhow::Result<()> {
             .with_storage(storage_service.clone()),
     );
     tracing::info!("JSON Patch streaming infrastructure initialized");
-    let openclaw_event_service = Arc::new(OpenClawGatewayEventService::new(
-        pool.clone(),
-        OpenClawGatewayConfig::from_env().event_retention_hours,
-    ));
+    let openclaw_gateway = Arc::new(OpenClawGatewayConfig::from_env());
+    let openclaw_event_service = Arc::new(
+        OpenClawGatewayEventService::new(pool.clone(), openclaw_gateway.event_retention_hours)
+            .with_optional_webhook(
+                openclaw_gateway.webhook_url.clone(),
+                openclaw_gateway.webhook_secret.clone(),
+            ),
+    );
 
     // Create AppState
     let mut state = AppState {
@@ -1878,7 +1882,7 @@ async fn main() -> anyhow::Result<()> {
         patch_store,
         stream_service,
         auth_session_store: Arc::new(crate::services::agent_auth::AuthSessionStore::new()),
-        openclaw_gateway: Arc::new(OpenClawGatewayConfig::from_env()),
+        openclaw_gateway,
         openclaw_event_service: openclaw_event_service.clone(),
     };
 

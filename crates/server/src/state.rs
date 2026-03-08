@@ -19,6 +19,7 @@ use uuid::Uuid;
 pub struct OpenClawGatewayConfig {
     pub enabled: bool,
     pub api_key: Option<String>,
+    pub webhook_url: Option<String>,
     pub webhook_secret: Option<String>,
     pub actor_user_id: Option<Uuid>,
     pub event_retention_hours: i64,
@@ -58,6 +59,9 @@ impl OpenClawGatewayConfig {
         Self {
             enabled,
             api_key: std::env::var("OPENCLAW_API_KEY")
+                .ok()
+                .filter(|value| !value.trim().is_empty()),
+            webhook_url: std::env::var("OPENCLAW_WEBHOOK_URL")
                 .ok()
                 .filter(|value| !value.trim().is_empty()),
             webhook_secret: std::env::var("OPENCLAW_WEBHOOK_SECRET")

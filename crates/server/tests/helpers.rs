@@ -201,10 +201,13 @@ pub async fn create_test_app_state(pool: PgPool) -> AppState {
         pool.clone(),
     ));
     let openclaw_gateway = Arc::new(OpenClawGatewayConfig::from_env());
-    let openclaw_event_service = Arc::new(OpenClawGatewayEventService::new(
-        pool.clone(),
-        openclaw_gateway.event_retention_hours,
-    ));
+    let openclaw_event_service = Arc::new(
+        OpenClawGatewayEventService::new(pool.clone(), openclaw_gateway.event_retention_hours)
+            .with_optional_webhook(
+                openclaw_gateway.webhook_url.clone(),
+                openclaw_gateway.webhook_secret.clone(),
+            ),
+    );
 
     let mut state = AppState {
         worktrees_path: worktrees_path.clone(),

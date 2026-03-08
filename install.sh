@@ -173,6 +173,7 @@ prompt_openclaw_gateway() {
 
   if [ "${OPENCLAW_GATEWAY_ENABLED}" != "true" ]; then
     OPENCLAW_API_KEY=""
+    OPENCLAW_WEBHOOK_URL=""
     OPENCLAW_WEBHOOK_SECRET=""
     OPENCLAW_READY_PROMPT=""
     OPENCLAW_PROMPT_FILE=""
@@ -215,12 +216,13 @@ print_success_report() {
 
   if [ "${OPENCLAW_GATEWAY_ENABLED:-false}" = "true" ]; then
     render_openclaw_bootstrap_prompt
-    local public_base base_endpoint openapi_url guide_url events_url
+    local public_base base_endpoint openapi_url guide_url events_url webhook_url_label
     public_base="$(resolve_s3_public_base)"
     base_endpoint="${public_base}/api/openclaw/v1"
     openapi_url="${public_base}/api/openclaw/openapi.json"
     guide_url="${public_base}/api/openclaw/guide-for-openclaw"
     events_url="${public_base}/api/openclaw/v1/events/stream"
+    webhook_url_label="${OPENCLAW_WEBHOOK_URL:-not configured}"
     cat << EOF
 ================================================================================
  OPENCLAW GATEWAY CONFIGURATION
@@ -230,6 +232,7 @@ print_success_report() {
  Guide Endpoint    : ${guide_url}
  Global Event SSE  : ${events_url}
  API Key (Bearer)  : ${OPENCLAW_API_KEY}
+ Webhook URL       : ${webhook_url_label}
  Webhook Secret    : ${OPENCLAW_WEBHOOK_SECRET} (optional)
  Prompt File       : ${OPENCLAW_PROMPT_FILE}
 ================================================================================
@@ -1007,6 +1010,7 @@ ACPMS_AGENT_NPX_BIN=$npx_bin
 # OpenClaw Gateway
 OPENCLAW_GATEWAY_ENABLED=${OPENCLAW_GATEWAY_ENABLED:-false}
 OPENCLAW_API_KEY=${OPENCLAW_API_KEY:-}
+OPENCLAW_WEBHOOK_URL=${OPENCLAW_WEBHOOK_URL:-}
 OPENCLAW_WEBHOOK_SECRET=${OPENCLAW_WEBHOOK_SECRET:-}
 EOF
   write_openclaw_prompt_file

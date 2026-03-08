@@ -279,7 +279,8 @@ pub async fn guide_for_openclaw(
         timezone,
         preferred_language,
     );
-    let webhook_configured = state.openclaw_gateway.webhook_secret.is_some();
+    let webhook_configured = state.openclaw_gateway.webhook_url.is_some()
+        && state.openclaw_gateway.webhook_secret.is_some();
 
     let response = OpenClawGuideResponse {
         instruction_prompt,
