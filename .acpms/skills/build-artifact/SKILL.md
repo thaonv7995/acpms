@@ -48,7 +48,7 @@ Do not report artifact success from:
 | `api` / `microservice` | built server binary, packaged runtime tree, OpenAPI output, or container-ready runtime | Prefer the artifact used by the real runtime path, not a placeholder build |
 | `desktop` | runnable dev app output, unpacked app, packaged bundle, or installer | Prefer the preview surface the environment can actually support |
 | `mobile` | dev bundle, simulator-ready output, or packaged app artifact | Prefer the preview surface the environment can actually support |
-| `extension` | zipped extension, unpacked bundle, or browser-loadable output directory | Must match the preview/download contract |
+| `extension` | zipped extension, unpacked bundle, or browser-loadable output directory | Prefer the preview surface the browser/toolchain can actually support |
 
 ## Build Command Selection
 Use the repo's canonical build path if it already exists.
@@ -104,6 +104,9 @@ Optional but recommended:
   - Expo/dev bundle metadata exists when using dev bundle preview
   - Android artifact exists for installable QA preview
   - iOS artifact is only reported when signing/export really succeeded
+- For extension builds, confirm the output matches the intended preview surface:
+  - zip exists when downloadable package preview is expected
+  - unpacked directory contains manifest and required runtime assets
 - For packaged artifacts, confirm the main bundle/file exists
 - For deploy-targeted output, verify the path is the one the next deploy skill expects
 
@@ -117,6 +120,7 @@ Optional but recommended:
 | Desktop release packaging requires unavailable signing/notarization | Report the limitation honestly rather than claiming a releasable installer exists. |
 | Mobile app preview is simulator/dev-bundle based | Prefer the bundle/build path that matches that preview mode instead of forcing a full release package. |
 | Mobile release artifact requires unavailable signing or platform tooling | Report the limitation honestly rather than claiming a releasable artifact exists. |
+| Extension preview is artifact-based | Prefer zip when supported; otherwise validate and report the unpacked extension directory. |
 | Build succeeds but output path is missing | Treat it as a failed artifact build. |
 | Build tooling is missing | Stop and report the missing setup requirement. |
 | Output exists but is obviously stale or wrong | Rebuild or fail explicitly; do not hand off a bad artifact. |
@@ -168,6 +172,15 @@ Build Artifact Summary
 - artifact_paths:
   - dist/
 - artifact_notes: Expo dev bundle/export used for mobile preview
+```
+
+```md
+Build Artifact Summary
+- build_status: success
+- build_command: npm run build:extension
+- artifact_paths:
+  - dist-extension/
+- artifact_notes: Unpacked browser extension directory used for QA loading
 ```
 
 ## Bad Output Example

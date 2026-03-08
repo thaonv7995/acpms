@@ -2219,7 +2219,12 @@ fn builtin_skill_content(skill_id: &str) -> Option<&'static str> {
 - Deliver platform config, entrypoint, navigation/screens structure, README, .gitignore, and preview/build commands appropriate for simulator, device, or artifact workflows. Use Project Details for name/description."#,
         ),
         "init-extension-scaffold" => Some(
-            r#"Extension scaffold: manifest.json V3, build tools, README, background/content/popup/options, permissions, multi-browser. Use Project Details for name/description."#,
+            r#"Extension scaffold: choose stack from extension shape, not from a hard-coded default.
+- Popup-only or lightweight extension: keep toolchain minimal.
+- Content-script-heavy or complex extension UI: choose a stack that matches those surfaces.
+- Imported existing extension: preserve the current viable stack.
+- Decide whether this is a standalone extension repo or an extension inside a monorepo.
+- Deliver manifest, background/service worker, required UI surfaces, README, .gitignore, and truthful load/build commands for unpacked or zip-based QA preview. Use Project Details for name/description."#,
         ),
         "init-desktop-scaffold" => Some(
             r#"Desktop scaffold: choose stack from app shape, not from a hard-coded default.
