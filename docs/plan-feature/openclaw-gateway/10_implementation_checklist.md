@@ -22,7 +22,7 @@ Implementation status after the first code delivery:
     *   custom OpenClaw OpenAPI entries are present, but not yet modeled with full `utoipa` path annotations
     *   lifecycle emission is wired for the main ACPMS and GitLab merge flows, but not yet for every possible status mutation path across the whole system
 *   **Still open**:
-    *   a few higher-order replay/live-delivery integration scenarios
+    *   end-to-end stream scenarios around `attempt.needs_input` resolution and validating that attempt-log SSE remains independent from the global lifecycle stream
 
 ## 1. Goal
 
@@ -231,7 +231,7 @@ Required behavior:
 *   [x] If no cursor is provided, start streaming from "now" rather than replaying the entire retained history.
 *   [x] If both `Last-Event-ID` and `after` are provided, reject the request as ambiguous.
 *   [x] If the cursor is malformed, return `400 Bad Request`.
-*   [ ] If the cursor points to data older than the retention window, return `409 Conflict` with a clear machine-readable error code such as `4091` / `EventCursorExpired`.
+*   [x] If the cursor points to data older than the retention window, return `409 Conflict` with a clear machine-readable error code such as `4091` / `EventCursorExpired`.
 *   [x] If the gateway is disabled, return `403 Forbidden`.
 
 ### 4.5 Phase 5: Wire Real Event Producers
@@ -392,10 +392,10 @@ These rules should be implemented exactly to avoid ambiguous client behavior.
 - [x] Disabled gateway returns `403`
 - [x] `guide-for-openclaw` returns required runtime fields for stream-first mode
 - [x] Installer-generated prompt and bootstrap response stay field-consistent
-- [ ] Connect with no cursor and receive live event
-- [ ] Reconnect with `Last-Event-ID` and receive missed events
+- [x] Connect with no cursor and receive live event
+- [x] Reconnect with `Last-Event-ID` and receive missed events
 - [x] Expired cursor returns structured conflict error
-- [ ] Attempt start -> completion emits expected global events in order
+- [x] Attempt start -> completion emits expected global events in order
 - [ ] `attempt.needs_input` appears on the global stream and can be resolved via `POST /attempts/{id}/input`
 - [ ] Attempt log stream still works independently from the global event stream
 
@@ -429,7 +429,7 @@ These rules should be implemented exactly to avoid ambiguous client behavior.
 
 - [x] Migration for `openclaw_gateway_events`
 - [x] Retention cleanup query
-- [ ] Tests for replay ordering
+- [x] Tests for replay ordering
 
 ### 9.2 Services
 
@@ -482,4 +482,4 @@ Actual implementation progress so far:
 4.  **Completed (main flows)**: attempt lifecycle + task status emission wiring
 5.  **Completed (first pass)**: installer handoff prompt and saved prompt file
 6.  **Completed**: optional webhook compatibility, cursor-expiry handling, richer auth/expiry/WS tests, and additional GitLab merge task-status coverage
-7.  **Remaining**: fuller manual replay/live-delivery verification
+7.  **Remaining**: `attempt.needs_input` end-to-end resolution, attempt-log/global-stream independence checks, and manual verification in a live ACPMS environment

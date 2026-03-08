@@ -3,13 +3,17 @@ mod helpers;
 use std::sync::{Mutex, OnceLock};
 use std::time::Duration;
 
+use acpms_executors::{AgentEvent, StatusMessage};
 use acpms_services::NewOpenClawGatewayEvent;
 use axum::{
-    body::Body,
-    http::{header, Request, StatusCode},
+    body::{Body, Bytes},
+    http::{header, Request, Response, StatusCode},
 };
+use chrono::Utc;
+use futures::StreamExt;
 use helpers::{
-    create_router, create_test_app_state, create_test_router, make_request_with_string_headers,
+    create_router, create_test_app_state, create_test_attempt, create_test_project,
+    create_test_router, create_test_task, create_test_user, make_request_with_string_headers,
     setup_test_db,
 };
 use serde_json::Value;
@@ -46,6 +50,31 @@ fn disable_openclaw_env() {
     std::env::remove_var("OPENCLAW_WEBHOOK_URL");
     std::env::remove_var("OPENCLAW_WEBHOOK_SECRET");
     std::env::remove_var("OPENCLAW_ACTOR_USER_ID");
+}
+
+async fn read_next_sse_chunk(response: Response<Body>) -> String {
+    let mut stream = response.into_body().into_data_stream();
+    read_next_sse_chunk_from_stream(&mut stream).await
+}
+
+async fn read_next_sse_chunk_from_stream<S>(stream: &mut S) -> String
+where
+    S: futures::Stream<Item = Result<Bytes, axum::Error>> + Unpin,
+{
+    let chunk = tokio::time::timeout(Duration::from_secs(1), async {
+        loop {
+            match stream.next().await {
+                Some(Ok(bytes)) if !bytes.is_empty() => break bytes,
+                Some(Ok(_)) => continue,
+                Some(Err(error)) => panic!("failed to read SSE chunk: {error}"),
+                None => panic!("SSE stream ended before yielding data"),
+            }
+        }
+    })
+    .await
+    .expect("timed out waiting for SSE chunk");
+
+    String::from_utf8(chunk.to_vec()).expect("SSE chunk should be valid UTF-8")
 }
 
 #[tokio::test]
@@ -365,6 +394,56 @@ async fn openclaw_event_service_publishes_live_events_to_subscribers() {
 }
 
 #[tokio::test]
+async fn openclaw_event_stream_delivers_live_event_without_cursor() {
+    let _guard = env_lock().lock().unwrap_or_else(|error| error.into_inner());
+    configure_openclaw_env();
+    if !test_database_ready().await {
+        eprintln!("skipping openclaw gateway test because DATABASE_URL is not reachable");
+        return;
+    }
+
+    let pool = setup_test_db().await;
+    sqlx::query("DELETE FROM openclaw_gateway_events")
+        .execute(&pool)
+        .await
+        .expect("clear openclaw events");
+
+    let state = create_test_app_state(pool).await;
+    let openclaw_event_service = state.openclaw_event_service.clone();
+    let router = create_router(state);
+
+    let response = router
+        .oneshot(
+            Request::builder()
+                .method("GET")
+                .uri("/api/openclaw/v1/events/stream")
+                .header(header::AUTHORIZATION, "Bearer oc_test_phase1_key")
+                .body(Body::empty())
+                .expect("build request"),
+        )
+        .await
+        .expect("execute request");
+    assert_eq!(response.status(), StatusCode::OK);
+
+    let expected_event = openclaw_event_service
+        .record_event(NewOpenClawGatewayEvent {
+            event_type: "attempt.completed".to_string(),
+            project_id: None,
+            task_id: None,
+            attempt_id: None,
+            source: "test.sse.live".to_string(),
+            payload: serde_json::json!({ "status": "success" }),
+        })
+        .await
+        .expect("record live stream event");
+    let chunk = read_next_sse_chunk(response).await;
+
+    assert!(chunk.contains("event: attempt.completed"), "{chunk}");
+    assert!(chunk.contains(&format!("id: {}", expected_event.sequence_id)), "{chunk}");
+    assert!(chunk.contains("\"status\":\"success\""), "{chunk}");
+}
+
+#[tokio::test]
 async fn openclaw_event_service_lists_replay_events_in_sequence_order() {
     let _guard = env_lock().lock().unwrap_or_else(|error| error.into_inner());
     configure_openclaw_env();
@@ -433,6 +512,147 @@ async fn openclaw_event_service_lists_replay_events_in_sequence_order() {
     );
     assert_eq!(replay_events[0].event_type, "attempt.needs_input");
     assert_eq!(replay_events[1].event_type, "attempt.completed");
+}
+
+#[tokio::test]
+async fn openclaw_event_stream_replays_events_after_last_event_id() {
+    let _guard = env_lock().lock().unwrap_or_else(|error| error.into_inner());
+    configure_openclaw_env();
+    if !test_database_ready().await {
+        eprintln!("skipping openclaw gateway test because DATABASE_URL is not reachable");
+        return;
+    }
+
+    let pool = setup_test_db().await;
+    sqlx::query("DELETE FROM openclaw_gateway_events")
+        .execute(&pool)
+        .await
+        .expect("clear openclaw events");
+
+    let state = create_test_app_state(pool).await;
+    let first_event = state
+        .openclaw_event_service
+        .record_event(NewOpenClawGatewayEvent {
+            event_type: "attempt.started".to_string(),
+            project_id: None,
+            task_id: None,
+            attempt_id: None,
+            source: "test.sse.replay".to_string(),
+            payload: serde_json::json!({ "status": "running" }),
+        })
+        .await
+        .expect("record first replay event");
+    let second_event = state
+        .openclaw_event_service
+        .record_event(NewOpenClawGatewayEvent {
+            event_type: "attempt.completed".to_string(),
+            project_id: None,
+            task_id: None,
+            attempt_id: None,
+            source: "test.sse.replay".to_string(),
+            payload: serde_json::json!({ "status": "success" }),
+        })
+        .await
+        .expect("record second replay event");
+    let router = create_router(state);
+
+    let response = router
+        .oneshot(
+            Request::builder()
+                .method("GET")
+                .uri("/api/openclaw/v1/events/stream")
+                .header(header::AUTHORIZATION, "Bearer oc_test_phase1_key")
+                .header("Last-Event-ID", first_event.sequence_id.to_string())
+                .body(Body::empty())
+                .expect("build request"),
+        )
+        .await
+        .expect("execute request");
+    assert_eq!(response.status(), StatusCode::OK);
+
+    let chunk = read_next_sse_chunk(response).await;
+
+    assert!(chunk.contains("event: attempt.completed"), "{chunk}");
+    assert!(chunk.contains(&format!("id: {}", second_event.sequence_id)), "{chunk}");
+    assert!(!chunk.contains(&format!("id: {}", first_event.sequence_id)), "{chunk}");
+}
+
+#[tokio::test]
+async fn openclaw_event_stream_emits_attempt_start_then_completion_in_order() {
+    let _guard = env_lock().lock().unwrap_or_else(|error| error.into_inner());
+    configure_openclaw_env();
+    if !test_database_ready().await {
+        eprintln!("skipping openclaw gateway test because DATABASE_URL is not reachable");
+        return;
+    }
+
+    let pool = setup_test_db().await;
+    sqlx::query("DELETE FROM openclaw_gateway_events")
+        .execute(&pool)
+        .await
+        .expect("clear openclaw events");
+
+    let (user_id, _) = create_test_user(&pool, None, None, None).await;
+    let project_id = create_test_project(&pool, user_id, Some("OpenClaw Stream Project")).await;
+    let task_id = create_test_task(&pool, project_id, user_id, Some("OpenClaw Stream Task")).await;
+    let attempt_id = create_test_attempt(&pool, task_id, Some("queued")).await;
+
+    let state = create_test_app_state(pool.clone()).await;
+    let broadcast_tx = state.broadcast_tx.clone();
+    let router = create_router(state);
+
+    let response = router
+        .oneshot(
+            Request::builder()
+                .method("GET")
+                .uri("/api/openclaw/v1/events/stream")
+                .header(header::AUTHORIZATION, "Bearer oc_test_phase1_key")
+                .body(Body::empty())
+                .expect("build request"),
+        )
+        .await
+        .expect("execute request");
+    assert_eq!(response.status(), StatusCode::OK);
+
+    broadcast_tx
+        .send(AgentEvent::Status(StatusMessage {
+            attempt_id,
+            status: acpms_db::models::AttemptStatus::Running,
+            timestamp: Utc::now(),
+        }))
+        .expect("broadcast running status");
+    broadcast_tx
+        .send(AgentEvent::Status(StatusMessage {
+            attempt_id,
+            status: acpms_db::models::AttemptStatus::Success,
+            timestamp: Utc::now(),
+        }))
+        .expect("broadcast success status");
+
+    let mut stream = response.into_body().into_data_stream();
+    let first_chunk = read_next_sse_chunk_from_stream(&mut stream).await;
+    let second_chunk = read_next_sse_chunk_from_stream(&mut stream).await;
+
+    assert!(first_chunk.contains("event: attempt.started"), "{first_chunk}");
+    assert!(second_chunk.contains("event: attempt.completed"), "{second_chunk}");
+
+    let persisted_events = sqlx::query_scalar::<_, String>(
+        r#"
+        SELECT event_type
+        FROM openclaw_gateway_events
+        WHERE attempt_id = $1
+        ORDER BY sequence_id ASC
+        "#,
+    )
+    .bind(attempt_id)
+    .fetch_all(&pool)
+    .await
+    .expect("load persisted openclaw events");
+
+    assert_eq!(
+        persisted_events,
+        vec!["attempt.started".to_string(), "attempt.completed".to_string()]
+    );
 }
 
 #[tokio::test]
