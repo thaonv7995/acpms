@@ -23,6 +23,27 @@ This contract does not require changing the existing generic task attachment flo
 - Large file content MUST live in object storage, not in database text columns.
 - `created_by` and `updated_by` refer to the authenticated ACPMS user when available. For OpenClaw-created records, use the resolved OpenClaw actor user.
 
+## 2.1. RBAC Contract
+
+Unless explicitly stated otherwise, new internal routes must follow these permission rules:
+
+| Route group | Read permission | Mutating permission |
+| --- | --- | --- |
+| Task Contexts | `Permission::ViewProject` | `Permission::ModifyTask` |
+| Task Context attachment upload-url | n/a | `Permission::ModifyTask` |
+| Task Context attachment metadata create/delete | n/a | `Permission::ModifyTask` |
+| Task Context attachment download-url | `Permission::ViewProject` | n/a |
+| Project Documents | `Permission::ViewProject` | `Permission::ManageProject` |
+| Project Document upload-url | n/a | `Permission::ManageProject` |
+| Project Document download-url | `Permission::ViewProject` | n/a |
+
+Rules:
+
+- Do not introduce a new permission enum value for this feature in v1.
+- Task-context write operations should follow the same role envelope as task editing, not generic project management.
+- Project-vault write operations should follow the same role envelope as project administration.
+- OpenClaw routes continue to use OpenClaw gateway auth rather than project-member RBAC.
+
 ## 3. Enums
 
 ### 3.1. `task_context.content_type`
@@ -168,8 +189,8 @@ Required logical fields:
 
 Rules:
 
-- Delete all prior chunks for a document before inserting replacement chunks.
 - The retrieval path must be able to filter by `project_id`.
+- Chunk replacement must be atomic from the reader's point of view. A failed re-index must not leave the document with zero active chunks.
 
 ## 5. Limits and Processing Rules
 
@@ -302,6 +323,7 @@ Response `data`:
 `GET /api/v1/tasks/{task_id}/contexts`
 
 - returns `ApiResponse<Vec<TaskContextDto>>`
+- requires `Permission::ViewProject`
 
 `POST /api/v1/tasks/{task_id}/contexts`
 
@@ -318,21 +340,25 @@ Request:
 ```
 
 Returns created `TaskContextDto`.
+- requires `Permission::ModifyTask`
 
 `PATCH /api/v1/tasks/{task_id}/contexts/{context_id}`
 
 - patch semantics
 - allowed fields: `title`, `content_type`, `raw_content`, `sort_order`
+- requires `Permission::ModifyTask`
 
 `DELETE /api/v1/tasks/{task_id}/contexts/{context_id}`
 
 - deletes the context and its attachments
+- requires `Permission::ModifyTask`
 
 `POST /api/v1/tasks/{task_id}/context-attachments/upload-url`
 
 - request body follows shared upload-url shape
 - generated key format:
   - `task-context-attachments/{project_id}/{task_id}/{uuid}-{safe_filename}`
+- requires `Permission::ModifyTask`
 
 `POST /api/v1/tasks/{task_id}/contexts/{context_id}/attachments`
 
@@ -349,11 +375,13 @@ Request:
 ```
 
 Returns created `TaskContextAttachmentDto`.
+- requires `Permission::ModifyTask`
 
 `DELETE /api/v1/tasks/{task_id}/contexts/{context_id}/attachments/{attachment_id}`
 
 - removes metadata row only
 - object deletion from storage is optional best-effort cleanup, not a hard requirement for v1
+- requires `Permission::ModifyTask`
 
 `POST /api/v1/tasks/{task_id}/context-attachments/download-url`
 
@@ -372,6 +400,8 @@ Response `data`:
   "download_url": "https://..."
 }
 ```
+
+- requires `Permission::ViewProject`
 
 ### 6.4. Web App Task Attachment Sequence
 
@@ -409,16 +439,19 @@ Response `data`:
 `GET /api/v1/projects/{project_id}/documents`
 
 - returns `ApiResponse<Vec<ProjectDocumentDto>>`
+- requires `Permission::ViewProject`
 
 `GET /api/v1/projects/{project_id}/documents/{document_id}`
 
 - returns `ApiResponse<ProjectDocumentDto>`
+- requires `Permission::ViewProject`
 
 `POST /api/v1/projects/{project_id}/documents/upload-url`
 
 - request body follows shared upload-url shape
 - generated key format:
   - `project-documents/{project_id}/{uuid}-{safe_filename}`
+- requires `Permission::ManageProject`
 
 `POST /api/v1/projects/{project_id}/documents`
 
@@ -442,6 +475,7 @@ Semantics:
 - if `filename` does not exist in project, create new document with `version = 1`
 - if `filename` already exists in project, update that row in-place and increment `version`
 - if another row already uses the same `title` with a different `filename`, return `409 Conflict`
+- requires `Permission::ManageProject`
 
 `PATCH /api/v1/projects/{project_id}/documents/{document_id}`
 
@@ -453,12 +487,14 @@ Semantics:
   - `checksum`
   - `size_bytes`
 - replacing `storage_key` counts as new document content and must increment `version`
+- requires `Permission::ManageProject`
 
 `DELETE /api/v1/projects/{project_id}/documents/{document_id}`
 
 - deletes document metadata
 - deletes all vector chunks for that document
 - storage object deletion is best-effort
+- requires `Permission::ManageProject`
 
 `POST /api/v1/projects/{project_id}/documents/download-url`
 
@@ -477,6 +513,8 @@ Response `data`:
   "download_url": "https://..."
 }
 ```
+
+- requires `Permission::ViewProject`
 
 ### 6.7. Web App Project Document Sequence
 
@@ -501,9 +539,16 @@ Trigger ingestion whenever:
 1. Load object bytes from `storage_key`
 2. Parse to UTF-8 text according to `content_type`
 3. Split text into chunks
-4. Delete previous chunks for `document_id`
-5. Insert replacement chunks and embeddings
-6. Update `project_documents.ingestion_status`
+4. Insert the replacement chunk set into a staging transaction or versioned staging area
+5. Atomically swap the active chunk set for `document_id`
+6. Remove superseded chunks only after the new set is active
+7. Update `project_documents.ingestion_status`
+
+Failure rules:
+
+- If embedding generation or chunk insertion fails, keep the previously active chunk set untouched.
+- Set `ingestion_status = failed` and populate `index_error`.
+- Do not delete the last known-good chunk set unless the document itself is being deleted.
 
 ### 7.3. Chunking Defaults
 

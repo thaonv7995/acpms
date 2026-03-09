@@ -78,8 +78,8 @@ When an Agent queries the Vault, the system employs vector search using `fastemb
 
 ### 5.2. Document Versioning & Stale Data Prevention
 To prevent hallucinations from stale or duplicate data, the system prioritizes the newest document versions.
-- **Upsert Logic:** When a document is uploaded via API or UI with an existing `title` or `filename`, the system performs an "Upsert". It overwrites the existing document's metadata/content and updates the `updated_at` field.
-- **Chunk Cleanup (Critical):** During the RAG chunking and embedding pipeline (Phase 3), if a document is updated, the system MUST `DELETE` all existing vector chunks associated with that `document_id` in the `project_document_chunks` table BEFORE inserting the new chunks. This guarantees old, conflicting information is entirely removed from the vector space.
+- **Upsert Logic:** When a document is uploaded via API or UI with an existing `filename` inside the same project, the system performs an "Upsert". It overwrites the existing document's metadata/content and updates the `updated_at` field. If another row already uses the same `title` with a different `filename`, the API should reject the request rather than guessing which row to replace.
+- **Atomic Chunk Replacement (Critical):** During the RAG chunking and embedding pipeline (Phase 3), if a document is updated, replacement of the old chunk set with the new chunk set MUST be atomic from the reader's point of view. The system may use a single DB transaction or a staging-and-swap versioning strategy, but it must never leave the document temporarily unsearchable just because re-indexing failed midway.
 
 ### 5.3. Transitioning from "Static Documents" to "Active Tools" (Tool-based Retrieval)
 - **Task Context**: Injected directly into the initial **System Prompt** or **User Prompt**, as this is a specific "Command" the Agent must follow immediately (e.g., 1 UI design file, 1 error log).

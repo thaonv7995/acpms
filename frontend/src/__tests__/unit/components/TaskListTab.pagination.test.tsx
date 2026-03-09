@@ -112,4 +112,29 @@ describe('TaskListTab pagination visibility', () => {
     expect(onEditTask).toHaveBeenCalledWith('task-1');
     expect(onDeleteTask).toHaveBeenCalledWith('task-1');
   });
+
+  it('renders a labeled logs action for completed tasks', () => {
+    const onViewLogs = vi.fn();
+
+    render(
+      <MemoryRouter>
+        <TaskListTab
+          tasks={[{ ...makeTask(1), status: 'done' }]}
+          requirements={[]}
+          projectId="project-1"
+          sprints={[]}
+          selectedSprintId={null}
+          onSelectSprint={vi.fn()}
+          onRefreshProject={vi.fn()}
+          onTaskClick={vi.fn()}
+          onViewLogs={onViewLogs}
+        />
+      </MemoryRouter>
+    );
+
+    fireEvent.click(screen.getByRole('button', { name: 'Open logs for Task 1' }));
+
+    expect(onViewLogs).toHaveBeenCalledWith('task-1');
+    expect(screen.getByText('Attempt Logs')).toBeTruthy();
+  });
 });

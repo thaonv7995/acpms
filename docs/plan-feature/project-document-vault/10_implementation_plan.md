@@ -100,7 +100,7 @@ Below is the step-by-step checklist to implement this feature.
 ### Phase 3: Vector RAG & Tool Integration
 - [ ] **Dependency Check**: Ensure `sqlite-vec` and `fastembed` are properly set up (overlap with Global KB).
 - [ ] **Chunking Engine**: Implement a Rust text-splitter to process markdown text.
-- [ ] **Embedding Pipeline**: Trigger the embedding generation when a `project_document` is saved. **Crucial:** If updating an existing document, the pipeline must DELETE the old chunks from `project_document_chunks` before inserting the new ones to avoid stale context.
+- [ ] **Embedding Pipeline**: Trigger the embedding generation when a `project_document` is saved. **Crucial:** Chunk replacement must be atomic from the reader's point of view. Use a DB transaction or a staging-and-swap strategy so failed re-indexing never leaves the document with zero searchable chunks.
 - [ ] **Executor Integration**: Add a Project Vault search capability through the concrete executor/runtime path used for agent-side tool calls in this repo. If a shared abstraction is introduced, document that new abstraction explicitly rather than assuming a pre-existing `Tool` trait.
 - [ ] **Executor Wiring**: Ensure the capability is only available when the Session/Attempt belongs to a project and that tool-call logging remains compatible with the current orchestrator/event model.
 - [ ] **Verification**: Upload a document containing a unique secret code (e.g., "The secret code is 998877"). Run the agent on a task asking "What is the secret code?". The agent should use the tool, find the document, and answer correctly.
