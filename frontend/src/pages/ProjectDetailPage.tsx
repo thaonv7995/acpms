@@ -432,7 +432,7 @@ export function ProjectDetailPage() {
                 <div className="p-2 rounded-lg bg-green-500/10 dark:bg-green-500/20 text-green-500">
                   <span className="material-symbols-outlined">check_circle</span>
                 </div>
-                <span className="text-sm font-medium text-muted-foreground">Build Status</span>
+                <span className="text-sm font-medium text-muted-foreground">Project Progress</span>
               </div>
               <p className="text-2xl font-bold text-green-600 dark:text-green-400">{project.stats.buildStatus}%</p>
             </div>
@@ -476,9 +476,10 @@ export function ProjectDetailPage() {
               {activeTab === 'summary' && (
                 <SummaryTab
                   projectId={project.id}
-                  description={rawProject?.description}
+                  description={rawProject?.description ?? undefined}
                   repositoryUrl={project.repositoryUrl}
                   metadata={rawProject?.metadata}
+                  progress={project.stats.buildStatus}
                   rawProject={rawProject ?? undefined}
                   requirements={requirements}
                   sprints={sprints}

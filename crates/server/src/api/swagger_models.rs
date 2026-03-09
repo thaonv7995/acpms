@@ -496,6 +496,10 @@ pub struct DashboardAgentLogDoc {
 #[serde(rename_all = "camelCase")]
 pub struct DashboardHumanTaskDoc {
     pub id: uuid::Uuid,
+    #[serde(rename = "projectId")]
+    pub project_id: uuid::Uuid,
+    #[serde(rename = "projectName")]
+    pub project_name: String,
     #[serde(rename = "type")]
     pub type_: String,
     pub title: String,

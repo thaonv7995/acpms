@@ -19,10 +19,11 @@ interface ProjectCardProps {
 // };
 
 const statusColorClasses: Record<ProjectListItem['statusColor'], { dot: string; text: string; progress: string }> = {
-  yellow: { dot: 'bg-yellow-500 animate-pulse', text: 'text-yellow-500', progress: 'bg-primary' },
+  yellow: { dot: 'bg-yellow-500 animate-pulse', text: 'text-yellow-500', progress: 'bg-yellow-500' },
   blue: { dot: 'bg-blue-400', text: 'text-blue-400', progress: 'bg-primary' },
   emerald: { dot: 'bg-emerald-400', text: 'text-emerald-400', progress: 'bg-emerald-500' },
   green: { dot: 'bg-green-400', text: 'text-green-400', progress: 'bg-green-500' },
+  red: { dot: 'bg-red-500 animate-pulse', text: 'text-red-500', progress: 'bg-red-500' },
   slate: { dot: 'bg-slate-400', text: 'text-slate-400', progress: 'bg-slate-500' },
 };
 

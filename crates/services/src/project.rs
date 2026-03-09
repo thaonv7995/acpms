@@ -2,7 +2,10 @@ use acpms_db::{models::*, PgPool};
 use anyhow::{Context, Result};
 use chrono::{DateTime, Utc};
 use sqlx::{Postgres, Transaction};
+use std::collections::HashMap;
 use uuid::Uuid;
+
+use crate::{load_project_summaries, ProjectComputedSummary};
 
 fn parse_compact_stack_tokens(raw: &str) -> Vec<String> {
     raw.split(['|', ','])
@@ -530,6 +533,21 @@ impl ProjectService {
         .context("Failed to fetch project")?;
 
         Ok(project)
+    }
+
+    pub async fn load_project_summaries(
+        &self,
+        projects: &[Project],
+    ) -> Result<HashMap<Uuid, ProjectComputedSummary>> {
+        load_project_summaries(&self.pool, projects).await
+    }
+
+    pub async fn load_project_summary(&self, project: &Project) -> Result<ProjectComputedSummary> {
+        Ok(self
+            .load_project_summaries(std::slice::from_ref(project))
+            .await?
+            .remove(&project.id)
+            .unwrap_or_default())
     }
 
     pub async fn update_project(

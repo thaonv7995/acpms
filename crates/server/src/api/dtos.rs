@@ -3,7 +3,7 @@ use acpms_db::models::{
     RepositoryContext, Requirement, ReviewComment, Sprint, Task, TaskAttempt,
     TaskWithAttemptStatus, User,
 };
-use acpms_services::TaskWithLatestAttempt;
+use acpms_services::{ProjectComputedSummary, TaskWithLatestAttempt};
 use chrono::{DateTime, Utc};
 use serde::Serialize;
 use utoipa::ToSchema;
@@ -54,6 +54,35 @@ pub struct AuthResponseDto {
 }
 
 // Project DTO
+#[derive(Debug, Clone, Serialize, ToSchema)]
+pub struct ProjectSummaryDto {
+    #[schema(value_type = String)]
+    pub lifecycle_status: String,
+    #[schema(value_type = String)]
+    pub execution_status: String,
+    pub progress: i64,
+    pub total_tasks: i64,
+    pub completed_tasks: i64,
+    pub active_tasks: i64,
+    pub review_tasks: i64,
+    pub blocked_tasks: i64,
+}
+
+impl From<ProjectComputedSummary> for ProjectSummaryDto {
+    fn from(summary: ProjectComputedSummary) -> Self {
+        Self {
+            lifecycle_status: summary.lifecycle_status,
+            execution_status: summary.execution_status,
+            progress: summary.progress,
+            total_tasks: summary.total_tasks,
+            completed_tasks: summary.completed_tasks,
+            active_tasks: summary.active_tasks,
+            review_tasks: summary.review_tasks,
+            blocked_tasks: summary.blocked_tasks,
+        }
+    }
+}
+
 #[derive(Debug, Serialize, ToSchema)]
 pub struct ProjectDto {
     pub id: Uuid,
@@ -72,6 +101,7 @@ pub struct ProjectDto {
     /// Project type classification (web, mobile, desktop, extension, api, microservice)
     #[schema(value_type = String)]
     pub project_type: ProjectType,
+    pub summary: Option<ProjectSummaryDto>,
     pub created_by: Uuid,
     pub created_at: DateTime<Utc>,
     pub updated_at: DateTime<Utc>,
@@ -90,10 +120,18 @@ impl From<Project> for ProjectDto {
             require_review: project.require_review,
             settings: project.settings,
             project_type: project.project_type,
+            summary: None,
             created_by: project.created_by,
             created_at: project.created_at,
             updated_at: project.updated_at,
         }
+    }
+}
+
+impl ProjectDto {
+    pub fn with_summary(mut self, summary: ProjectSummaryDto) -> Self {
+        self.summary = Some(summary);
+        self
     }
 }
 

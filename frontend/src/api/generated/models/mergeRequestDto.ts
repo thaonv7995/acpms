@@ -9,9 +9,23 @@ export interface MergeRequestDto {
   /** @nullable */
   attempt_id?: string | null;
   created_at: string;
-  gitlab_mr_iid: number;
   id: string;
+  /** MR/PR number: GitLab IID or GitHub PR number */
+  mr_number: number;
+  provider: string;
+  /** @nullable */
+  source_branch?: string | null;
+  /** @nullable */
+  source_project_id?: number | null;
+  /** @nullable */
+  source_repository_url?: string | null;
   status: string;
+  /** @nullable */
+  target_branch?: string | null;
+  /** @nullable */
+  target_project_id?: number | null;
+  /** @nullable */
+  target_repository_url?: string | null;
   task_id: string;
   updated_at: string;
   web_url: string;

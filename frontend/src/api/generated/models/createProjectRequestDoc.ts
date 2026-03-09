@@ -22,8 +22,18 @@ export interface CreateProjectRequestDoc {
   description?: string | null;
   metadata?: CreateProjectRequestDocMetadata;
   name: string;
+  /**
+   * If true, enable preview deployments for this project.
+   * @nullable
+   */
+  preview_enabled?: boolean | null;
   /** Project type classification (web, mobile, desktop, extension, api, microservice) */
   project_type?: string;
+  /**
+   * Storage keys of reference files (from init-refs/upload-url) for agent to read.
+   * @nullable
+   */
+  reference_keys?: string[] | null;
   /** @nullable */
   repository_url?: string | null;
   /**

@@ -289,6 +289,68 @@ describe('CreateTaskModal repository access guard', () => {
     });
   });
 
+  it('keeps task preview off when project settings do not enable it', async () => {
+    vi.mocked(useProjectSettings).mockReturnValue({
+      settings: {
+        ...DEFAULT_PROJECT_SETTINGS,
+        auto_deploy: false,
+        preview_enabled: true,
+      },
+      defaults: {
+        ...DEFAULT_PROJECT_SETTINGS,
+      },
+      loading: false,
+      saving: false,
+      error: null,
+      isDirty: false,
+      refetch: vi.fn(),
+      updateSettings: vi.fn(),
+      updateSetting: vi.fn(),
+      resetToDefaults: vi.fn(),
+    });
+
+    renderCreateTaskModal(
+      <CreateTaskModal
+        isOpen
+        onClose={vi.fn()}
+        projectId="project-1"
+        projectName="ACPMS"
+        navigateToProjectOnCreate={false}
+      />
+    );
+
+    const taskPreviewSwitch = screen.getByRole('switch', { name: /Task preview/i }) as HTMLButtonElement;
+
+    await waitFor(() => {
+      expect(taskPreviewSwitch.getAttribute('aria-checked')).toBe('false');
+    });
+    expect(taskPreviewSwitch.disabled).toBe(true);
+    expect(
+      screen.getByText('Disabled because Task Preview is off in Project Settings.')
+    ).toBeTruthy();
+
+    fireEvent.change(
+      screen.getByPlaceholderText('e.g. Implement refresh token rotation'),
+      { target: { value: 'Create task with preview disabled' } }
+    );
+
+    fireEvent.click(screen.getByRole('button', { name: /Create Task/i }));
+
+    await waitFor(() => {
+      expect(createTask).toHaveBeenCalledTimes(1);
+    });
+
+    expect(createTask).toHaveBeenCalledWith(
+      expect.objectContaining({
+        metadata: expect.objectContaining({
+          execution: expect.objectContaining({
+            auto_deploy: false,
+          }),
+        }),
+      })
+    );
+  });
+
   it('shows setup-required dialog and blocks task creation when source control is not configured', async () => {
     vi.mocked(useSettings).mockReturnValue({
       settings: {

@@ -2,7 +2,6 @@
 import { useEffect, useMemo, useState } from 'react';
 import type { Requirement } from '../../api/requirements';
 import { createProjectSprint, getSprintOverview, type SprintOverview, type SprintWithRoadmapFields } from '../../api/sprints';
-import type { ProjectMetadata } from '../../shared/types';
 import { resolveTechStack } from '../../utils/resolveTechStack';
 import { logger } from '@/lib/logger';
 
@@ -12,7 +11,8 @@ interface SummaryTabProps {
     projectId: string;
     description?: string;
     repositoryUrl?: string;
-    metadata?: ProjectMetadata;
+    metadata?: Record<string, unknown>;
+    progress?: number;
     /** Raw project from API (metadata, architecture_config, project_type) for consistent tech stack resolution */
     rawProject?: { metadata?: unknown; architecture_config?: unknown; project_type?: string } | null;
     requirements: Requirement[];
@@ -85,6 +85,7 @@ export function SummaryTab({
     description,
     repositoryUrl,
     metadata,
+    progress,
     rawProject,
     requirements,
     sprints,
@@ -95,10 +96,15 @@ export function SummaryTab({
     onRequirementClick,
 }: SummaryTabProps) {
     const techStack = useMemo(
-        () => (rawProject ? resolveTechStack(rawProject) : (metadata?.techStack || [])),
-        [rawProject, metadata?.techStack],
+        () => {
+            if (rawProject) return resolveTechStack(rawProject);
+            return Array.isArray(metadata?.techStack)
+                ? metadata.techStack.filter((value): value is string => typeof value === 'string')
+                : [];
+        },
+        [rawProject, metadata],
     );
-    const progress = metadata?.progress || 0;
+    const progressValue = typeof progress === 'number' ? progress : 0;
 
     const [sprintOverview, setSprintOverview] = useState<SprintOverview | null>(null);
     const [overviewLoading, setOverviewLoading] = useState(false);
@@ -259,12 +265,12 @@ export function SummaryTab({
                             <div>
                                 <div className="flex justify-between items-center mb-2">
                                     <label className="text-xs font-medium text-muted-foreground uppercase tracking-wider">Overall Progress</label>
-                                    <span className="text-sm font-bold text-primary">{progress}%</span>
+                                    <span className="text-sm font-bold text-primary">{progressValue}%</span>
                                 </div>
                                 <div className="h-2 bg-muted rounded-full overflow-hidden">
                                     <div
                                         className="h-full bg-primary rounded-full transition-all duration-500"
-                                        style={{ width: `${progress}%` }}
+                                        style={{ width: `${progressValue}%` }}
                                     />
                                 </div>
                             </div>

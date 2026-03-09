@@ -7,6 +7,7 @@ pub mod project;
 pub mod project_assistant_instruction;
 pub mod project_assistant_session;
 pub mod project_assistant_tools;
+pub mod project_summary;
 pub mod repository_access;
 pub mod requirement;
 pub mod sprint;
@@ -95,6 +96,10 @@ pub use project_assistant_instruction::{
 };
 pub use project_assistant_session::ProjectAssistantSessionService;
 pub use project_assistant_tools::{parse_tool_call_line, ToolCall};
+pub use project_summary::{
+    derive_project_execution_status, derive_project_lifecycle_status, derive_project_progress,
+    load_project_summaries, summarize_project, ProjectComputedSummary,
+};
 pub use repository_access::RepositoryAccessService;
 pub use requirement::RequirementService;
 pub use sprint::SprintService;

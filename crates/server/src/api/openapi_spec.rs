@@ -96,6 +96,7 @@ use crate::{api, routes};
             routes::users::GetUploadUrlRequest,
             routes::users::UploadUrlResponse,
             api::ProjectDto,
+            api::ProjectSummaryDto,
             api::ProjectResponse,
             api::ProjectListResponse,
             api::ProjectStackSelectionDoc,
@@ -1008,9 +1009,11 @@ pub fn build_filtered_openclaw_openapi_json(filters: &OpenClawOpenApiQuery) -> V
 mod tests {
     use serde_json::Value;
     use std::collections::BTreeSet;
+    use utoipa::OpenApi;
 
     use super::{
-        build_filtered_openclaw_openapi_json, build_openclaw_openapi_json, OpenClawOpenApiQuery,
+        build_filtered_openclaw_openapi_json, build_openclaw_openapi_json, ApiDoc,
+        OpenClawOpenApiQuery,
     };
 
     fn collect_missing_schema_refs(
@@ -1095,5 +1098,27 @@ mod tests {
         assert!(document
             .pointer("/components/schemas/ProjectResponse")
             .is_none());
+    }
+
+    #[test]
+    fn main_api_contract_exposes_project_summary_and_repository_context() {
+        let document =
+            serde_json::to_value(ApiDoc::openapi()).expect("ApiDoc OpenAPI should serialize");
+
+        assert!(document
+            .pointer("/components/schemas/ProjectDto/properties/summary")
+            .is_some());
+        assert!(document
+            .pointer("/components/schemas/ProjectDto/properties/repository_context")
+            .is_some());
+        assert!(document
+            .pointer("/paths/~1api~1v1~1projects~1{id}~1repository-context~1recheck/post")
+            .is_some());
+        assert!(document
+            .pointer("/paths/~1api~1v1~1projects~1{id}~1repository-context~1link-fork/post")
+            .is_some());
+        assert!(document
+            .pointer("/paths/~1api~1v1~1projects~1{id}~1repository-context~1create-fork/post")
+            .is_some());
     }
 }

@@ -24,13 +24,22 @@ import type {
 } from '@tanstack/react-query';
 
 import type {
+  CreateForkResponse,
   CreateProjectRequestDoc,
+  DeleteProjectParams,
   EmptyResponse,
+  ImportProjectCreateForkRequest,
+  ImportProjectCreateForkResponse,
+  ImportProjectPreflightRequest,
+  ImportProjectPreflightResponse,
   ImportProjectRequest,
   ImportProjectResponse,
+  LinkExistingForkRequest,
+  LinkExistingForkResponse,
   ListProjectsParams,
   ProjectListResponse,
   ProjectResponse,
+  RecheckRepositoryAccessResponse,
   UpdateProjectRequestDoc
 } from '.././models';
 
@@ -204,7 +213,7 @@ export const importProject = (
   
 
 
-export const getImportProjectMutationOptions = <TError = void,
+export const getImportProjectMutationOptions = <TError = void | void,
     TContext = unknown>(options?: { mutation?:UseMutationOptions<Awaited<ReturnType<typeof importProject>>, TError,{data: ImportProjectRequest}, TContext>, request?: SecondParameter<typeof customFetch>}
 ): UseMutationOptions<Awaited<ReturnType<typeof importProject>>, TError,{data: ImportProjectRequest}, TContext> => {
 
@@ -231,12 +240,12 @@ const {mutation: mutationOptions, request: requestOptions} = options ?
 
     export type ImportProjectMutationResult = NonNullable<Awaited<ReturnType<typeof importProject>>>
     export type ImportProjectMutationBody = ImportProjectRequest
-    export type ImportProjectMutationError = void
+    export type ImportProjectMutationError = void | void
 
     /**
  * @summary Import existing GitLab project
  */
-export const useImportProject = <TError = void,
+export const useImportProject = <TError = void | void,
     TContext = unknown>(options?: { mutation?:UseMutationOptions<Awaited<ReturnType<typeof importProject>>, TError,{data: ImportProjectRequest}, TContext>, request?: SecondParameter<typeof customFetch>}
  , queryClient?: QueryClient): UseMutationResult<
         Awaited<ReturnType<typeof importProject>>,
@@ -246,6 +255,128 @@ export const useImportProject = <TError = void,
       > => {
 
       const mutationOptions = getImportProjectMutationOptions(options);
+
+      return useMutation(mutationOptions, queryClient);
+    }
+    export const importProjectCreateFork = (
+    importProjectCreateForkRequest: ImportProjectCreateForkRequest,
+ options?: SecondParameter<typeof customFetch>,signal?: AbortSignal
+) => {
+      
+      
+      return customFetch<ImportProjectCreateForkResponse>(
+      {url: `/api/v1/projects/import/create-fork`, method: 'POST',
+      headers: {'Content-Type': 'application/json', },
+      data: importProjectCreateForkRequest, signal
+    },
+      options);
+    }
+  
+
+
+export const getImportProjectCreateForkMutationOptions = <TError = void | void,
+    TContext = unknown>(options?: { mutation?:UseMutationOptions<Awaited<ReturnType<typeof importProjectCreateFork>>, TError,{data: ImportProjectCreateForkRequest}, TContext>, request?: SecondParameter<typeof customFetch>}
+): UseMutationOptions<Awaited<ReturnType<typeof importProjectCreateFork>>, TError,{data: ImportProjectCreateForkRequest}, TContext> => {
+
+const mutationKey = ['importProjectCreateFork'];
+const {mutation: mutationOptions, request: requestOptions} = options ?
+      options.mutation && 'mutationKey' in options.mutation && options.mutation.mutationKey ?
+      options
+      : {...options, mutation: {...options.mutation, mutationKey}}
+      : {mutation: { mutationKey, }, request: undefined};
+
+      
+
+
+      const mutationFn: MutationFunction<Awaited<ReturnType<typeof importProjectCreateFork>>, {data: ImportProjectCreateForkRequest}> = (props) => {
+          const {data} = props ?? {};
+
+          return  importProjectCreateFork(data,requestOptions)
+        }
+
+        
+
+
+  return  { mutationFn, ...mutationOptions }}
+
+    export type ImportProjectCreateForkMutationResult = NonNullable<Awaited<ReturnType<typeof importProjectCreateFork>>>
+    export type ImportProjectCreateForkMutationBody = ImportProjectCreateForkRequest
+    export type ImportProjectCreateForkMutationError = void | void
+
+    export const useImportProjectCreateFork = <TError = void | void,
+    TContext = unknown>(options?: { mutation?:UseMutationOptions<Awaited<ReturnType<typeof importProjectCreateFork>>, TError,{data: ImportProjectCreateForkRequest}, TContext>, request?: SecondParameter<typeof customFetch>}
+ , queryClient?: QueryClient): UseMutationResult<
+        Awaited<ReturnType<typeof importProjectCreateFork>>,
+        TError,
+        {data: ImportProjectCreateForkRequest},
+        TContext
+      > => {
+
+      const mutationOptions = getImportProjectCreateForkMutationOptions(options);
+
+      return useMutation(mutationOptions, queryClient);
+    }
+    /**
+ * @summary Preflight repository import to classify access mode and capabilities.
+ */
+export const importProjectPreflight = (
+    importProjectPreflightRequest: ImportProjectPreflightRequest,
+ options?: SecondParameter<typeof customFetch>,signal?: AbortSignal
+) => {
+      
+      
+      return customFetch<ImportProjectPreflightResponse>(
+      {url: `/api/v1/projects/import/preflight`, method: 'POST',
+      headers: {'Content-Type': 'application/json', },
+      data: importProjectPreflightRequest, signal
+    },
+      options);
+    }
+  
+
+
+export const getImportProjectPreflightMutationOptions = <TError = void,
+    TContext = unknown>(options?: { mutation?:UseMutationOptions<Awaited<ReturnType<typeof importProjectPreflight>>, TError,{data: ImportProjectPreflightRequest}, TContext>, request?: SecondParameter<typeof customFetch>}
+): UseMutationOptions<Awaited<ReturnType<typeof importProjectPreflight>>, TError,{data: ImportProjectPreflightRequest}, TContext> => {
+
+const mutationKey = ['importProjectPreflight'];
+const {mutation: mutationOptions, request: requestOptions} = options ?
+      options.mutation && 'mutationKey' in options.mutation && options.mutation.mutationKey ?
+      options
+      : {...options, mutation: {...options.mutation, mutationKey}}
+      : {mutation: { mutationKey, }, request: undefined};
+
+      
+
+
+      const mutationFn: MutationFunction<Awaited<ReturnType<typeof importProjectPreflight>>, {data: ImportProjectPreflightRequest}> = (props) => {
+          const {data} = props ?? {};
+
+          return  importProjectPreflight(data,requestOptions)
+        }
+
+        
+
+
+  return  { mutationFn, ...mutationOptions }}
+
+    export type ImportProjectPreflightMutationResult = NonNullable<Awaited<ReturnType<typeof importProjectPreflight>>>
+    export type ImportProjectPreflightMutationBody = ImportProjectPreflightRequest
+    export type ImportProjectPreflightMutationError = void
+
+    /**
+ * @summary Preflight repository import to classify access mode and capabilities.
+ */
+export const useImportProjectPreflight = <TError = void,
+    TContext = unknown>(options?: { mutation?:UseMutationOptions<Awaited<ReturnType<typeof importProjectPreflight>>, TError,{data: ImportProjectPreflightRequest}, TContext>, request?: SecondParameter<typeof customFetch>}
+ , queryClient?: QueryClient): UseMutationResult<
+        Awaited<ReturnType<typeof importProjectPreflight>>,
+        TError,
+        {data: ImportProjectPreflightRequest},
+        TContext
+      > => {
+
+      const mutationOptions = getImportProjectPreflightMutationOptions(options);
 
       return useMutation(mutationOptions, queryClient);
     }
@@ -394,11 +525,13 @@ const {mutation: mutationOptions, request: requestOptions} = options ?
     }
     export const deleteProject = (
     id: string,
+    params?: DeleteProjectParams,
  options?: SecondParameter<typeof customFetch>,) => {
       
       
       return customFetch<EmptyResponse>(
-      {url: `/api/v1/projects/${id}`, method: 'DELETE'
+      {url: `/api/v1/projects/${id}`, method: 'DELETE',
+        params
     },
       options);
     }
@@ -406,8 +539,8 @@ const {mutation: mutationOptions, request: requestOptions} = options ?
 
 
 export const getDeleteProjectMutationOptions = <TError = void | void,
-    TContext = unknown>(options?: { mutation?:UseMutationOptions<Awaited<ReturnType<typeof deleteProject>>, TError,{id: string}, TContext>, request?: SecondParameter<typeof customFetch>}
-): UseMutationOptions<Awaited<ReturnType<typeof deleteProject>>, TError,{id: string}, TContext> => {
+    TContext = unknown>(options?: { mutation?:UseMutationOptions<Awaited<ReturnType<typeof deleteProject>>, TError,{id: string;params?: DeleteProjectParams}, TContext>, request?: SecondParameter<typeof customFetch>}
+): UseMutationOptions<Awaited<ReturnType<typeof deleteProject>>, TError,{id: string;params?: DeleteProjectParams}, TContext> => {
 
 const mutationKey = ['deleteProject'];
 const {mutation: mutationOptions, request: requestOptions} = options ?
@@ -419,10 +552,10 @@ const {mutation: mutationOptions, request: requestOptions} = options ?
       
 
 
-      const mutationFn: MutationFunction<Awaited<ReturnType<typeof deleteProject>>, {id: string}> = (props) => {
-          const {id} = props ?? {};
+      const mutationFn: MutationFunction<Awaited<ReturnType<typeof deleteProject>>, {id: string;params?: DeleteProjectParams}> = (props) => {
+          const {id,params} = props ?? {};
 
-          return  deleteProject(id,requestOptions)
+          return  deleteProject(id,params,requestOptions)
         }
 
         
@@ -435,15 +568,186 @@ const {mutation: mutationOptions, request: requestOptions} = options ?
     export type DeleteProjectMutationError = void | void
 
     export const useDeleteProject = <TError = void | void,
-    TContext = unknown>(options?: { mutation?:UseMutationOptions<Awaited<ReturnType<typeof deleteProject>>, TError,{id: string}, TContext>, request?: SecondParameter<typeof customFetch>}
+    TContext = unknown>(options?: { mutation?:UseMutationOptions<Awaited<ReturnType<typeof deleteProject>>, TError,{id: string;params?: DeleteProjectParams}, TContext>, request?: SecondParameter<typeof customFetch>}
  , queryClient?: QueryClient): UseMutationResult<
         Awaited<ReturnType<typeof deleteProject>>,
+        TError,
+        {id: string;params?: DeleteProjectParams},
+        TContext
+      > => {
+
+      const mutationOptions = getDeleteProjectMutationOptions(options);
+
+      return useMutation(mutationOptions, queryClient);
+    }
+    export const createProjectFork = (
+    id: string,
+ options?: SecondParameter<typeof customFetch>,signal?: AbortSignal
+) => {
+      
+      
+      return customFetch<CreateForkResponse>(
+      {url: `/api/v1/projects/${id}/repository-context/create-fork`, method: 'POST', signal
+    },
+      options);
+    }
+  
+
+
+export const getCreateProjectForkMutationOptions = <TError = void | void | void | void,
+    TContext = unknown>(options?: { mutation?:UseMutationOptions<Awaited<ReturnType<typeof createProjectFork>>, TError,{id: string}, TContext>, request?: SecondParameter<typeof customFetch>}
+): UseMutationOptions<Awaited<ReturnType<typeof createProjectFork>>, TError,{id: string}, TContext> => {
+
+const mutationKey = ['createProjectFork'];
+const {mutation: mutationOptions, request: requestOptions} = options ?
+      options.mutation && 'mutationKey' in options.mutation && options.mutation.mutationKey ?
+      options
+      : {...options, mutation: {...options.mutation, mutationKey}}
+      : {mutation: { mutationKey, }, request: undefined};
+
+      
+
+
+      const mutationFn: MutationFunction<Awaited<ReturnType<typeof createProjectFork>>, {id: string}> = (props) => {
+          const {id} = props ?? {};
+
+          return  createProjectFork(id,requestOptions)
+        }
+
+        
+
+
+  return  { mutationFn, ...mutationOptions }}
+
+    export type CreateProjectForkMutationResult = NonNullable<Awaited<ReturnType<typeof createProjectFork>>>
+    
+    export type CreateProjectForkMutationError = void | void | void | void
+
+    export const useCreateProjectFork = <TError = void | void | void | void,
+    TContext = unknown>(options?: { mutation?:UseMutationOptions<Awaited<ReturnType<typeof createProjectFork>>, TError,{id: string}, TContext>, request?: SecondParameter<typeof customFetch>}
+ , queryClient?: QueryClient): UseMutationResult<
+        Awaited<ReturnType<typeof createProjectFork>>,
         TError,
         {id: string},
         TContext
       > => {
 
-      const mutationOptions = getDeleteProjectMutationOptions(options);
+      const mutationOptions = getCreateProjectForkMutationOptions(options);
+
+      return useMutation(mutationOptions, queryClient);
+    }
+    export const linkExistingFork = (
+    id: string,
+    linkExistingForkRequest: LinkExistingForkRequest,
+ options?: SecondParameter<typeof customFetch>,signal?: AbortSignal
+) => {
+      
+      
+      return customFetch<LinkExistingForkResponse>(
+      {url: `/api/v1/projects/${id}/repository-context/link-fork`, method: 'POST',
+      headers: {'Content-Type': 'application/json', },
+      data: linkExistingForkRequest, signal
+    },
+      options);
+    }
+  
+
+
+export const getLinkExistingForkMutationOptions = <TError = void | void | void | void,
+    TContext = unknown>(options?: { mutation?:UseMutationOptions<Awaited<ReturnType<typeof linkExistingFork>>, TError,{id: string;data: LinkExistingForkRequest}, TContext>, request?: SecondParameter<typeof customFetch>}
+): UseMutationOptions<Awaited<ReturnType<typeof linkExistingFork>>, TError,{id: string;data: LinkExistingForkRequest}, TContext> => {
+
+const mutationKey = ['linkExistingFork'];
+const {mutation: mutationOptions, request: requestOptions} = options ?
+      options.mutation && 'mutationKey' in options.mutation && options.mutation.mutationKey ?
+      options
+      : {...options, mutation: {...options.mutation, mutationKey}}
+      : {mutation: { mutationKey, }, request: undefined};
+
+      
+
+
+      const mutationFn: MutationFunction<Awaited<ReturnType<typeof linkExistingFork>>, {id: string;data: LinkExistingForkRequest}> = (props) => {
+          const {id,data} = props ?? {};
+
+          return  linkExistingFork(id,data,requestOptions)
+        }
+
+        
+
+
+  return  { mutationFn, ...mutationOptions }}
+
+    export type LinkExistingForkMutationResult = NonNullable<Awaited<ReturnType<typeof linkExistingFork>>>
+    export type LinkExistingForkMutationBody = LinkExistingForkRequest
+    export type LinkExistingForkMutationError = void | void | void | void
+
+    export const useLinkExistingFork = <TError = void | void | void | void,
+    TContext = unknown>(options?: { mutation?:UseMutationOptions<Awaited<ReturnType<typeof linkExistingFork>>, TError,{id: string;data: LinkExistingForkRequest}, TContext>, request?: SecondParameter<typeof customFetch>}
+ , queryClient?: QueryClient): UseMutationResult<
+        Awaited<ReturnType<typeof linkExistingFork>>,
+        TError,
+        {id: string;data: LinkExistingForkRequest},
+        TContext
+      > => {
+
+      const mutationOptions = getLinkExistingForkMutationOptions(options);
+
+      return useMutation(mutationOptions, queryClient);
+    }
+    export const recheckProjectRepositoryAccess = (
+    id: string,
+ options?: SecondParameter<typeof customFetch>,signal?: AbortSignal
+) => {
+      
+      
+      return customFetch<RecheckRepositoryAccessResponse>(
+      {url: `/api/v1/projects/${id}/repository-context/recheck`, method: 'POST', signal
+    },
+      options);
+    }
+  
+
+
+export const getRecheckProjectRepositoryAccessMutationOptions = <TError = void | void | void,
+    TContext = unknown>(options?: { mutation?:UseMutationOptions<Awaited<ReturnType<typeof recheckProjectRepositoryAccess>>, TError,{id: string}, TContext>, request?: SecondParameter<typeof customFetch>}
+): UseMutationOptions<Awaited<ReturnType<typeof recheckProjectRepositoryAccess>>, TError,{id: string}, TContext> => {
+
+const mutationKey = ['recheckProjectRepositoryAccess'];
+const {mutation: mutationOptions, request: requestOptions} = options ?
+      options.mutation && 'mutationKey' in options.mutation && options.mutation.mutationKey ?
+      options
+      : {...options, mutation: {...options.mutation, mutationKey}}
+      : {mutation: { mutationKey, }, request: undefined};
+
+      
+
+
+      const mutationFn: MutationFunction<Awaited<ReturnType<typeof recheckProjectRepositoryAccess>>, {id: string}> = (props) => {
+          const {id} = props ?? {};
+
+          return  recheckProjectRepositoryAccess(id,requestOptions)
+        }
+
+        
+
+
+  return  { mutationFn, ...mutationOptions }}
+
+    export type RecheckProjectRepositoryAccessMutationResult = NonNullable<Awaited<ReturnType<typeof recheckProjectRepositoryAccess>>>
+    
+    export type RecheckProjectRepositoryAccessMutationError = void | void | void
+
+    export const useRecheckProjectRepositoryAccess = <TError = void | void | void,
+    TContext = unknown>(options?: { mutation?:UseMutationOptions<Awaited<ReturnType<typeof recheckProjectRepositoryAccess>>, TError,{id: string}, TContext>, request?: SecondParameter<typeof customFetch>}
+ , queryClient?: QueryClient): UseMutationResult<
+        Awaited<ReturnType<typeof recheckProjectRepositoryAccess>>,
+        TError,
+        {id: string},
+        TContext
+      > => {
+
+      const mutationOptions = getRecheckProjectRepositoryAccessMutationOptions(options);
 
       return useMutation(mutationOptions, queryClient);
     }

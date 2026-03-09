@@ -111,6 +111,38 @@ fn validate_project_name(name: &str) -> Result<(), String> {
     Ok(())
 }
 
+async fn project_to_dto_with_summary(
+    pool: &PgPool,
+    project: Project,
+) -> Result<ProjectDto, ApiError> {
+    let service = ProjectService::new(pool.clone());
+    let summary = service
+        .load_project_summary(&project)
+        .await
+        .map_err(|error| ApiError::Internal(error.to_string()))?;
+
+    Ok(ProjectDto::from(project).with_summary(summary.into()))
+}
+
+async fn projects_to_dtos_with_summary(
+    pool: &PgPool,
+    projects: Vec<Project>,
+) -> Result<Vec<ProjectDto>, ApiError> {
+    let service = ProjectService::new(pool.clone());
+    let summaries = service
+        .load_project_summaries(&projects)
+        .await
+        .map_err(|error| ApiError::Internal(error.to_string()))?;
+
+    Ok(projects
+        .into_iter()
+        .map(|project| {
+            let summary = summaries.get(&project.id).cloned().unwrap_or_default();
+            ProjectDto::from(project).with_summary(summary.into())
+        })
+        .collect())
+}
+
 #[utoipa::path(
     post,
     path = "/api/v1/projects",
@@ -175,7 +207,7 @@ pub async fn create_project(
         });
     }
 
-    let dto = ProjectDto::from(project);
+    let dto = project_to_dto_with_summary(&pool, project).await?;
     let response = ApiResponse::created(dto, "Project created successfully");
 
     Ok((StatusCode::CREATED, Json(response)))
@@ -264,7 +296,7 @@ pub async fn list_projects(
             .map_err(|e| ApiError::Internal(e.to_string()))?
     };
 
-    let dtos: Vec<ProjectDto> = projects.into_iter().map(ProjectDto::from).collect();
+    let dtos = projects_to_dtos_with_summary(&pool, projects).await?;
 
     let mut response = ApiResponse::success(dtos, "Projects retrieved successfully");
 
@@ -352,7 +384,7 @@ pub async fn get_project(
         });
     }
 
-    let dto = ProjectDto::from(project);
+    let dto = project_to_dto_with_summary(&state.db, project).await?;
     let response = ApiResponse::success(dto, "Project retrieved successfully");
 
     Ok(Json(response))
@@ -765,7 +797,7 @@ pub async fn update_project(
         .await
         .map_err(|e| ApiError::Internal(e.to_string()))?;
 
-    let dto = ProjectDto::from(project);
+    let dto = project_to_dto_with_summary(&pool, project).await?;
     let response = ApiResponse::success(dto, "Project updated successfully");
 
     Ok(Json(response))
@@ -904,7 +936,7 @@ pub async fn recheck_project_repository_access(
         .map_err(|e| ApiError::Internal(e.to_string()))?;
 
     let response = RecheckRepositoryAccessResponse {
-        project: ProjectDto::from(updated_project),
+        project: project_to_dto_with_summary(&state.db, updated_project).await?,
         recommended_action: recommended_action_for_repository_context(&repository_context),
         warnings: warnings_for_repository_context(&repository_context),
     };
@@ -1048,7 +1080,7 @@ pub async fn link_existing_fork(
         .map_err(|e| ApiError::Internal(e.to_string()))?;
 
     let response = LinkExistingForkResponse {
-        project: ProjectDto::from(updated_project),
+        project: project_to_dto_with_summary(&state.db, updated_project).await?,
         recommended_action: recommended_action_for_repository_context(&linked_context),
         warnings: warnings_for_repository_context(&linked_context),
     };
@@ -1232,7 +1264,7 @@ pub async fn create_project_fork(
         .map_err(|e| ApiError::Internal(e.to_string()))?;
 
     let response = CreateForkResponse {
-        project: ProjectDto::from(updated_project),
+        project: project_to_dto_with_summary(&state.db, updated_project).await?,
         created_repository_url,
         recommended_action: recommended_action_for_repository_context(&linked_context),
         warnings: warnings_for_repository_context(&linked_context),
@@ -2034,7 +2066,7 @@ pub async fn import_project(
     }
 
     let has_init_task = init_task_id.is_some();
-    let dto = ProjectDto::from(project);
+    let dto = project_to_dto_with_summary(pool, project).await?;
     let response_data = ImportProjectResponse {
         project: dto,
         init_task_id,

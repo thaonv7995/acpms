@@ -6,7 +6,9 @@
  */
 import type { ProjectDtoArchitectureConfig } from './projectDtoArchitectureConfig';
 import type { ProjectDtoMetadata } from './projectDtoMetadata';
+import type { RepositoryContext } from './repositoryContext';
 import type { ProjectSettings } from './projectSettings';
+import type { ProjectDtoSummary } from './projectDtoSummary';
 
 export interface ProjectDto {
   architecture_config: ProjectDtoArchitectureConfig;
@@ -19,10 +21,13 @@ export interface ProjectDto {
   name: string;
   /** Project type classification (web, mobile, desktop, extension, api, microservice) */
   project_type: string;
+  repository_context: RepositoryContext;
   /** @nullable */
   repository_url?: string | null;
   /** Legacy field for backward compatibility - use settings.require_review instead */
   require_review: boolean;
   settings: ProjectSettings;
+  /** @nullable */
+  summary?: ProjectDtoSummary;
   updated_at: string;
 }

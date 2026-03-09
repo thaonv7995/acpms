@@ -16,4 +16,16 @@ status?: string | null;
  * @nullable
  */
 search?: string | null;
+/**
+ * Page size (1-100, default 50)
+ * @minimum 0
+ * @nullable
+ */
+limit?: number | null;
+/**
+ * Offset for pagination (default 0)
+ * @minimum 0
+ * @nullable
+ */
+offset?: number | null;
 };

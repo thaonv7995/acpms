@@ -6,7 +6,7 @@
  */
 
 /**
- * Request body for importing GitLab project
+ * Request body for importing Git repository project
  */
 export interface ImportProjectRequest {
   /**
@@ -17,6 +17,11 @@ export interface ImportProjectRequest {
   /** @nullable */
   description?: string | null;
   name: string;
+  /**
+   * If true, enable preview deployments for this project.
+   * @nullable
+   */
+  preview_enabled?: boolean | null;
   /** Project type classification (web, mobile, desktop, extension, api, microservice). */
   project_type: string;
   repository_url: string;
@@ -25,4 +30,6 @@ export interface ImportProjectRequest {
    * @nullable
    */
   require_review?: boolean | null;
+  /** @nullable */
+  upstream_repository_url?: string | null;
 }

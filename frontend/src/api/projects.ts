@@ -1,6 +1,6 @@
 import { apiGet, apiPost, apiPut, apiDelete, API_PREFIX, apiGetFull, type ApiResponse } from './client';
-import type { CreateProjectRequest, UpdateProjectRequest } from '../shared/types';
 import type { ProjectType } from './templates';
+import type { CreateProjectRequestDoc, UpdateProjectRequestDoc } from './generated/models';
 import type {
   CreateForkResponse,
   ImportProjectCreateForkResponse,
@@ -92,7 +92,7 @@ export async function syncProjectRepository(projectId: string): Promise<{
   return apiPost(`${API_PREFIX}/projects/${projectId}/sync`, {});
 }
 
-export async function createProject(data: CreateProjectRequest): Promise<ProjectWithRepositoryContext> {
+export async function createProject(data: CreateProjectRequestDoc): Promise<ProjectWithRepositoryContext> {
   return apiPost<ProjectWithRepositoryContext>(`${API_PREFIX}/projects`, data);
 }
 
@@ -171,7 +171,7 @@ export async function importProjectFromGitLab(data: {
 
 export async function updateProject(
   id: string,
-  data: UpdateProjectRequest
+  data: UpdateProjectRequestDoc
 ): Promise<ProjectWithRepositoryContext> {
   return apiPut<ProjectWithRepositoryContext>(`${API_PREFIX}/projects/${id}`, data);
 }

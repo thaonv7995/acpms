@@ -3,6 +3,7 @@ import { useQuery } from '@tanstack/react-query';
 import { getProjects, type ProjectsQueryParams } from '../api/projects';
 import type { ProjectListItem } from '../types/project';
 import type { ProjectWithRepositoryContext } from '../types/repository';
+import { getProjectStatusPresentation } from '../utils/projectSummary';
 import { resolveTechStack } from '../utils/resolveTechStack';
 
 interface UseProjectsResult {
@@ -72,6 +73,7 @@ function formatRelativeTime(isoDate: string | undefined): string {
 
 function mapProjectDtoToListItem(dto: ProjectWithRepositoryContext): ProjectListItem {
     const metadata = asObject(dto.metadata);
+    const status = getProjectStatusPresentation(dto.summary);
 
     return {
         id: dto.id,
@@ -87,27 +89,13 @@ function mapProjectDtoToListItem(dto: ProjectWithRepositoryContext): ProjectList
                 ? metadata.iconColor
                 : 'blue',
         techStack: resolveTechStack(dto as any),
-        status:
-            metadata.status === 'agent_reviewing' ||
-                metadata.status === 'active_coding' ||
-                metadata.status === 'deploying' ||
-                metadata.status === 'completed' ||
-                metadata.status === 'paused'
-                ? metadata.status
-                : 'active_coding',
-        statusLabel: typeof metadata.statusLabel === 'string' ? metadata.statusLabel : 'Active',
-        statusColor:
-            metadata.statusColor === 'yellow' ||
-                metadata.statusColor === 'blue' ||
-                metadata.statusColor === 'emerald' ||
-                metadata.statusColor === 'green' ||
-                metadata.statusColor === 'slate'
-                ? metadata.statusColor
-                : 'blue',
-        progress: typeof metadata.progress === 'number' ? metadata.progress : 0,
+        status: status.status,
+        statusLabel: status.statusLabel,
+        statusColor: status.statusColor,
+        progress: status.progress,
         agentIcon: 'smart_toy',
         lastActivity: formatRelativeTime(dto.updated_at),
-        agentCount: typeof metadata.agentCount === 'number' ? metadata.agentCount : 0,
+        agentCount: status.agentCount,
     };
 }
 

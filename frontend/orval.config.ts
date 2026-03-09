@@ -3,7 +3,7 @@ import { defineConfig } from 'orval';
 export default defineConfig({
   acpms: {
     input: {
-      target: 'http://localhost:3000/api-docs/openapi.json',
+      target: './openapi.json',
     },
     output: {
       mode: 'tags-split',

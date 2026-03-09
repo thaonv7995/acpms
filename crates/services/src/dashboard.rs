@@ -10,20 +10,9 @@ use std::sync::Arc;
 use ts_rs::TS;
 use uuid::Uuid;
 
-// --- Internal Query Result Structs ---
-#[derive(FromRow)]
-struct ProjectQueryResult {
-    id: Uuid,
-    name: String,
-    description: Option<String>,
-    #[allow(dead_code)]
-    created_at: DateTime<Utc>,
-    #[allow(dead_code)]
-    updated_at: DateTime<Utc>,
-    progress: Option<i64>,
-    latest_attempt_status: Option<String>,
-}
+use crate::load_project_summaries;
 
+// --- Internal Query Result Structs ---
 #[derive(FromRow)]
 struct TaskQueryResult {
     id: Uuid,
@@ -100,7 +89,7 @@ pub struct DashboardProject {
     pub id: Uuid,
     pub name: String,
     pub subtitle: String,
-    pub status: String, // 'building' | 'testing' | 'deploying' | 'completed'
+    pub status: String, // 'planning' | 'active' | 'reviewing' | 'blocked' | 'completed' | 'paused' | 'archived'
     pub progress: i64,
     pub agents: Vec<AgentAvatar>,
 }
@@ -191,17 +180,6 @@ impl DashboardService {
         .ok()
         .flatten()
         .unwrap_or(false)
-    }
-
-    fn derive_project_status(latest_attempt_status: Option<&str>, progress: i64) -> String {
-        match latest_attempt_status.map(|s| s.to_ascii_lowercase()) {
-            Some(status) if status == "running" || status == "queued" => "building".to_string(),
-            Some(status) if status == "failed" || status == "cancelled" => "testing".to_string(),
-            Some(status) if status == "success" && progress >= 100 => "completed".to_string(),
-            Some(status) if status == "success" => "deploying".to_string(),
-            _ if progress >= 100 => "completed".to_string(),
-            _ => "building".to_string(),
-        }
     }
 
     fn avatar_color_for_rank(rank_in_project: i64) -> &'static str {
@@ -426,53 +404,19 @@ impl DashboardService {
     }
 
     async fn load_projects(&self, is_admin: bool, user_id: Uuid) -> Result<Vec<DashboardProject>> {
-        // Return top 5 most recently created/updated with calculated progress
-        let projects_raw = sqlx::query_as::<_, ProjectQueryResult>(
+        // Return top 5 most recently updated projects, then derive status/progress from shared rules.
+        let projects_raw = sqlx::query_as::<_, Project>(
             r#"
-            WITH accessible_projects AS (
-                SELECT p.id, p.name, p.description, p.created_at, p.updated_at
-                FROM projects p
-                WHERE $1
-                   OR EXISTS (
-                        SELECT 1
-                        FROM project_members pm
-                        WHERE pm.project_id = p.id
-                          AND pm.user_id = $2
-                    )
-            ),
-            task_stats AS (
-                SELECT 
-                    t.project_id,
-                    COUNT(*) as total,
-                    COUNT(*) FILTER (
-                        WHERE LOWER(t.status::text) IN ('done', 'archived', 'cancelled', 'canceled')
-                    ) as completed
-                FROM tasks t
-                JOIN accessible_projects ap ON ap.id = t.project_id
-                WHERE t.sprint_id IS NOT NULL
-                GROUP BY t.project_id
-            )
-            SELECT 
-                ap.id, 
-                ap.name, 
-                ap.description, 
-                ap.created_at, 
-                ap.updated_at,
-                CASE
-                    WHEN ts.total IS NULL OR ts.total = 0 THEN 0
-                    ELSE ROUND((ts.completed::numeric / ts.total::numeric) * 100)::bigint
-                END as progress,
-                (
-                    SELECT ta.status::text
-                    FROM task_attempts ta
-                    JOIN tasks t2 ON t2.id = ta.task_id
-                    WHERE t2.project_id = ap.id
-                    ORDER BY COALESCE(ta.started_at, ta.created_at) DESC, ta.id DESC
-                    LIMIT 1
-                ) as latest_attempt_status
-            FROM accessible_projects ap
-            LEFT JOIN task_stats ts ON ts.project_id = ap.id
-            ORDER BY ap.updated_at DESC
+            SELECT p.*
+            FROM projects p
+            WHERE $1
+               OR EXISTS (
+                    SELECT 1
+                    FROM project_members pm
+                    WHERE pm.project_id = p.id
+                      AND pm.user_id = $2
+                )
+            ORDER BY p.updated_at DESC
             LIMIT 5
             "#,
         )
@@ -481,6 +425,7 @@ impl DashboardService {
         .fetch_all(&self.pool)
         .await?;
 
+        let project_summaries = load_project_summaries(&self.pool, &projects_raw).await?;
         let project_ids: Vec<Uuid> = projects_raw.iter().map(|p| p.id).collect();
         let mut agents_by_project: HashMap<Uuid, Vec<AgentAvatar>> = HashMap::new();
 
@@ -527,16 +472,13 @@ impl DashboardService {
         let projects: Vec<DashboardProject> = projects_raw
             .into_iter()
             .map(|p| {
-                let progress = p.progress.unwrap_or(0).clamp(0, 100);
+                let summary = project_summaries.get(&p.id).cloned().unwrap_or_default();
                 DashboardProject {
                     id: p.id,
                     name: p.name,
                     subtitle: p.description.unwrap_or_default(),
-                    status: Self::derive_project_status(
-                        p.latest_attempt_status.as_deref(),
-                        progress,
-                    ),
-                    progress,
+                    status: summary.lifecycle_status,
+                    progress: summary.progress,
                     agents: agents_by_project.remove(&p.id).unwrap_or_default(),
                 }
             })

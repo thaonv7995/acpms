@@ -6,8 +6,14 @@
  */
 
 export interface LinkGitLabProjectRequestDoc {
-  /** @nullable */
-  base_url?: string | null;
-  gitlab_project_id: number;
-  pat: string;
+  /**
+   * GitLab project ID (numeric). Optional if repository_url is provided.
+   * @nullable
+   */
+  gitlab_project_id?: number | null;
+  /**
+   * Repository URL (e.g. https://gitlab.com/group/repo). Resolved to project_id via GitLab API.
+   * @nullable
+   */
+  repository_url?: string | null;
 }

@@ -176,11 +176,13 @@ function ProjectsSkeleton() {
 }
 
 const statusOptions = [
-  { value: 'agent_reviewing', label: 'Agent Reviewing' },
-  { value: 'active_coding', label: 'Active Coding' },
-  { value: 'deploying', label: 'Deploying' },
+  { value: 'planning', label: 'Planning' },
+  { value: 'active', label: 'Active' },
+  { value: 'reviewing', label: 'Reviewing' },
+  { value: 'blocked', label: 'Blocked' },
   { value: 'completed', label: 'Completed' },
   { value: 'paused', label: 'Paused' },
+  { value: 'archived', label: 'Archived' },
 ];
 
 const techStackOptions = [

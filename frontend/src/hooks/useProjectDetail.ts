@@ -12,6 +12,7 @@ import type {
     KanbanTask,
 } from '../types/project';
 import type { ProjectWithRepositoryContext } from '../types/repository';
+import { normalizeProjectLifecycleStatus } from '../utils/projectSummary';
 import { logger } from '@/lib/logger';
 import { createKanbanColumns, resolveKanbanColumnId } from '../utils/kanbanColumns';
 
@@ -132,33 +133,47 @@ function groupTasksIntoColumns(tasks: Task[]): KanbanColumn[] {
     return columns;
 }
 
+function isClosedTaskStatus(status: string): boolean {
+    const normalized = status.toLowerCase();
+    return normalized === 'done' || normalized === 'archived';
+}
+
 // Transform Project to ProjectDetail
 function transformToProjectDetail(
     project: ProjectWithRepositoryContext,
     tasks: Task[]
 ): ProjectDetail {
-    // Calculate stats
-    const activeAgents = tasks.filter(t => t.status === 'in_progress').length;
-    const pendingReview = tasks.filter(t => t.status === 'in_review').length;
+    const activeAgents =
+        typeof project.summary?.active_tasks === 'number'
+            ? project.summary.active_tasks
+            : tasks.filter(t => t.status === 'in_progress').length;
+    const pendingReview =
+        typeof project.summary?.review_tasks === 'number'
+            ? project.summary.review_tasks
+            : tasks.filter(t => t.status === 'in_review').length;
     const criticalBugs = tasks.filter(t =>
         t.task_type === 'bug' &&
-        (t.metadata?.priority === 'critical' || t.metadata?.priority === 'high')
+        (t.metadata?.priority === 'critical' || t.metadata?.priority === 'high') &&
+        !isClosedTaskStatus(t.status)
     ).length;
-
-    // Build status approximation
-    const sprintTasks = tasks.filter(t => Boolean(t.sprint_id));
-    const doneTasks = sprintTasks.filter(t =>
-        ['done', 'archived', 'cancelled', 'canceled'].includes(t.status.toLowerCase())
-    ).length;
-    const totalTasks = sprintTasks.length;
-    const buildStatus = totalTasks > 0 ? Math.round((doneTasks / totalTasks) * 100) : 0;
+    const buildStatus =
+        typeof project.summary?.progress === 'number'
+            ? project.summary.progress
+            : (() => {
+                const countedTasks = tasks.filter((task) => task.status.toLowerCase() !== 'archived');
+                const doneTasks = countedTasks.filter((task) => task.status.toLowerCase() === 'done').length;
+                const totalTasks = countedTasks.length;
+                return totalTasks > 0 ? Math.round((doneTasks / totalTasks) * 100) : 0;
+            })();
+    const status =
+        normalizeProjectLifecycleStatus(project.summary?.lifecycle_status) || 'planning';
 
     return {
         id: project.id,
         name: project.name,
         repositoryUrl: project.repository_url || 'Not configured',
         branch: 'main', // TODO: Get from GitLab integration
-        status: 'active',
+        status,
         lastDeploy: 'Never', // TODO: Get from deployments API when available
         stats: {
             activeAgents,

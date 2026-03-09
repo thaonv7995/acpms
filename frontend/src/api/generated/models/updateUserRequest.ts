@@ -6,7 +6,10 @@
  */
 
 export interface UpdateUserRequest {
-  /** @nullable */
+  /**
+   * Avatar: S3 key (avatars/...) or full URL. Backend converts S3 keys to presigned URLs on read.
+   * @nullable
+   */
   avatar_url?: string | null;
   /** @nullable */
   gitlab_username?: string | null;

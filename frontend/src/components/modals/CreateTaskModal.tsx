@@ -143,6 +143,8 @@ export function CreateTaskModal({
     const repositorySummary = getRepositoryAccessSummary(effectiveRepositoryContext);
     const sourceControlConfigured = Boolean(settings?.gitlab?.configured);
     const sourceControlSetupRequired = !settingsLoading && !sourceControlConfigured;
+    const projectTaskPreviewEnabled = Boolean(projectSettings?.auto_deploy);
+    const taskPreviewLocked = !projectSettingsLoading && !projectTaskPreviewEnabled;
 
     const uploadedAttachments: UploadedAttachment[] = useMemo(
         () =>
@@ -221,7 +223,7 @@ export function CreateTaskModal({
 
     useEffect(() => {
         if (!isOpen || !projectSettings || autoDeployTouched) return;
-        setAutoDeploy(projectSettings.auto_deploy || projectSettings.preview_enabled);
+        setAutoDeploy(projectSettings.auto_deploy);
     }, [autoDeployTouched, isOpen, projectSettings]);
 
     useEffect(() => {
@@ -352,7 +354,7 @@ export function CreateTaskModal({
                 execution: {
                     require_review: requireReview,
                     run_build_and_tests: true,
-                    auto_deploy: autoDeploy,
+                    auto_deploy: projectTaskPreviewEnabled && autoDeploy,
                 },
                 require_review: requireReview,
             };
@@ -644,11 +646,14 @@ export function CreateTaskModal({
                                 type="button"
                                 role="switch"
                                 aria-checked={autoDeploy}
+                                disabled={taskPreviewLocked}
                                 onClick={() => {
-                                    setAutoDeploy((prev) => !prev);
-                                    setAutoDeployTouched(true);
+                                    if (!taskPreviewLocked) {
+                                        setAutoDeploy((prev) => !prev);
+                                        setAutoDeployTouched(true);
+                                    }
                                 }}
-                                className={toggleCardClass(autoDeploy)}
+                                className={`${toggleCardClass(autoDeploy)} ${taskPreviewLocked ? 'cursor-not-allowed opacity-60' : ''}`}
                             >
                                 <div className="flex items-center justify-between gap-2 mb-2">
                                     <p className={`text-sm font-medium ${toggleTitleClass(autoDeploy)}`}>Task preview</p>
@@ -657,7 +662,11 @@ export function CreateTaskModal({
                                     </span>
                                 </div>
                                 <p className="text-xs text-muted-foreground">
-                                    Default {projectSettingsLoading ? 'loading...' : projectSettings ? ((projectSettings.auto_deploy || projectSettings.preview_enabled) ? 'on' : 'off') : 'project'}.
+                                    {projectSettingsLoading
+                                        ? 'Loading project setting...'
+                                        : projectTaskPreviewEnabled
+                                            ? 'Enabled from Project Settings. Turn it off here to skip preview for this task.'
+                                            : 'Disabled because Task Preview is off in Project Settings.'}
                                 </p>
                             </button>
                         </div>

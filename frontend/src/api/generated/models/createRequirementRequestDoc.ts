@@ -7,6 +7,8 @@
 
 export interface CreateRequirementRequestDoc {
   content: string;
+  /** @nullable */
+  due_date?: string | null;
   metadata: string;
   priority: string;
   project_id: string;

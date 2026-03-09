@@ -10,6 +10,8 @@ export interface RequirementDto {
   content: string;
   created_at: string;
   created_by: string;
+  /** @nullable */
+  due_date?: string | null;
   id: string;
   metadata: RequirementDtoMetadata;
   priority: string;

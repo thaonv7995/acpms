@@ -25,12 +25,14 @@ import type {
 
 import type {
   AgentLogListResponse,
+  AgentLogResponse,
   CancelAttemptRequest,
   EmptyResponse,
   GetAttemptLogsParams,
   SendInputRequestDoc,
   TaskAttemptListResponse,
-  TaskAttemptResponse
+  TaskAttemptResponse,
+  UpdateLogRequest
 } from '.././models';
 
 import { customFetch } from '../../client';
@@ -336,7 +338,66 @@ export function useGetAttemptLogs<TData = Awaited<ReturnType<typeof getAttemptLo
 
 
 
-export const getTaskAttempts = (
+export const patchAttemptLog = (
+    id: string,
+    logId: string,
+    updateLogRequest: UpdateLogRequest,
+ options?: SecondParameter<typeof customFetch>,) => {
+      
+      
+      return customFetch<AgentLogResponse>(
+      {url: `/api/v1/attempts/${id}/logs/${logId}`, method: 'PATCH',
+      headers: {'Content-Type': 'application/json', },
+      data: updateLogRequest
+    },
+      options);
+    }
+  
+
+
+export const getPatchAttemptLogMutationOptions = <TError = void | void,
+    TContext = unknown>(options?: { mutation?:UseMutationOptions<Awaited<ReturnType<typeof patchAttemptLog>>, TError,{id: string;logId: string;data: UpdateLogRequest}, TContext>, request?: SecondParameter<typeof customFetch>}
+): UseMutationOptions<Awaited<ReturnType<typeof patchAttemptLog>>, TError,{id: string;logId: string;data: UpdateLogRequest}, TContext> => {
+
+const mutationKey = ['patchAttemptLog'];
+const {mutation: mutationOptions, request: requestOptions} = options ?
+      options.mutation && 'mutationKey' in options.mutation && options.mutation.mutationKey ?
+      options
+      : {...options, mutation: {...options.mutation, mutationKey}}
+      : {mutation: { mutationKey, }, request: undefined};
+
+      
+
+
+      const mutationFn: MutationFunction<Awaited<ReturnType<typeof patchAttemptLog>>, {id: string;logId: string;data: UpdateLogRequest}> = (props) => {
+          const {id,logId,data} = props ?? {};
+
+          return  patchAttemptLog(id,logId,data,requestOptions)
+        }
+
+        
+
+
+  return  { mutationFn, ...mutationOptions }}
+
+    export type PatchAttemptLogMutationResult = NonNullable<Awaited<ReturnType<typeof patchAttemptLog>>>
+    export type PatchAttemptLogMutationBody = UpdateLogRequest
+    export type PatchAttemptLogMutationError = void | void
+
+    export const usePatchAttemptLog = <TError = void | void,
+    TContext = unknown>(options?: { mutation?:UseMutationOptions<Awaited<ReturnType<typeof patchAttemptLog>>, TError,{id: string;logId: string;data: UpdateLogRequest}, TContext>, request?: SecondParameter<typeof customFetch>}
+ , queryClient?: QueryClient): UseMutationResult<
+        Awaited<ReturnType<typeof patchAttemptLog>>,
+        TError,
+        {id: string;logId: string;data: UpdateLogRequest},
+        TContext
+      > => {
+
+      const mutationOptions = getPatchAttemptLogMutationOptions(options);
+
+      return useMutation(mutationOptions, queryClient);
+    }
+    export const getTaskAttempts = (
     taskId: string,
  options?: SecondParameter<typeof customFetch>,signal?: AbortSignal
 ) => {

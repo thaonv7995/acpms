@@ -31,6 +31,13 @@ A retrieval-augmented generation (RAG) system for AI agents to pull community "S
 - [01_concept.md](global-knowledge-base/01_concept.md) - The Global Knowledge Base vision
 - [02_retrieval_architecture.md](global-knowledge-base/02_retrieval_architecture.md) - Architecture for ingesting and retrieving SKILLs
 
+## [project-document-vault](project-document-vault/)
+
+Project-specific documentation vault and Task specific context to reduce LLM hallucination and provide dedicated business logic context per project.
+
+- [01_concept_and_vision.md](project-document-vault/01_concept_and_vision.md) - Concept and architecture vision
+- [10_implementation_plan.md](project-document-vault/10_implementation_plan.md) - Implementation checklist and impact analysis
+
 ## [openclaw-gateway](openclaw-gateway/)
 
 External OpenClaw integration as a Super Admin control plane for ACPMS, including mirrored APIs, bootstrap guidance, stream-first eventing, and optional Webhook support.

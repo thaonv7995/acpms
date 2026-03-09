@@ -1,88 +1,93 @@
-export type RepositoryProvider = 'github' | 'gitlab' | 'unknown';
+import type {
+  CreateForkResponse as GeneratedCreateForkResponse,
+  ImportProjectCreateForkResponse as GeneratedImportProjectCreateForkResponse,
+  ImportProjectPreflightResponse as GeneratedImportProjectPreflightResponse,
+  LinkExistingForkResponse as GeneratedLinkExistingForkResponse,
+  ProjectDto,
+  ProjectSummaryDto,
+  RecheckRepositoryAccessResponse as GeneratedRecheckRepositoryAccessResponse,
+  RepositoryAccessMode as GeneratedRepositoryAccessMode,
+  RepositoryContext as GeneratedRepositoryContext,
+  RepositoryProvider as GeneratedRepositoryProvider,
+  RepositoryVerificationStatus as GeneratedRepositoryVerificationStatus,
+} from '../api/generated/models';
 
-export type RepositoryAccessMode =
-  | 'analysis_only'
-  | 'direct_gitops'
-  | 'branch_push_only'
-  | 'fork_gitops'
-  | 'unknown';
+export type RepositoryProvider = GeneratedRepositoryProvider;
 
-export type RepositoryVerificationStatus =
-  | 'verified'
-  | 'unauthenticated'
+export type RepositoryAccessMode = GeneratedRepositoryAccessMode;
+
+export type RepositoryVerificationStatus = GeneratedRepositoryVerificationStatus;
+
+export type ProjectLifecycleStatus =
+  | 'planning'
+  | 'active'
+  | 'reviewing'
+  | 'blocked'
+  | 'completed'
+  | 'paused'
+  | 'archived';
+
+export type ProjectExecutionStatus =
+  | 'idle'
+  | 'queued'
+  | 'running'
+  | 'success'
   | 'failed'
-  | 'unknown';
+  | 'cancelled';
 
-export interface RepositoryContext {
-  provider: RepositoryProvider;
-  access_mode: RepositoryAccessMode;
-  verification_status: RepositoryVerificationStatus;
-  verification_error?: string | null;
-  upstream_repository_url?: string | null;
-  writable_repository_url?: string | null;
-  effective_clone_url?: string | null;
-  upstream_project_id?: string | number | null;
-  writable_project_id?: string | number | null;
-  default_branch?: string | null;
-  can_clone?: boolean;
-  can_push?: boolean;
-  can_open_change_request?: boolean;
-  can_merge?: boolean;
-  can_manage_webhooks?: boolean;
-  can_fork?: boolean;
-  verified_at?: string | null;
+export interface ProjectSummary
+  extends Omit<ProjectSummaryDto, 'lifecycle_status' | 'execution_status'> {
+  lifecycle_status: ProjectLifecycleStatus;
+  execution_status: ProjectExecutionStatus;
 }
 
-export interface ImportProjectPreflightResponse {
-  recommended_action?: string | null;
-  warnings: string[];
-  repository_context: RepositoryContext;
+export interface RepositoryContext extends GeneratedRepositoryContext {
+  provider?: RepositoryProvider;
+  access_mode?: RepositoryAccessMode;
+  verification_status?: RepositoryVerificationStatus;
 }
 
-export interface ImportProjectCreateForkResponse {
-  upstream_repository_url: string;
-  fork_repository_url: string;
-  repository_context: RepositoryContext;
-  recommended_action?: string | null;
-  warnings: string[];
-}
-
-export interface RecheckRepositoryAccessResponse {
-  project: ProjectWithRepositoryContext;
-  recommended_action?: string | null;
-  warnings: string[];
-}
-
-export interface LinkExistingForkResponse {
-  project: ProjectWithRepositoryContext;
-  recommended_action?: string | null;
-  warnings: string[];
-}
-
-export interface CreateForkResponse {
-  project: ProjectWithRepositoryContext;
-  created_repository_url: string;
-  recommended_action?: string | null;
-  warnings: string[];
-}
-
-export interface ProjectWithRepositoryContext {
-  id: string;
-  name: string;
-  description?: string;
-  repository_url?: string;
+export interface ProjectWithRepositoryContext
+  extends Omit<
+    ProjectDto,
+    'architecture_config' | 'metadata' | 'project_type' | 'repository_context' | 'settings' | 'summary'
+  > {
+  architecture_config?: Record<string, unknown>;
   metadata?: Record<string, unknown>;
-  require_review?: boolean;
-  settings?: {
-    require_review: boolean;
-    auto_deploy: boolean;
-    preview_enabled: boolean;
-    auto_execute: boolean;
-    [key: string]: unknown;
-  };
   project_type?: string;
-  created_by: string;
-  created_at: string;
-  updated_at: string;
+  settings?: ProjectDto['settings'];
+  summary?: ProjectSummary | null;
   repository_context?: RepositoryContext;
 }
+
+export type ImportProjectPreflightResponse = Omit<
+  GeneratedImportProjectPreflightResponse,
+  'repository_context'
+> & {
+  repository_context: RepositoryContext;
+};
+
+export type ImportProjectCreateForkResponse = Omit<
+  GeneratedImportProjectCreateForkResponse,
+  'repository_context'
+> & {
+  repository_context: RepositoryContext;
+};
+
+export type RecheckRepositoryAccessResponse = Omit<
+  GeneratedRecheckRepositoryAccessResponse,
+  'project'
+> & {
+  project: ProjectWithRepositoryContext;
+};
+
+export type LinkExistingForkResponse = Omit<
+  GeneratedLinkExistingForkResponse,
+  'project'
+> & {
+  project: ProjectWithRepositoryContext;
+};
+
+export type CreateForkResponse = Omit<GeneratedCreateForkResponse, 'project'> & {
+  project: ProjectWithRepositoryContext;
+};

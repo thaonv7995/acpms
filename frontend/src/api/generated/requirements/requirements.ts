@@ -24,10 +24,13 @@ import type {
 } from '@tanstack/react-query';
 
 import type {
+  ConfirmManualRequirementBreakdownRequest,
+  ConfirmRequirementBreakdownRequest,
   CreateRequirementRequestDoc,
   EmptyResponse,
   RequirementListResponse,
   RequirementResponse,
+  StartRequirementTaskSequenceBody,
   UpdateRequirementRequestDoc
 } from '.././models';
 
@@ -386,6 +389,401 @@ const {mutation: mutationOptions, request: requestOptions} = options ?
       > => {
 
       const mutationOptions = getDeleteRequirementMutationOptions(options);
+
+      return useMutation(mutationOptions, queryClient);
+    }
+    export const confirmRequirementBreakdownManual = (
+    projectId: string,
+    requirementId: string,
+    confirmManualRequirementBreakdownRequest: ConfirmManualRequirementBreakdownRequest,
+ options?: SecondParameter<typeof customFetch>,signal?: AbortSignal
+) => {
+      
+      
+      return customFetch<void>(
+      {url: `/api/v1/projects/${projectId}/requirements/${requirementId}/breakdown/manual/confirm`, method: 'POST',
+      headers: {'Content-Type': 'application/json', },
+      data: confirmManualRequirementBreakdownRequest, signal
+    },
+      options);
+    }
+  
+
+
+export const getConfirmRequirementBreakdownManualMutationOptions = <TError = void | void | void,
+    TContext = unknown>(options?: { mutation?:UseMutationOptions<Awaited<ReturnType<typeof confirmRequirementBreakdownManual>>, TError,{projectId: string;requirementId: string;data: ConfirmManualRequirementBreakdownRequest}, TContext>, request?: SecondParameter<typeof customFetch>}
+): UseMutationOptions<Awaited<ReturnType<typeof confirmRequirementBreakdownManual>>, TError,{projectId: string;requirementId: string;data: ConfirmManualRequirementBreakdownRequest}, TContext> => {
+
+const mutationKey = ['confirmRequirementBreakdownManual'];
+const {mutation: mutationOptions, request: requestOptions} = options ?
+      options.mutation && 'mutationKey' in options.mutation && options.mutation.mutationKey ?
+      options
+      : {...options, mutation: {...options.mutation, mutationKey}}
+      : {mutation: { mutationKey, }, request: undefined};
+
+      
+
+
+      const mutationFn: MutationFunction<Awaited<ReturnType<typeof confirmRequirementBreakdownManual>>, {projectId: string;requirementId: string;data: ConfirmManualRequirementBreakdownRequest}> = (props) => {
+          const {projectId,requirementId,data} = props ?? {};
+
+          return  confirmRequirementBreakdownManual(projectId,requirementId,data,requestOptions)
+        }
+
+        
+
+
+  return  { mutationFn, ...mutationOptions }}
+
+    export type ConfirmRequirementBreakdownManualMutationResult = NonNullable<Awaited<ReturnType<typeof confirmRequirementBreakdownManual>>>
+    export type ConfirmRequirementBreakdownManualMutationBody = ConfirmManualRequirementBreakdownRequest
+    export type ConfirmRequirementBreakdownManualMutationError = void | void | void
+
+    export const useConfirmRequirementBreakdownManual = <TError = void | void | void,
+    TContext = unknown>(options?: { mutation?:UseMutationOptions<Awaited<ReturnType<typeof confirmRequirementBreakdownManual>>, TError,{projectId: string;requirementId: string;data: ConfirmManualRequirementBreakdownRequest}, TContext>, request?: SecondParameter<typeof customFetch>}
+ , queryClient?: QueryClient): UseMutationResult<
+        Awaited<ReturnType<typeof confirmRequirementBreakdownManual>>,
+        TError,
+        {projectId: string;requirementId: string;data: ConfirmManualRequirementBreakdownRequest},
+        TContext
+      > => {
+
+      const mutationOptions = getConfirmRequirementBreakdownManualMutationOptions(options);
+
+      return useMutation(mutationOptions, queryClient);
+    }
+    export const startRequirementBreakdown = (
+    projectId: string,
+    requirementId: string,
+ options?: SecondParameter<typeof customFetch>,signal?: AbortSignal
+) => {
+      
+      
+      return customFetch<void | void>(
+      {url: `/api/v1/projects/${projectId}/requirements/${requirementId}/breakdown/start`, method: 'POST', signal
+    },
+      options);
+    }
+  
+
+
+export const getStartRequirementBreakdownMutationOptions = <TError = void | void,
+    TContext = unknown>(options?: { mutation?:UseMutationOptions<Awaited<ReturnType<typeof startRequirementBreakdown>>, TError,{projectId: string;requirementId: string}, TContext>, request?: SecondParameter<typeof customFetch>}
+): UseMutationOptions<Awaited<ReturnType<typeof startRequirementBreakdown>>, TError,{projectId: string;requirementId: string}, TContext> => {
+
+const mutationKey = ['startRequirementBreakdown'];
+const {mutation: mutationOptions, request: requestOptions} = options ?
+      options.mutation && 'mutationKey' in options.mutation && options.mutation.mutationKey ?
+      options
+      : {...options, mutation: {...options.mutation, mutationKey}}
+      : {mutation: { mutationKey, }, request: undefined};
+
+      
+
+
+      const mutationFn: MutationFunction<Awaited<ReturnType<typeof startRequirementBreakdown>>, {projectId: string;requirementId: string}> = (props) => {
+          const {projectId,requirementId} = props ?? {};
+
+          return  startRequirementBreakdown(projectId,requirementId,requestOptions)
+        }
+
+        
+
+
+  return  { mutationFn, ...mutationOptions }}
+
+    export type StartRequirementBreakdownMutationResult = NonNullable<Awaited<ReturnType<typeof startRequirementBreakdown>>>
+    
+    export type StartRequirementBreakdownMutationError = void | void
+
+    export const useStartRequirementBreakdown = <TError = void | void,
+    TContext = unknown>(options?: { mutation?:UseMutationOptions<Awaited<ReturnType<typeof startRequirementBreakdown>>, TError,{projectId: string;requirementId: string}, TContext>, request?: SecondParameter<typeof customFetch>}
+ , queryClient?: QueryClient): UseMutationResult<
+        Awaited<ReturnType<typeof startRequirementBreakdown>>,
+        TError,
+        {projectId: string;requirementId: string},
+        TContext
+      > => {
+
+      const mutationOptions = getStartRequirementBreakdownMutationOptions(options);
+
+      return useMutation(mutationOptions, queryClient);
+    }
+    export const getRequirementBreakdownSession = (
+    projectId: string,
+    requirementId: string,
+    sessionId: string,
+ options?: SecondParameter<typeof customFetch>,signal?: AbortSignal
+) => {
+      
+      
+      return customFetch<void>(
+      {url: `/api/v1/projects/${projectId}/requirements/${requirementId}/breakdown/${sessionId}`, method: 'GET', signal
+    },
+      options);
+    }
+  
+
+
+
+export const getGetRequirementBreakdownSessionQueryKey = (projectId?: string,
+    requirementId?: string,
+    sessionId?: string,) => {
+    return [
+    `/api/v1/projects/${projectId}/requirements/${requirementId}/breakdown/${sessionId}`
+    ] as const;
+    }
+
+    
+export const getGetRequirementBreakdownSessionQueryOptions = <TData = Awaited<ReturnType<typeof getRequirementBreakdownSession>>, TError = void | void>(projectId: string,
+    requirementId: string,
+    sessionId: string, options?: { query?:Partial<UseQueryOptions<Awaited<ReturnType<typeof getRequirementBreakdownSession>>, TError, TData>>, request?: SecondParameter<typeof customFetch>}
+) => {
+
+const {query: queryOptions, request: requestOptions} = options ?? {};
+
+  const queryKey =  queryOptions?.queryKey ?? getGetRequirementBreakdownSessionQueryKey(projectId,requirementId,sessionId);
+
+  
+
+    const queryFn: QueryFunction<Awaited<ReturnType<typeof getRequirementBreakdownSession>>> = ({ signal }) => getRequirementBreakdownSession(projectId,requirementId,sessionId, requestOptions, signal);
+
+      
+
+      
+
+   return  { queryKey, queryFn, enabled: !!(projectId && requirementId && sessionId), ...queryOptions} as UseQueryOptions<Awaited<ReturnType<typeof getRequirementBreakdownSession>>, TError, TData> & { queryKey: DataTag<QueryKey, TData, TError> }
+}
+
+export type GetRequirementBreakdownSessionQueryResult = NonNullable<Awaited<ReturnType<typeof getRequirementBreakdownSession>>>
+export type GetRequirementBreakdownSessionQueryError = void | void
+
+
+export function useGetRequirementBreakdownSession<TData = Awaited<ReturnType<typeof getRequirementBreakdownSession>>, TError = void | void>(
+ projectId: string,
+    requirementId: string,
+    sessionId: string, options: { query:Partial<UseQueryOptions<Awaited<ReturnType<typeof getRequirementBreakdownSession>>, TError, TData>> & Pick<
+        DefinedInitialDataOptions<
+          Awaited<ReturnType<typeof getRequirementBreakdownSession>>,
+          TError,
+          Awaited<ReturnType<typeof getRequirementBreakdownSession>>
+        > , 'initialData'
+      >, request?: SecondParameter<typeof customFetch>}
+ , queryClient?: QueryClient
+  ):  DefinedUseQueryResult<TData, TError> & { queryKey: DataTag<QueryKey, TData, TError> }
+export function useGetRequirementBreakdownSession<TData = Awaited<ReturnType<typeof getRequirementBreakdownSession>>, TError = void | void>(
+ projectId: string,
+    requirementId: string,
+    sessionId: string, options?: { query?:Partial<UseQueryOptions<Awaited<ReturnType<typeof getRequirementBreakdownSession>>, TError, TData>> & Pick<
+        UndefinedInitialDataOptions<
+          Awaited<ReturnType<typeof getRequirementBreakdownSession>>,
+          TError,
+          Awaited<ReturnType<typeof getRequirementBreakdownSession>>
+        > , 'initialData'
+      >, request?: SecondParameter<typeof customFetch>}
+ , queryClient?: QueryClient
+  ):  UseQueryResult<TData, TError> & { queryKey: DataTag<QueryKey, TData, TError> }
+export function useGetRequirementBreakdownSession<TData = Awaited<ReturnType<typeof getRequirementBreakdownSession>>, TError = void | void>(
+ projectId: string,
+    requirementId: string,
+    sessionId: string, options?: { query?:Partial<UseQueryOptions<Awaited<ReturnType<typeof getRequirementBreakdownSession>>, TError, TData>>, request?: SecondParameter<typeof customFetch>}
+ , queryClient?: QueryClient
+  ):  UseQueryResult<TData, TError> & { queryKey: DataTag<QueryKey, TData, TError> }
+
+export function useGetRequirementBreakdownSession<TData = Awaited<ReturnType<typeof getRequirementBreakdownSession>>, TError = void | void>(
+ projectId: string,
+    requirementId: string,
+    sessionId: string, options?: { query?:Partial<UseQueryOptions<Awaited<ReturnType<typeof getRequirementBreakdownSession>>, TError, TData>>, request?: SecondParameter<typeof customFetch>}
+ , queryClient?: QueryClient 
+ ):  UseQueryResult<TData, TError> & { queryKey: DataTag<QueryKey, TData, TError> } {
+
+  const queryOptions = getGetRequirementBreakdownSessionQueryOptions(projectId,requirementId,sessionId,options)
+
+  const query = useQuery(queryOptions, queryClient) as  UseQueryResult<TData, TError> & { queryKey: DataTag<QueryKey, TData, TError> };
+
+  query.queryKey = queryOptions.queryKey ;
+
+  return query;
+}
+
+
+
+export const cancelRequirementBreakdown = (
+    projectId: string,
+    requirementId: string,
+    sessionId: string,
+ options?: SecondParameter<typeof customFetch>,signal?: AbortSignal
+) => {
+      
+      
+      return customFetch<void>(
+      {url: `/api/v1/projects/${projectId}/requirements/${requirementId}/breakdown/${sessionId}/cancel`, method: 'POST', signal
+    },
+      options);
+    }
+  
+
+
+export const getCancelRequirementBreakdownMutationOptions = <TError = void | void,
+    TContext = unknown>(options?: { mutation?:UseMutationOptions<Awaited<ReturnType<typeof cancelRequirementBreakdown>>, TError,{projectId: string;requirementId: string;sessionId: string}, TContext>, request?: SecondParameter<typeof customFetch>}
+): UseMutationOptions<Awaited<ReturnType<typeof cancelRequirementBreakdown>>, TError,{projectId: string;requirementId: string;sessionId: string}, TContext> => {
+
+const mutationKey = ['cancelRequirementBreakdown'];
+const {mutation: mutationOptions, request: requestOptions} = options ?
+      options.mutation && 'mutationKey' in options.mutation && options.mutation.mutationKey ?
+      options
+      : {...options, mutation: {...options.mutation, mutationKey}}
+      : {mutation: { mutationKey, }, request: undefined};
+
+      
+
+
+      const mutationFn: MutationFunction<Awaited<ReturnType<typeof cancelRequirementBreakdown>>, {projectId: string;requirementId: string;sessionId: string}> = (props) => {
+          const {projectId,requirementId,sessionId} = props ?? {};
+
+          return  cancelRequirementBreakdown(projectId,requirementId,sessionId,requestOptions)
+        }
+
+        
+
+
+  return  { mutationFn, ...mutationOptions }}
+
+    export type CancelRequirementBreakdownMutationResult = NonNullable<Awaited<ReturnType<typeof cancelRequirementBreakdown>>>
+    
+    export type CancelRequirementBreakdownMutationError = void | void
+
+    export const useCancelRequirementBreakdown = <TError = void | void,
+    TContext = unknown>(options?: { mutation?:UseMutationOptions<Awaited<ReturnType<typeof cancelRequirementBreakdown>>, TError,{projectId: string;requirementId: string;sessionId: string}, TContext>, request?: SecondParameter<typeof customFetch>}
+ , queryClient?: QueryClient): UseMutationResult<
+        Awaited<ReturnType<typeof cancelRequirementBreakdown>>,
+        TError,
+        {projectId: string;requirementId: string;sessionId: string},
+        TContext
+      > => {
+
+      const mutationOptions = getCancelRequirementBreakdownMutationOptions(options);
+
+      return useMutation(mutationOptions, queryClient);
+    }
+    export const confirmRequirementBreakdown = (
+    projectId: string,
+    requirementId: string,
+    sessionId: string,
+    confirmRequirementBreakdownRequest: ConfirmRequirementBreakdownRequest,
+ options?: SecondParameter<typeof customFetch>,signal?: AbortSignal
+) => {
+      
+      
+      return customFetch<void>(
+      {url: `/api/v1/projects/${projectId}/requirements/${requirementId}/breakdown/${sessionId}/confirm`, method: 'POST',
+      headers: {'Content-Type': 'application/json', },
+      data: confirmRequirementBreakdownRequest, signal
+    },
+      options);
+    }
+  
+
+
+export const getConfirmRequirementBreakdownMutationOptions = <TError = void | void | void,
+    TContext = unknown>(options?: { mutation?:UseMutationOptions<Awaited<ReturnType<typeof confirmRequirementBreakdown>>, TError,{projectId: string;requirementId: string;sessionId: string;data: ConfirmRequirementBreakdownRequest}, TContext>, request?: SecondParameter<typeof customFetch>}
+): UseMutationOptions<Awaited<ReturnType<typeof confirmRequirementBreakdown>>, TError,{projectId: string;requirementId: string;sessionId: string;data: ConfirmRequirementBreakdownRequest}, TContext> => {
+
+const mutationKey = ['confirmRequirementBreakdown'];
+const {mutation: mutationOptions, request: requestOptions} = options ?
+      options.mutation && 'mutationKey' in options.mutation && options.mutation.mutationKey ?
+      options
+      : {...options, mutation: {...options.mutation, mutationKey}}
+      : {mutation: { mutationKey, }, request: undefined};
+
+      
+
+
+      const mutationFn: MutationFunction<Awaited<ReturnType<typeof confirmRequirementBreakdown>>, {projectId: string;requirementId: string;sessionId: string;data: ConfirmRequirementBreakdownRequest}> = (props) => {
+          const {projectId,requirementId,sessionId,data} = props ?? {};
+
+          return  confirmRequirementBreakdown(projectId,requirementId,sessionId,data,requestOptions)
+        }
+
+        
+
+
+  return  { mutationFn, ...mutationOptions }}
+
+    export type ConfirmRequirementBreakdownMutationResult = NonNullable<Awaited<ReturnType<typeof confirmRequirementBreakdown>>>
+    export type ConfirmRequirementBreakdownMutationBody = ConfirmRequirementBreakdownRequest
+    export type ConfirmRequirementBreakdownMutationError = void | void | void
+
+    export const useConfirmRequirementBreakdown = <TError = void | void | void,
+    TContext = unknown>(options?: { mutation?:UseMutationOptions<Awaited<ReturnType<typeof confirmRequirementBreakdown>>, TError,{projectId: string;requirementId: string;sessionId: string;data: ConfirmRequirementBreakdownRequest}, TContext>, request?: SecondParameter<typeof customFetch>}
+ , queryClient?: QueryClient): UseMutationResult<
+        Awaited<ReturnType<typeof confirmRequirementBreakdown>>,
+        TError,
+        {projectId: string;requirementId: string;sessionId: string;data: ConfirmRequirementBreakdownRequest},
+        TContext
+      > => {
+
+      const mutationOptions = getConfirmRequirementBreakdownMutationOptions(options);
+
+      return useMutation(mutationOptions, queryClient);
+    }
+    export const startRequirementTaskSequence = (
+    projectId: string,
+    requirementId: string,
+    startRequirementTaskSequenceBody?: StartRequirementTaskSequenceBody,
+ options?: SecondParameter<typeof customFetch>,signal?: AbortSignal
+) => {
+      
+      
+      return customFetch<void>(
+      {url: `/api/v1/projects/${projectId}/requirements/${requirementId}/tasks/start-sequential`, method: 'POST',
+      headers: {'Content-Type': 'application/json', },
+      data: startRequirementTaskSequenceBody, signal
+    },
+      options);
+    }
+  
+
+
+export const getStartRequirementTaskSequenceMutationOptions = <TError = void | void,
+    TContext = unknown>(options?: { mutation?:UseMutationOptions<Awaited<ReturnType<typeof startRequirementTaskSequence>>, TError,{projectId: string;requirementId: string;data: StartRequirementTaskSequenceBody}, TContext>, request?: SecondParameter<typeof customFetch>}
+): UseMutationOptions<Awaited<ReturnType<typeof startRequirementTaskSequence>>, TError,{projectId: string;requirementId: string;data: StartRequirementTaskSequenceBody}, TContext> => {
+
+const mutationKey = ['startRequirementTaskSequence'];
+const {mutation: mutationOptions, request: requestOptions} = options ?
+      options.mutation && 'mutationKey' in options.mutation && options.mutation.mutationKey ?
+      options
+      : {...options, mutation: {...options.mutation, mutationKey}}
+      : {mutation: { mutationKey, }, request: undefined};
+
+      
+
+
+      const mutationFn: MutationFunction<Awaited<ReturnType<typeof startRequirementTaskSequence>>, {projectId: string;requirementId: string;data: StartRequirementTaskSequenceBody}> = (props) => {
+          const {projectId,requirementId,data} = props ?? {};
+
+          return  startRequirementTaskSequence(projectId,requirementId,data,requestOptions)
+        }
+
+        
+
+
+  return  { mutationFn, ...mutationOptions }}
+
+    export type StartRequirementTaskSequenceMutationResult = NonNullable<Awaited<ReturnType<typeof startRequirementTaskSequence>>>
+    export type StartRequirementTaskSequenceMutationBody = StartRequirementTaskSequenceBody
+    export type StartRequirementTaskSequenceMutationError = void | void
+
+    export const useStartRequirementTaskSequence = <TError = void | void,
+    TContext = unknown>(options?: { mutation?:UseMutationOptions<Awaited<ReturnType<typeof startRequirementTaskSequence>>, TError,{projectId: string;requirementId: string;data: StartRequirementTaskSequenceBody}, TContext>, request?: SecondParameter<typeof customFetch>}
+ , queryClient?: QueryClient): UseMutationResult<
+        Awaited<ReturnType<typeof startRequirementTaskSequence>>,
+        TError,
+        {projectId: string;requirementId: string;data: StartRequirementTaskSequenceBody},
+        TContext
+      > => {
+
+      const mutationOptions = getStartRequirementTaskSequenceMutationOptions(options);
 
       return useMutation(mutationOptions, queryClient);
     }

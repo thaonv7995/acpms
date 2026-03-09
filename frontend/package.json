@@ -10,7 +10,8 @@
     "test": "vitest",
     "test:ui": "vitest --ui",
     "test:coverage": "vitest --coverage",
-    "generate:api": "orval --config orval.config.ts",
+    "generate:api:spec": "cargo run --quiet --manifest-path ../Cargo.toml -p acpms-server --bin dump-openapi > openapi.json",
+    "generate:api": "npm run generate:api:spec && orval --config orval.config.ts",
     "generate-types:check": "echo 'Type generation check placeholder'"
   },
   "dependencies": {

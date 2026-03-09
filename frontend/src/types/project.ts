@@ -1,4 +1,5 @@
 // Project Types
+import type { ProjectLifecycleStatus } from './repository';
 
 export interface ProjectListItem {
     id: string;
@@ -7,9 +8,9 @@ export interface ProjectListItem {
     icon: string;
     iconColor: 'orange' | 'blue' | 'emerald' | 'purple' | 'primary';
     techStack: string[];
-    status: 'agent_reviewing' | 'active_coding' | 'deploying' | 'completed' | 'paused';
+    status: ProjectLifecycleStatus;
     statusLabel: string;
-    statusColor: 'yellow' | 'blue' | 'emerald' | 'green' | 'slate';
+    statusColor: 'yellow' | 'blue' | 'emerald' | 'green' | 'slate' | 'red';
     progress: number;
     agentIcon: string;
     lastActivity: string;
@@ -21,7 +22,7 @@ export interface ProjectDetail {
     name: string;
     repositoryUrl: string;
     branch: string;
-    status: 'active' | 'paused' | 'archived';
+    status: ProjectLifecycleStatus;
     lastDeploy: string;
     stats: {
         activeAgents: number;

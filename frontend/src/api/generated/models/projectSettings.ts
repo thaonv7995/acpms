@@ -10,7 +10,7 @@
 Stored as JSONB in the database for flexibility with schema validation at application layer.
  */
 export interface ProjectSettings {
-  /** If true, automatically deploy approved changes */
+  /** If true, deploy preview (Cloudflare tunnel) when task completes. Not related to production. */
   auto_deploy?: boolean;
   /** If true, automatically start task execution on creation */
   auto_execute?: boolean;
@@ -30,6 +30,11 @@ export interface ProjectSettings {
   max_concurrent?: number;
   /** Maximum number of retry attempts for failed tasks */
   max_retries?: number;
+  /**
+   * Target branch for merge requests (default: deploy_branch or "main")
+   * @nullable
+   */
+  mr_target_branch?: string | null;
   /** Notification channels (Slack, email, etc.) */
   notify_channels?: string[];
   /** If true, send notification on task failure */
@@ -38,10 +43,12 @@ export interface ProjectSettings {
   notify_on_review?: boolean;
   /** If true, send notification on task success */
   notify_on_success?: boolean;
-  /** If true, create preview environments for task attempts */
+  /** If true, create preview environments for task attempts (legacy alias for auto_deploy) */
   preview_enabled?: boolean;
   /** Preview environment lifetime in days */
   preview_ttl_days?: number;
+  /** If true, deploy to production when MR is merged into deploy_branch */
+  production_deploy_on_merge?: boolean;
   /** If true, agent changes require human review before commit/push */
   require_review?: boolean;
   /** Retry backoff strategy: "fixed", "exponential" */

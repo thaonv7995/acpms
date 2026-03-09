@@ -9,25 +9,40 @@ interface ProjectsTableProps {
 }
 
 const statusStyles: Record<string, { bg: string; text: string; label: string }> = {
-    building: {
+    planning: {
+        bg: 'bg-slate-100 dark:bg-slate-500/20',
+        text: 'text-slate-800 dark:text-slate-300',
+        label: 'Planning'
+    },
+    active: {
         bg: 'bg-blue-100 dark:bg-blue-500/20',
         text: 'text-blue-800 dark:text-blue-300',
-        label: 'Building'
+        label: 'Active'
     },
-    testing: {
-        bg: 'bg-purple-100 dark:bg-purple-500/20',
-        text: 'text-purple-800 dark:text-purple-300',
-        label: 'Testing'
+    reviewing: {
+        bg: 'bg-amber-100 dark:bg-amber-500/20',
+        text: 'text-amber-800 dark:text-amber-300',
+        label: 'Reviewing'
     },
-    deploying: {
-        bg: 'bg-orange-100 dark:bg-orange-500/20',
-        text: 'text-orange-800 dark:text-orange-300',
-        label: 'Deploying'
+    blocked: {
+        bg: 'bg-red-100 dark:bg-red-500/20',
+        text: 'text-red-800 dark:text-red-300',
+        label: 'Blocked'
     },
     completed: {
         bg: 'bg-green-100 dark:bg-green-500/20',
         text: 'text-green-800 dark:text-green-300',
         label: 'Completed'
+    },
+    paused: {
+        bg: 'bg-slate-100 dark:bg-slate-500/20',
+        text: 'text-slate-800 dark:text-slate-300',
+        label: 'Paused'
+    },
+    archived: {
+        bg: 'bg-slate-100 dark:bg-slate-500/20',
+        text: 'text-slate-800 dark:text-slate-300',
+        label: 'Archived'
     },
 };
 
@@ -87,7 +102,7 @@ export function ProjectsTable({ projects, onViewAll }: ProjectsTableProps) {
                     </thead>
                     <tbody className="text-sm">
                         {projects.map((project) => {
-                            const status = statusStyles[project.status] ?? statusStyles.building;
+                            const status = statusStyles[project.status] ?? statusStyles.planning;
                             const progressValue = Math.max(0, Math.min(100, project.progress || 0));
                             const progressBarColor = getProgressColor(progressValue);
 

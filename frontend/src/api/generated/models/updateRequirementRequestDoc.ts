@@ -8,6 +8,8 @@
 export interface UpdateRequirementRequestDoc {
   /** @nullable */
   content?: string | null;
+  /** @nullable */
+  due_date?: string | null;
   metadata: string;
   priority: string;
   /** @nullable */

@@ -1,4 +1,5 @@
 // Dashboard Types
+import type { ProjectLifecycleStatus } from './repository';
 
 export interface DashboardStats {
     activeProjects: {
@@ -23,7 +24,7 @@ export interface DashboardProject {
     id: string;
     name: string;
     subtitle: string;
-    status: 'building' | 'testing' | 'deploying' | 'completed';
+    status: ProjectLifecycleStatus;
     progress: number;
     agents: {
         id: string;

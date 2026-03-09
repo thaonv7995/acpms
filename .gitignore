@@ -38,6 +38,7 @@ docker-compose.override.yml
 
 # Generated
 frontend/src/shared/types.ts.backup
+frontend/openapi.json
 
 .acpms/skills/community-anthropic/
 .acpms/skills/community-openai/

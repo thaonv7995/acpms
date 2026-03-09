@@ -39,80 +39,11 @@ export interface User {
   updated_at: string;
 }
 
-/**
- * @deprecated Will be removed once manual API layer is migrated
- * Frontend-specific metadata structure (backend stores as JSON string)
- */
-export interface ProjectMetadata {
-  icon?: string;
-  iconColor?: 'orange' | 'blue' | 'emerald' | 'purple' | 'primary';
-  techStack?: string[];
-  status?: 'agent_reviewing' | 'active_coding' | 'deploying' | 'completed' | 'paused';
-  statusLabel?: string;
-  statusColor?: 'yellow' | 'blue' | 'emerald' | 'green' | 'slate';
-  progress?: number;
-  agentCount?: number;
-}
-
 export interface ProjectSettings {
   require_review: boolean;
   auto_deploy: boolean;
   preview_enabled: boolean;
   auto_execute: boolean;
-}
-
-/**
- * @deprecated Use ProjectDto from @/api/generated/models
- *
- * Note: ProjectDto.metadata is string (JSON), not ProjectMetadata object
- */
-export interface Project {
-  id: string;
-  name: string;
-  description?: string;
-  repository_url?: string;
-  metadata?: ProjectMetadata;
-  require_review?: boolean;
-  settings?: ProjectSettings;
-  project_type?: ProjectType;
-  created_by: string;
-  created_at: string;
-  updated_at: string;
-}
-
-/**
- * @deprecated Use CreateProjectRequestDoc from @/api/generated/models
- *
- * Note: CreateProjectRequestDoc.metadata is string (JSON), not ProjectMetadata
- */
-export interface CreateProjectRequest {
-  name: string;
-  description?: string;
-  repository_url?: string;
-  metadata?: ProjectMetadata;
-  require_review?: boolean;
-  create_from_scratch?: boolean;
-  visibility?: 'private' | 'public' | 'internal';
-  tech_stack?: string;
-  stack_selections?: Array<{
-    layer: 'frontend' | 'backend' | 'database' | 'auth' | 'cache' | 'queue';
-    stack: string;
-  }>;
-  auto_create_init_task?: boolean;
-  project_type?: ProjectType;
-  template_id?: string;
-  preview_enabled?: boolean;
-  reference_keys?: string[];
-}
-
-/**
- * @deprecated Use UpdateProjectRequestDoc from @/api/generated/models
- */
-export interface UpdateProjectRequest {
-  name?: string;
-  description?: string;
-  repository_url?: string;
-  metadata?: ProjectMetadata;
 }
 
 /**
