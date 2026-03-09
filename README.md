@@ -13,6 +13,7 @@ Focused on **project management** and **breaking down requirements** into manage
 - **Contextual Awareness** – Agents work on Tasks linked to approved Requirements and Architecture
 - **Full Lifecycle** – Plan → Code → Deploy → Fix with human-in-the-loop review
 - **Multi-Agent Support** – Claude Code, OpenAI Codex, Gemini CLI, Cursor AI CLI (selectable in Settings)
+- **OpenClaw Gateway** – Connect ACPMS to OpenClaw so you can **manage projects from the chat channels OpenClaw provides** (e.g. Telegram, Slack).
 - **GitLab Integration** – OAuth, MR creation, webhooks
 - **Single Binary Distribution** – Backend serves frontend + S3 proxy for self-hosting
 
@@ -244,6 +245,7 @@ Copy `.env.example` to `.env` and configure:
 | `S3_ENDPOINT`        | MinIO URL (default: `http://localhost:9000`)                      |
 | `S3_PUBLIC_ENDPOINT` | Public URL for presigned URLs (e.g. `https://your-domain.com/s3`) |
 
+**OpenClaw Gateway** (optional): enable with `OPENCLAW_GATEWAY_ENABLED=true`, set `OPENCLAW_API_KEY` (Bearer token for gateway auth). Optional: `OPENCLAW_WEBHOOK_URL`, `OPENCLAW_WEBHOOK_SECRET`, `OPENCLAW_EVENT_RETENTION_HOURS`. The installer can generate credentials and print a bootstrap prompt for OpenClaw.
 
 **Configured in Settings UI (stored in DB):** GitLab (URL, OAuth, PAT), Cloudflare (tunnel), Agent API keys (OpenAI, Anthropic, Gemini, etc.). No need to set these in `.env`.
 
