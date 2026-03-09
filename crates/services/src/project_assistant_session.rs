@@ -2,7 +2,8 @@ use acpms_db::{
     models::ProjectAssistantSession,
     repositories::{
         create, delete_beyond_recent, end_session as repo_end_session,
-        find_active_by_project_and_user, get_by_id, list_by_project_and_user, update_s3_log_key,
+        find_active_by_project_and_user, get_by_id, list_by_project_and_user,
+        mark_session_ended as repo_mark_session_ended, update_s3_log_key,
     },
     PgPool,
 };
@@ -79,6 +80,14 @@ impl ProjectAssistantSessionService {
         repo_end_session(&self.pool, session_id, s3_log_key)
             .await
             .context("Failed to end session")
+    }
+
+    /// End session without archive metadata. Used when a replacement session is
+    /// created before the background archive upload completes.
+    pub async fn mark_session_ended(&self, session_id: Uuid) -> Result<u64> {
+        repo_mark_session_ended(&self.pool, session_id)
+            .await
+            .context("Failed to mark session ended")
     }
 
     /// Update only the s3_log_key on an already-ended session (used when archiving

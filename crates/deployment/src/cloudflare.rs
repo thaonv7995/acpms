@@ -188,9 +188,15 @@ impl CloudflareClient {
         );
         headers.insert(CONTENT_TYPE, HeaderValue::from_static("application/json"));
 
+        let secret_bytes: Vec<u8> = Uuid::new_v4()
+            .into_bytes()
+            .into_iter()
+            .chain(Uuid::new_v4().into_bytes().into_iter())
+            .collect();
+
         let body = serde_json::json!({
             "name": name,
-            "tunnel_secret": base64::engine::general_purpose::STANDARD.encode(Uuid::new_v4().as_bytes()),
+            "tunnel_secret": base64::engine::general_purpose::STANDARD.encode(&secret_bytes),
         });
 
         let response = self

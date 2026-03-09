@@ -1,10 +1,10 @@
 import { useState, useEffect, useCallback } from 'react';
 import { useParams, useNavigate } from 'react-router-dom';
 import { AppShell } from '../components/layout/AppShell';
-import { ConfigureAgentModal, ViewLogsModal } from '../components/modals';
+import { ConfigureAgentModal, ViewLogsModal, EditTaskModal, ConfirmModal } from '../components/modals';
 import { TaskDetailHeader, TaskMetadataSidebar, DiffViewerModal, TaskStatusContent } from '../components/task-detail-page';
 import { prefetchDiffData } from '../components/diff-viewer/useDiff';
-import { getTask, Task, type TaskStatus } from '../api/tasks';
+import { getTask, deleteTask, Task, type TaskStatus } from '../api/tasks';
 import { getTaskAttempts, createTaskAttempt, TaskAttempt } from '../api/taskAttempts';
 import type { KanbanTask } from '../types/project';
 import { logger } from '@/lib/logger';
@@ -67,6 +67,19 @@ export function TaskDetailPage() {
     const [isPreparingDiffViewer, setIsPreparingDiffViewer] = useState(false);
     const [showAgentConfig, setShowAgentConfig] = useState(false);
     const [showLogsDrawer, setShowLogsDrawer] = useState(false);
+    const [showEditTaskModal, setShowEditTaskModal] = useState(false);
+    const [showDeleteTaskModal, setShowDeleteTaskModal] = useState(false);
+    const [isDeletingTask, setIsDeletingTask] = useState(false);
+
+    const refreshTaskData = useCallback(async (targetTaskId: string) => {
+        const [taskData, attemptsData] = await Promise.all([
+            getTask(targetTaskId),
+            getTaskAttempts(targetTaskId),
+        ]);
+        setTask(taskData);
+        setAttempts(attemptsData);
+        setLatestSuccessAttempt(getLatestSuccessAttempt(attemptsData));
+    }, []);
 
     useEffect(() => {
         if (!taskId) return;
@@ -75,13 +88,7 @@ export function TaskDetailPage() {
             try {
                 setLoading(true);
                 setError(null);
-                const taskData = await getTask(taskId);
-                setTask(taskData);
-
-                const attemptsData = await getTaskAttempts(taskId);
-                setAttempts(attemptsData);
-
-                setLatestSuccessAttempt(getLatestSuccessAttempt(attemptsData));
+                await refreshTaskData(taskId);
             } catch (err) {
                 logger.error('Failed to fetch task:', err);
                 setError('Failed to load task details');
@@ -91,27 +98,21 @@ export function TaskDetailPage() {
         };
 
         fetchData();
-    }, [taskId]);
+    }, [taskId, refreshTaskData]);
 
     const handleStartAgent = useCallback(async () => {
         if (!task) return;
         try {
             const targetTaskId = task.id;
             await createTaskAttempt(targetTaskId);
-            const [taskData, attemptsData] = await Promise.all([
-                getTask(targetTaskId),
-                getTaskAttempts(targetTaskId),
-            ]);
-            setTask(taskData);
-            setAttempts(attemptsData);
-            setLatestSuccessAttempt(getLatestSuccessAttempt(attemptsData));
+            await refreshTaskData(targetTaskId);
         } catch (err) {
             logger.error('Failed to start agent:', err);
             throw err instanceof Error
                 ? err
                 : new Error('Failed to start task execution. Please try again.');
         }
-    }, [task]);
+    }, [task, refreshTaskData]);
 
     const handleBack = () => {
         // Check if we came from project context or task board
@@ -142,6 +143,19 @@ export function TaskDetailPage() {
 
     const normalizeStatus = (status: string) =>
         status.replace(/([a-z])([A-Z])/g, '$1_$2').toLowerCase();
+
+    const handleDeleteTask = useCallback(async () => {
+        if (!task || isDeletingTask) return;
+
+        setIsDeletingTask(true);
+        try {
+            await deleteTask(task.id);
+            setShowDeleteTaskModal(false);
+            handleBack();
+        } finally {
+            setIsDeletingTask(false);
+        }
+    }, [task, isDeletingTask]);
 
     if (loading) {
         return (
@@ -212,10 +226,10 @@ export function TaskDetailPage() {
                             priority={(task.metadata?.priority as string) || 'medium'}
                             type={task.task_type || 'feature'}
                             createdAt={task.created_at}
+                            onEditTask={() => setShowEditTaskModal(true)}
+                            onDeleteTask={() => setShowDeleteTaskModal(true)}
                             onStatusChange={async () => {
-                                // Refetch task data after status change
-                                const taskData = await getTask(task.id);
-                                setTask(taskData);
+                                await refreshTaskData(task.id);
                             }}
                         />
                     </div>
@@ -252,6 +266,31 @@ export function TaskDetailPage() {
                           )[0].id
                         : null
                 }
+            />
+
+            <EditTaskModal
+                isOpen={showEditTaskModal}
+                onClose={() => setShowEditTaskModal(false)}
+                task={mapTaskToKanbanTask(task)}
+                projectId={task.project_id}
+                onSuccess={() => {
+                    void refreshTaskData(task.id);
+                }}
+            />
+
+            <ConfirmModal
+                isOpen={showDeleteTaskModal}
+                onClose={() => {
+                    if (!isDeletingTask) {
+                        setShowDeleteTaskModal(false);
+                    }
+                }}
+                onConfirm={handleDeleteTask}
+                title="Delete Task"
+                message={`Delete "${task.title}"? This action cannot be undone.`}
+                confirmText="Delete Task"
+                confirmVariant="danger"
+                isLoading={isDeletingTask}
             />
         </AppShell>
     );

@@ -1,9 +1,11 @@
 // ProjectDetailPage - Refactored with hooks and tab components
-import { useState, useMemo, useEffect } from 'react';
+import { useState, useMemo, useEffect, useCallback } from 'react';
 import { useParams, useNavigate } from 'react-router-dom';
 import { AppShell } from '../components/layout/AppShell';
 import {
   CreateTaskModal,
+  EditTaskModal,
+  ConfirmModal,
   ViewLogsModal,
   RequirementFormModal,
   RequirementDetailModal,
@@ -13,6 +15,7 @@ import { FloatingChatButton, ProjectAssistantPanel } from '../components/project
 import { getTaskAttempts } from '../api/taskAttempts';
 import { createProjectFork, linkExistingFork, recheckProjectRepositoryAccess } from '../api/projects';
 import { updateRequirement } from '../api/requirements';
+import { deleteTask } from '../api/tasks';
 import { getCurrentUser, isSystemAdmin } from '../api/auth';
 import type { KanbanTask } from '../types/project';
 import { useProjectDetail, ProjectTab } from '../hooks/useProjectDetail';
@@ -131,7 +134,11 @@ export function ProjectDetailPage() {
   const [editingRequirement, setEditingRequirement] = useState<typeof requirements[0] | null>(null);
   const [logsTask, setLogsTask] = useState<KanbanTask | null>(null);
   const [logsAttemptId, setLogsAttemptId] = useState<string | null>(null);
+  const [editingTask, setEditingTask] = useState<{ task: KanbanTask; projectId: string } | null>(null);
+  const [pendingDeleteTask, setPendingDeleteTask] = useState<{ id: string; title: string } | null>(null);
+  const [isDeletingTask, setIsDeletingTask] = useState(false);
   const [showAssistant, setShowAssistant] = useState(false);
+  const [assistantButtonAvoidsTaskPagination, setAssistantButtonAvoidsTaskPagination] = useState(false);
   const [showRepositoryAccessModal, setShowRepositoryAccessModal] = useState(false);
   const [recheckingRepositoryAccess, setRecheckingRepositoryAccess] = useState(false);
   const [repositoryFeedback, setRepositoryFeedback] = useState<string | null>(null);
@@ -192,6 +199,48 @@ export function ProjectDetailPage() {
       }
     }
   };
+
+  const handleEditTask = useCallback((taskId: string) => {
+    if (!id) return;
+    const task = tasks.find((item) => item.id === taskId);
+    if (!task) return;
+    setEditingTask({ task, projectId: id });
+  }, [tasks, id]);
+
+  const handleDeleteTask = useCallback((taskId: string) => {
+    const task = tasks.find((item) => item.id === taskId);
+    if (!task) return;
+    setPendingDeleteTask({
+      id: taskId,
+      title: task.title || 'this task',
+    });
+  }, [tasks]);
+
+  const handleCloseDeleteTaskModal = useCallback(() => {
+    if (isDeletingTask) return;
+    setPendingDeleteTask(null);
+  }, [isDeletingTask]);
+
+  const handleConfirmDeleteTask = useCallback(async () => {
+    const taskToDelete = pendingDeleteTask;
+    if (!taskToDelete || isDeletingTask) return;
+
+    setIsDeletingTask(true);
+    try {
+      await deleteTask(taskToDelete.id);
+      if (logsTask?.id === taskToDelete.id) {
+        setLogsTask(null);
+        setLogsAttemptId(null);
+      }
+      if (editingTask?.task.id === taskToDelete.id) {
+        setEditingTask(null);
+      }
+      setPendingDeleteTask(null);
+      await refetch();
+    } finally {
+      setIsDeletingTask(false);
+    }
+  }, [pendingDeleteTask, isDeletingTask, logsTask, editingTask, refetch]);
 
   if (loading) {
     return (
@@ -508,6 +557,9 @@ export function ProjectDetailPage() {
                   onAddTask={handleAddTask}
                   onTaskClick={handleTaskClick}
                   onViewLogs={handleViewLogs}
+                  onEditTask={handleEditTask}
+                  onDeleteTask={handleDeleteTask}
+                  onPaginationVisibilityChange={setAssistantButtonAvoidsTaskPagination}
                 />
               )}
               {activeTab === 'requirements' && (
@@ -560,6 +612,29 @@ export function ProjectDetailPage() {
         onCreate={async () => {
           await refetch();
         }}
+      />
+
+      {editingTask && (
+        <EditTaskModal
+          isOpen={!!editingTask}
+          onClose={() => setEditingTask(null)}
+          task={editingTask.task}
+          projectId={editingTask.projectId}
+          onSuccess={() => {
+            void refetch();
+          }}
+        />
+      )}
+
+      <ConfirmModal
+        isOpen={!!pendingDeleteTask}
+        onClose={handleCloseDeleteTaskModal}
+        onConfirm={handleConfirmDeleteTask}
+        title="Delete Task"
+        message={`Delete "${pendingDeleteTask?.title ?? ''}"? This action cannot be undone.`}
+        confirmText="Delete Task"
+        confirmVariant="danger"
+        isLoading={isDeletingTask}
       />
 
       <RequirementFormModal
@@ -634,7 +709,11 @@ export function ProjectDetailPage() {
       {project && !loading && !showAssistant && (
         <FloatingChatButton
           onClick={handleOpenAssistant}
-          className="fixed bottom-20 right-6"
+          className={
+            assistantButtonAvoidsTaskPagination
+              ? 'fixed right-4 bottom-[calc(env(safe-area-inset-bottom)+5rem)] md:right-6 md:bottom-24'
+              : undefined
+          }
         />
       )}
 

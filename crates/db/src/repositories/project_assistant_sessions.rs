@@ -162,6 +162,23 @@ pub async fn update_s3_log_key(
     Ok(result.rows_affected())
 }
 
+/// Mark a session as ended without attaching an archive key yet.
+pub async fn mark_session_ended(pool: &PgPool, session_id: Uuid) -> Result<u64, sqlx::Error> {
+    let result = sqlx::query(
+        r#"
+        UPDATE project_assistant_sessions
+        SET status = 'ended', ended_at = $1
+        WHERE id = $2 AND status = 'active'
+        "#,
+    )
+    .bind(Utc::now())
+    .bind(session_id)
+    .execute(pool)
+    .await?;
+
+    Ok(result.rows_affected())
+}
+
 /// End session and set s3_log_key
 pub async fn end_session(
     pool: &PgPool,

@@ -157,41 +157,34 @@ const INTERNAL_PREFIXES_START = [
   'Preparing initial codebase inspection',
 ];
 
-/** Line prefixes/phrases that mark internal status – entire line is removed. */
-const INTERNAL_LINE_PATTERNS: (string | RegExp)[] = [
+/** Internal-only status lines seen in streamed assistant output. */
+const INTERNAL_EXACT_LINES = new Set([
   'Providing minimal user update before inspection',
   'Reviewing agent instructions',
   'Seeking render types details',
-  'Seeking ',
   'Exploring external UI components',
-  'Exploring ',
   'Inspecting UI components',
-  'Inspecting ',
   'Considering container component',
   'Considering additional design section',
-  'Considering ',
   'Assessing conversation list components',
-  'Assessing ',
   'Preparing base chat styling',
-  'Preparing ',
   'Summarizing current chat UI design',
-  'Summarizing ',
-  'Extending ',
-  'Confirming ',
   'Delivering brief greeting',
   'Preparing brief greeting',
   'Preparing initial codebase inspection',
-  /^\*{2,}\s*\S/,  // ****Something
-];
+]);
+
+const INTERNAL_LINE_REGEXES = [/^\*{2,}\s*\S/];
 
 function isInternalLine(line: string): boolean {
   const t = line.trim();
   if (!t) return true;
-  for (const p of INTERNAL_LINE_PATTERNS) {
-    if (typeof p === 'string') {
-      if (t.startsWith(p)) return true;
-    } else {
-      if (p.test(t)) return true;
+  if (INTERNAL_EXACT_LINES.has(t)) {
+    return true;
+  }
+  for (const pattern of INTERNAL_LINE_REGEXES) {
+    if (pattern.test(t)) {
+      return true;
     }
   }
   return false;
@@ -333,9 +326,17 @@ export function ProjectAssistantChat({
   const visibleMessages = messages.filter(shouldShowMessage);
   const mergedMessages = mergeConsecutiveAssistantMessages(visibleMessages);
   const hasAssistantReply = mergedMessages.some((m) => m.role === 'assistant');
-  const lastMessageIsUser = mergedMessages.length > 0 && mergedMessages[mergedMessages.length - 1].role === 'user';
+  const latestVisibleMessage = mergedMessages[mergedMessages.length - 1];
+  const lastMessageIsUser =
+    mergedMessages.length > 0 && latestVisibleMessage.role === 'user';
+  const hasRecoverableSystemError =
+    !agentActive &&
+    latestVisibleMessage?.role === 'system' &&
+    latestVisibleMessage.content.startsWith('Error:');
   const showTyping = agentActive && (loading || lastMessageIsUser);
-  const showStartPrompt = !readOnly && !agentActive && mergedMessages.length === 0;
+  const showStartPrompt =
+    !readOnly && !agentActive && (mergedMessages.length === 0 || hasRecoverableSystemError);
+  const attachDisabled = uploading || attachments.length >= 5 || agentActive || starting;
 
   return (
     <div className="flex flex-col h-full bg-background/30">
@@ -461,9 +462,13 @@ export function ProjectAssistantChat({
             <button
               type="button"
               onClick={() => fileInputRef.current?.click()}
-              disabled={uploading || attachments.length >= 5}
+              disabled={attachDisabled}
               className="p-2 rounded-lg text-muted-foreground hover:bg-muted hover:text-foreground disabled:opacity-50 transition-colors shrink-0"
-              title="Attach file"
+              title={
+                agentActive || starting
+                  ? 'Wait for the current run to finish before attaching files'
+                  : 'Attach file'
+              }
             >
               <span className="material-symbols-outlined text-lg">attach_file</span>
             </button>

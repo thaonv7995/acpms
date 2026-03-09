@@ -209,7 +209,7 @@ impl PreviewManager {
         let (preview_url, dns_record_id) =
             if let (Some(zone_id_value), Some(base_domain_value)) = (&zone_id, &base_domain) {
                 // New Flow: Create DNS record
-                let subdomain = format!("task-{}", attempt_id);
+                let subdomain = format!("task-{}", &attempt_id.to_string()[..8]);
                 let full_domain = format!("{}.{}", subdomain, base_domain_value);
                 let target = format!("{}.cfargotunnel.com", credentials.tunnel_id);
 
@@ -1325,6 +1325,7 @@ impl PreviewManager {
             .arg("-f")
             .arg(&compose_path)
             .arg("down")
+            .arg("-v")
             .arg("--remove-orphans")
             .current_dir(&runtime_dir)
             .output()
@@ -1833,6 +1834,7 @@ impl PreviewManager {
             .arg("-f")
             .arg(compose_path)
             .arg("down")
+            .arg("-v")
             .arg("--remove-orphans")
             .current_dir(runtime_dir)
             .output();
@@ -2204,6 +2206,7 @@ fn stop_docker_compose_project_by_name(project_name: &str) -> Result<()> {
     let output = Command::new(preview_docker_command())
         .arg("rm")
         .arg("-f")
+        .arg("-v")
         .args(&container_ids)
         .output()
         .with_context(|| {

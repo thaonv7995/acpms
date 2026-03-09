@@ -10,7 +10,7 @@ use acpms_executors::{
     AssistantLogMessage, AssistantMessage, ProjectAssistantJob,
 };
 use acpms_services::{
-    apply_preferred_language_to_follow_up_input, build_instruction,
+    apply_preferred_language_to_follow_up_input, build_instruction, build_start_instruction,
     AssistantMessage as ServiceAssistantMessage, AttachmentContent, ProjectAssistantSessionService,
     ProjectService, RequirementService, TaskService, TaskSummary,
 };
@@ -64,19 +64,59 @@ async fn read_session_log_bytes(
     state: &AppState,
     session: &ProjectAssistantSession,
 ) -> Result<Vec<u8>, ApiError> {
-    if session.status == "ended" {
-        if let Some(s3_key) = session.s3_log_key.as_ref() {
-            return state
-                .storage_service
-                .get_log_bytes(s3_key)
-                .await
-                .map_err(|e| ApiError::Internal(e.to_string()));
+    if let Some(s3_key) = archived_log_key(session) {
+        match state.storage_service.get_log_bytes(s3_key).await {
+            Ok(bytes) => return Ok(bytes),
+            Err(error) => {
+                tracing::warn!(
+                    session_id = %session.id,
+                    s3_key,
+                    error = %error,
+                    "Failed to read archived assistant log from storage, falling back to local log"
+                );
+            }
         }
     }
 
     read_assistant_log_file(session.id)
         .await
         .map_err(|e| ApiError::Internal(e.to_string()))
+}
+
+fn archived_log_key(session: &ProjectAssistantSession) -> Option<&str> {
+    if session.status != "ended" {
+        return None;
+    }
+
+    session
+        .s3_log_key
+        .as_deref()
+        .map(str::trim)
+        .filter(|key| !key.is_empty())
+}
+
+fn build_instruction_from_context(
+    project: &acpms_db::models::Project,
+    requirements: &[acpms_db::models::Requirement],
+    tasks: &[TaskSummary],
+    history: &[ServiceAssistantMessage],
+    user_message: &str,
+    attachments: Option<&[AttachmentContent]>,
+    preferred_language: Option<&str>,
+) -> String {
+    if user_message == SESSION_START_MESSAGE {
+        build_start_instruction(project, preferred_language)
+    } else {
+        build_instruction(
+            project,
+            requirements,
+            tasks,
+            history,
+            user_message,
+            attachments,
+            preferred_language,
+        )
+    }
 }
 
 async fn resolve_attachments(
@@ -192,7 +232,7 @@ async fn build_project_instruction(
 
     let preferred_language = settings_res.ok().and_then(|s| s.preferred_agent_language);
 
-    Ok(build_instruction(
+    Ok(build_instruction_from_context(
         &project,
         &requirements,
         &tasks,
@@ -368,10 +408,7 @@ pub async fn create_session(
                 .terminate_assistant_session(active_session.id)
                 .await;
             service
-                .end_session(
-                    active_session.id,
-                    active_session.s3_log_key.as_deref().unwrap_or(""),
-                )
+                .mark_session_ended(active_session.id)
                 .await
                 .map_err(|e| ApiError::Internal(e.to_string()))?;
 
@@ -700,7 +737,28 @@ pub async fn post_message(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use acpms_db::models::{Project, ProjectSettings, ProjectType, RepositoryContext};
+    use chrono::Utc;
     use serde_json::json;
+
+    fn make_test_project() -> Project {
+        Project {
+            id: Uuid::new_v4(),
+            name: "Landing Page".to_string(),
+            description: Some("Marketing website".to_string()),
+            repository_url: Some("https://example.com/repo.git".to_string()),
+            repository_context: RepositoryContext::default(),
+            metadata: json!({}),
+            require_review: true,
+            architecture_config: json!({}),
+            settings: ProjectSettings::default(),
+            agent_settings: json!({}),
+            project_type: ProjectType::Web,
+            created_by: Uuid::new_v4(),
+            created_at: Utc::now(),
+            updated_at: Utc::now(),
+        }
+    }
 
     #[test]
     fn resolve_project_assistant_repo_path_uses_project_repo_relative_path() {
@@ -734,6 +792,49 @@ mod tests {
         );
 
         assert_eq!(resolved, worktrees_path.join("landing-page"));
+    }
+
+    #[test]
+    fn archived_log_key_ignores_blank_s3_keys() {
+        let mut session = ProjectAssistantSession {
+            id: Uuid::new_v4(),
+            project_id: Uuid::new_v4(),
+            user_id: Uuid::new_v4(),
+            status: "ended".to_string(),
+            s3_log_key: Some(String::new()),
+            created_at: Utc::now(),
+            ended_at: Some(Utc::now()),
+        };
+
+        assert_eq!(archived_log_key(&session), None);
+
+        session.s3_log_key = Some("assistant-logs/session.jsonl".to_string());
+        assert_eq!(
+            archived_log_key(&session),
+            Some("assistant-logs/session.jsonl")
+        );
+    }
+
+    #[test]
+    fn build_instruction_from_context_uses_minimal_start_prompt_for_session_boot() {
+        let project = make_test_project();
+        let history = vec![ServiceAssistantMessage {
+            role: "assistant".to_string(),
+            content: "Old message".to_string(),
+        }];
+
+        let instruction = build_instruction_from_context(
+            &project,
+            &[],
+            &[],
+            &history,
+            SESSION_START_MESSAGE,
+            None,
+            Some("en"),
+        );
+
+        assert!(instruction.contains("Reply with ONE brief greeting"));
+        assert!(!instruction.contains("## Tool Contract"));
     }
 }
 

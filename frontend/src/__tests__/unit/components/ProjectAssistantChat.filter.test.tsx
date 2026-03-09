@@ -102,18 +102,41 @@ describe('ProjectAssistantChat message visibility', () => {
     expect(screen.queryByText('The file already exists')).toBeNull();
   });
 
-  it('does not show start prompt when system error is present', () => {
+  it('keeps assistant replies that begin with "Preparing" when they are user-facing content', () => {
+    renderChat([
+      {
+        id: 'assistant-1',
+        session_id: 'session-1',
+        role: 'assistant',
+        content: 'Preparing a concise rollout plan for the issue you described.',
+        created_at: '2026-03-04T10:00:00.000Z',
+      },
+      {
+        id: 'user-1',
+        session_id: 'session-1',
+        role: 'user',
+        content: 'Thanks',
+        created_at: '2026-03-04T10:00:01.000Z',
+      },
+    ]);
+
+    expect(
+      screen.getByText('Preparing a concise rollout plan for the issue you described.')
+    ).toBeTruthy();
+  });
+
+  it('keeps a recovery start control visible when the latest message is a system error', () => {
     renderChat([
       {
         id: 'system-1',
         session_id: 'session-1',
         role: 'system',
-        content: 'Error: Claude CLI requires authentication.',
+        content: 'Error: Project Assistant failed to boot.',
         created_at: '2026-03-04T10:00:00.000Z',
       },
     ]);
 
-    expect(screen.getByText('Error: Claude CLI requires authentication.')).toBeTruthy();
-    expect(screen.queryByRole('button', { name: 'Start' })).toBeNull();
+    expect(screen.getByText('Error: Project Assistant failed to boot.')).toBeTruthy();
+    expect(screen.getByRole('button', { name: 'Start' })).toBeTruthy();
   });
 });

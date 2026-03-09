@@ -17,6 +17,9 @@ interface TaskListTabProps {
     onAddTask?: () => void;
     onTaskClick?: (taskId: string) => void;
     onViewLogs?: (taskId: string) => void;
+    onEditTask?: (taskId: string) => void;
+    onDeleteTask?: (taskId: string) => void;
+    onPaginationVisibilityChange?: (visible: boolean) => void;
 }
 
 const PAGE_SIZE = 10;
@@ -84,6 +87,9 @@ export function TaskListTab({
     onAddTask,
     onTaskClick,
     onViewLogs,
+    onEditTask,
+    onDeleteTask,
+    onPaginationVisibilityChange,
 }: TaskListTabProps) {
     const navigate = useNavigate();
     const [searchQuery, setSearchQuery] = useState('');
@@ -327,6 +333,7 @@ export function TaskListTab({
     const pageStart = sortedTasks.length === 0 ? 0 : (currentPage - 1) * PAGE_SIZE + 1;
     const pageEnd = Math.min(currentPage * PAGE_SIZE, sortedTasks.length);
     const shownRangeLabel = sortedTasks.length === 0 ? '0' : `${pageStart}-${pageEnd}`;
+    const showPaginationControls = sortedTasks.length > 0;
     const paginatedTasks = useMemo(() => {
         const startIdx = (currentPage - 1) * PAGE_SIZE;
         return sortedTasks.slice(startIdx, startIdx + PAGE_SIZE);
@@ -335,6 +342,11 @@ export function TaskListTab({
     useEffect(() => {
         setCurrentPage((prev) => (prev > totalPages ? totalPages : prev));
     }, [totalPages]);
+
+    useEffect(() => {
+        onPaginationVisibilityChange?.(showPaginationControls);
+        return () => onPaginationVisibilityChange?.(false);
+    }, [onPaginationVisibilityChange, showPaginationControls]);
 
     return (
         <>
@@ -449,7 +461,7 @@ export function TaskListTab({
                         <div className="col-span-5">Title</div>
                         <div className="col-span-2">Type</div>
                         <div className="col-span-2">Priority</div>
-                        <div className="col-span-2">Agent</div>
+                        <div className="col-span-2">Actions</div>
                     </div>
 
                     {/* Task Rows */}
@@ -464,6 +476,10 @@ export function TaskListTab({
                             const type = typeStyles[task.type];
                             const priority = priorityStyles[task.priority];
                             const isWorking = !!task.agentWorking;
+                            const canEditTask =
+                                task.status === 'backlog'
+                                || task.status === 'todo'
+                                || task.status === 'in_review';
                             const linkedRequirement = task.requirement_id
                                 ? requirementMap.get(task.requirement_id)
                                 : null;
@@ -518,7 +534,7 @@ export function TaskListTab({
                                     </div>
 
                                     {/* Agent Status / Logs */}
-                                    <div className="col-span-2 flex items-center gap-2">
+                                    <div className="col-span-2 flex items-center gap-1.5 flex-wrap">
                                         {isWorking ? (
                                             <button
                                                 onClick={(e) => {
@@ -551,6 +567,32 @@ export function TaskListTab({
                                         ) : (
                                             <span className="text-xs text-muted-foreground">—</span>
                                         )}
+                                        {canEditTask && onEditTask && (
+                                            <button
+                                                onClick={(e) => {
+                                                    e.stopPropagation();
+                                                    onEditTask(task.id);
+                                                }}
+                                                className="flex h-8 w-8 items-center justify-center rounded-lg text-muted-foreground transition-colors hover:bg-muted hover:text-card-foreground"
+                                                title="Edit task"
+                                                aria-label={`Edit ${task.title}`}
+                                            >
+                                                <span className="material-symbols-outlined text-[18px]">edit</span>
+                                            </button>
+                                        )}
+                                        {onDeleteTask && (
+                                            <button
+                                                onClick={(e) => {
+                                                    e.stopPropagation();
+                                                    onDeleteTask(task.id);
+                                                }}
+                                                className="flex h-8 w-8 items-center justify-center rounded-lg text-red-600 transition-colors hover:bg-red-50 hover:text-red-700 dark:text-red-400 dark:hover:bg-red-500/20 dark:hover:text-red-300"
+                                                title="Delete task"
+                                                aria-label={`Delete ${task.title}`}
+                                            >
+                                                <span className="material-symbols-outlined text-[18px]">delete</span>
+                                            </button>
+                                        )}
                                     </div>
                                 </div>
                             );
@@ -558,7 +600,7 @@ export function TaskListTab({
                     )}
                 </div>
 
-                {sortedTasks.length > 0 && (
+                {showPaginationControls && (
                     <div className="flex items-center justify-between">
                         <p className="text-xs text-muted-foreground">
                             Page {currentPage} / {totalPages}

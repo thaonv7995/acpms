@@ -209,6 +209,12 @@ export function useProjectAssistant(projectId: string | undefined) {
         } catch (e: unknown) {
           const err = e as { status?: number };
           if (err.status === 409) {
+            if (attachments?.length) {
+              setError(
+                'Attachments can only be sent when the agent is idle. Wait for the current run to finish, then retry.'
+              );
+              return false;
+            }
             try {
               await postInput(projectId, session.id, content);
             } catch {

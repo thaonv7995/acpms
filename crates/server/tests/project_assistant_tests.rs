@@ -384,8 +384,40 @@ async fn test_project_assistant_force_new_archives_old_session() {
 
     assert_eq!(archived.0, "ended");
     assert!(
-        archived.1.is_some(),
-        "expected archived session to have s3 log key"
+        archived
+            .1
+            .as_deref()
+            .map(str::trim)
+            .map(|key| !key.is_empty())
+            .unwrap_or(true),
+        "expected archived session s3 log key to be absent or non-empty"
+    );
+
+    let (status, body) = make_request_with_string_headers(
+        &router,
+        "GET",
+        &format!(
+            "/api/v1/projects/{}/assistant/sessions/{}",
+            project_id, first_session_id
+        ),
+        None,
+        vec![auth_header_bearer(&token)],
+    )
+    .await;
+    assert_eq!(status, 200, "get archived session failed: {}", body);
+
+    let archived_session = parse_api_data(&body);
+    let archived_messages = archived_session["messages"]
+        .as_array()
+        .expect("archived session response missing messages");
+    assert!(
+        archived_messages.iter().any(|message| {
+            message["content"]
+                .as_str()
+                .map(|content| content.contains("first session message"))
+                .unwrap_or(false)
+        }),
+        "expected archived session history to remain readable"
     );
 
     cleanup_test_data(&pool, user_id, Some(project_id)).await;

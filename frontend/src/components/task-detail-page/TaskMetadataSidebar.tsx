@@ -9,6 +9,8 @@ interface TaskMetadataSidebarProps {
     type: string;
     createdAt: string;
     onStatusChange?: () => void;
+    onEditTask?: () => void;
+    onDeleteTask?: () => void;
 }
 
 const priorityColors: Record<string, string> = {
@@ -42,8 +44,19 @@ const transitionLabels: Record<TaskStatus, string> = {
     archived: 'Archive Task',
 };
 
-export function TaskMetadataSidebar({ taskId, status, priority, type, createdAt, onStatusChange }: TaskMetadataSidebarProps) {
+export function TaskMetadataSidebar({
+    taskId,
+    status,
+    priority,
+    type,
+    createdAt,
+    onStatusChange,
+    onEditTask,
+    onDeleteTask,
+}: TaskMetadataSidebarProps) {
     const [isUpdating, setIsUpdating] = useState(false);
+    const canEditTask =
+        status === 'backlog' || status === 'todo' || status === 'in_review';
 
     const handleStatusChange = async (newStatus: string) => {
         if (!newStatus || isUpdating) return;
@@ -118,14 +131,24 @@ export function TaskMetadataSidebar({ taskId, status, priority, type, createdAt,
                             </option>
                         ))}
                     </select>
-                    <button className="w-full py-2 px-3 text-sm text-muted-foreground hover:bg-muted rounded-lg transition-colors text-left flex items-center gap-2">
-                        <span className="material-symbols-outlined text-[16px]">edit</span>
-                        Edit Task
-                    </button>
-                    <button className="w-full py-2 px-3 text-sm text-red-600 dark:text-red-400 hover:bg-red-50 dark:hover:bg-red-500/20 rounded-lg transition-colors text-left flex items-center gap-2">
-                        <span className="material-symbols-outlined text-[16px]">delete</span>
-                        Delete Task
-                    </button>
+                    {canEditTask && onEditTask && (
+                        <button
+                            onClick={onEditTask}
+                            className="w-full py-2 px-3 text-sm text-muted-foreground hover:bg-muted rounded-lg transition-colors text-left flex items-center gap-2"
+                        >
+                            <span className="material-symbols-outlined text-[16px]">edit</span>
+                            Edit Task
+                        </button>
+                    )}
+                    {onDeleteTask && (
+                        <button
+                            onClick={onDeleteTask}
+                            className="w-full py-2 px-3 text-sm text-red-600 dark:text-red-400 hover:bg-red-50 dark:hover:bg-red-500/20 rounded-lg transition-colors text-left flex items-center gap-2"
+                        >
+                            <span className="material-symbols-outlined text-[16px]">delete</span>
+                            Delete Task
+                        </button>
+                    )}
                 </div>
             </div>
         </div>
