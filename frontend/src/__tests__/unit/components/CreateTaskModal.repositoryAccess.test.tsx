@@ -272,6 +272,23 @@ describe('CreateTaskModal repository access guard', () => {
     expect(onClose).toHaveBeenCalledTimes(1);
   });
 
+  it('defaults review-first to the project require_review setting', async () => {
+    renderCreateTaskModal(
+      <CreateTaskModal
+        isOpen
+        onClose={vi.fn()}
+        projectId="project-1"
+        projectName="ACPMS"
+        navigateToProjectOnCreate={false}
+      />
+    );
+
+    const reviewFirstSwitch = screen.getByRole('switch', { name: /Review first/i });
+    await waitFor(() => {
+      expect(reviewFirstSwitch.getAttribute('aria-checked')).toBe('true');
+    });
+  });
+
   it('shows setup-required dialog and blocks task creation when source control is not configured', async () => {
     vi.mocked(useSettings).mockReturnValue({
       settings: {

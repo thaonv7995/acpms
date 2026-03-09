@@ -1,5 +1,5 @@
 // SettingsTab Component for ProjectDetail
-import { useState } from 'react';
+import { useState, useEffect, type MouseEvent } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { useQueryClient } from '@tanstack/react-query';
 import { GitLabIntegrationSettings } from '../projects/GitLabIntegrationSettings';
@@ -21,13 +21,15 @@ interface SettingsTabProps {
 export function SettingsTab({ projectId, projectName, repositoryUrl, requireReview, onRefresh }: SettingsTabProps) {
     const { members, setMembers, loading: membersLoading } = useProjectMembers(projectId);
     const currentUser = getCurrentUser();
+    const isAdmin = isSystemAdmin(currentUser);
     const hasRepositoryLink = !!repositoryUrl?.trim();
-    const canLinkGitLab = isSystemAdmin(currentUser);
-    const canManageMembers = currentUser && members.some(
-        (m) => m.id === currentUser.id && m.roles.includes('owner')
-    );
+    const canLinkGitLab = isAdmin;
+    const canManageMembers = isAdmin || (!!currentUser && members.some((m) => {
+        if (m.id !== currentUser.id) return false;
+        return m.roles.some((role) => role.toLowerCase() === 'owner');
+    }));
     // Delete project: Owner or Admin only (ManageProject permission)
-    const canDeleteProject = isSystemAdmin(currentUser) || (currentUser && members.some((m) => {
+    const canDeleteProject = isAdmin || (!!currentUser && members.some((m) => {
         if (m.id !== currentUser!.id) return false;
         const roles = m.roles.map((r) => r.toLowerCase());
         return roles.includes('owner') || roles.includes('admin');
@@ -43,19 +45,30 @@ export function SettingsTab({ projectId, projectName, repositoryUrl, requireRevi
     const [deleteError, setDeleteError] = useState('');
     const [syncing, setSyncing] = useState(false);
 
-    // Update project mutation
+    // State cục bộ cho toggle — cập nhật ngay khi bật/tắt, không gọi onRefresh() để tránh reload cả trang
+    const [localRequireReview, setLocalRequireReview] = useState(requireReview);
+    useEffect(() => {
+        setLocalRequireReview(requireReview);
+    }, [requireReview]);
+
     const updateProjectMutation = useUpdateProject();
 
-    const handleToggleRequireReview = async () => {
-        try {
-            await updateProjectMutation.mutateAsync({
-                id: projectId,
-                data: { require_review: !requireReview }
-            });
-            onRefresh();
-        } catch (err) {
-            logger.error('Failed to update require_review:', err);
-        }
+    const handleToggleRequireReview = (e: MouseEvent<HTMLButtonElement>) => {
+        e.preventDefault();
+        e.stopPropagation();
+        if (updateProjectMutation.isPending) return;
+        const next = !localRequireReview;
+        updateProjectMutation.mutate(
+            { id: projectId, data: { require_review: next } },
+            {
+                onSuccess() {
+                    setLocalRequireReview(next);
+                },
+                onError(err) {
+                    logger.error('Failed to update require_review:', err);
+                },
+            }
+        );
     };
 
     const handleDelete = async () => {
@@ -112,32 +125,35 @@ export function SettingsTab({ projectId, projectName, repositoryUrl, requireRevi
                     Agent Settings
                 </h3>
                 <div className="space-y-4">
-                    <div className="flex items-center justify-between p-4 bg-muted/50 rounded-lg">
-                        <div className="flex-1">
+                    <div className="flex items-center justify-between gap-4 p-4 bg-muted/50 rounded-lg">
+                        <div className="flex-1 min-w-0">
                             <p className="font-medium text-card-foreground">Require Human Review</p>
                             <p className="text-sm text-muted-foreground mt-1">
-                                When enabled, agent changes must be reviewed and approved before being committed to the repository.
+                                This is the default review policy for new tasks in this project. Individual tasks can override it during task setup.
                             </p>
                         </div>
                         <button
+                            type="button"
                             onClick={handleToggleRequireReview}
                             disabled={updateProjectMutation.isPending}
-                            className={`relative inline-flex h-6 w-11 items-center rounded-full transition-colors focus:outline-none focus:ring-2 focus:ring-primary focus:ring-offset-2 ${
-                                requireReview ? 'bg-primary' : 'bg-muted'
-                            } ${updateProjectMutation.isPending ? 'opacity-50 cursor-not-allowed' : ''}`}
+                            aria-label={localRequireReview ? 'Require review is on' : 'Require review is off'}
+                            aria-checked={localRequireReview}
+                            role="switch"
+                            className={`relative z-10 flex-shrink-0 inline-flex h-7 w-14 items-center overflow-hidden rounded-full border shadow-sm transition-all focus:outline-none focus:ring-2 focus:ring-primary focus:ring-offset-2 ${
+                                localRequireReview
+                                    ? 'border-primary/80 bg-primary shadow-primary/20'
+                                    : 'border border-[#404040] bg-transparent'
+                            } ${updateProjectMutation.isPending ? 'opacity-50 cursor-not-allowed' : 'cursor-pointer'}`}
                         >
                             <span
-                                className={`inline-block h-4 w-4 transform rounded-full bg-white transition-transform ${
-                                    requireReview ? 'translate-x-6' : 'translate-x-1'
+                                className={`pointer-events-none inline-block h-5 w-5 transform rounded-full border shadow-sm transition-transform ${
+                                    localRequireReview
+                                        ? 'translate-x-8 border-white/80 bg-white'
+                                        : 'translate-x-1 border-white/80 bg-white'
                                 }`}
                             />
                         </button>
                     </div>
-                    <p className="text-xs text-muted-foreground">
-                        {requireReview
-                            ? '✅ Review required: Agent will implement changes but NOT commit. You review diffs and approve before pushing.'
-                            : '⚡ Auto-commit: Agent will implement AND commit changes directly to the repository.'}
-                    </p>
                 </div>
             </div>
 
@@ -213,7 +229,7 @@ export function SettingsTab({ projectId, projectName, repositoryUrl, requireRevi
                 )}
             </div>
 
-            {/* Members (Owner only) */}
+            {/* Members (Owner or System Admin) */}
             <div className="bg-card border border-border rounded-xl p-6">
                 <h3 className="text-lg font-bold text-card-foreground mb-4 flex items-center gap-2">
                     <span className="material-symbols-outlined text-blue-500">group</span>

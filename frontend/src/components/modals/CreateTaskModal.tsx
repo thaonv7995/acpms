@@ -123,6 +123,7 @@ export function CreateTaskModal({
 
     const [autoStart, setAutoStart] = useState(true);
     const [requireReview, setRequireReview] = useState(false);
+    const [requireReviewTouched, setRequireReviewTouched] = useState(false);
     const [autoDeploy, setAutoDeploy] = useState(false);
     const [autoDeployTouched, setAutoDeployTouched] = useState(false);
 
@@ -177,7 +178,8 @@ export function CreateTaskModal({
         setAssignee('');
         setSprint('');
         setAutoStart(true);
-        setRequireReview(false);
+        setRequireReview(true);
+        setRequireReviewTouched(false);
         setAutoDeploy(false);
         setAutoDeployTouched(false);
         setAttachments([]);
@@ -199,8 +201,23 @@ export function CreateTaskModal({
 
     useEffect(() => {
         if (!isOpen) return;
+        setRequireReviewTouched(false);
+        if (effectiveProjectId) {
+            setRequireReview(true);
+        }
+    }, [effectiveProjectId, isOpen]);
+
+    useEffect(() => {
+        if (!isOpen) return;
         setAutoDeployTouched(false);
     }, [effectiveProjectId, isOpen]);
+
+    useEffect(() => {
+        if (!isOpen || requireReviewTouched) return;
+        if (projectSettings) {
+            setRequireReview(projectSettings.require_review);
+        }
+    }, [isOpen, projectSettings, requireReviewTouched]);
 
     useEffect(() => {
         if (!isOpen || !projectSettings || autoDeployTouched) return;
@@ -593,14 +610,9 @@ export function CreateTaskModal({
                             >
                                 <div className="flex items-center justify-between gap-2 mb-2">
                                     <p className={`text-sm font-medium ${toggleTitleClass(autoStart)}`}>Auto start</p>
-                                    <div className="flex items-center gap-2">
-                                        <span className={`text-[10px] font-bold tracking-wide ${autoStart ? 'text-emerald-400' : 'text-slate-400'}`}>
-                                            {autoStart ? 'ON' : 'OFF'}
-                                        </span>
-                                        <span className={toggleTrackClass(autoStart)}>
-                                            <span className={toggleThumbClass(autoStart)} />
-                                        </span>
-                                    </div>
+                                    <span className={toggleTrackClass(autoStart)}>
+                                        <span className={toggleThumbClass(autoStart)} />
+                                    </span>
                                 </div>
                                 <p className="text-xs text-muted-foreground">
                                     {repositoryReadOnly
@@ -613,19 +625,17 @@ export function CreateTaskModal({
                                 type="button"
                                 role="switch"
                                 aria-checked={requireReview}
-                                onClick={() => setRequireReview((prev) => !prev)}
+                                onClick={() => {
+                                    setRequireReviewTouched(true);
+                                    setRequireReview((prev) => !prev);
+                                }}
                                 className={toggleCardClass(requireReview)}
                             >
                                 <div className="flex items-center justify-between gap-2 mb-2">
                                     <p className={`text-sm font-medium ${toggleTitleClass(requireReview)}`}>Review first</p>
-                                    <div className="flex items-center gap-2">
-                                        <span className={`text-[10px] font-bold tracking-wide ${requireReview ? 'text-emerald-400' : 'text-slate-400'}`}>
-                                            {requireReview ? 'ON' : 'OFF'}
-                                        </span>
-                                        <span className={toggleTrackClass(requireReview)}>
-                                            <span className={toggleThumbClass(requireReview)} />
-                                        </span>
-                                    </div>
+                                    <span className={toggleTrackClass(requireReview)}>
+                                        <span className={toggleThumbClass(requireReview)} />
+                                    </span>
                                 </div>
                                 <p className="text-xs text-muted-foreground">Require manual review before commit.</p>
                             </button>
@@ -642,17 +652,12 @@ export function CreateTaskModal({
                             >
                                 <div className="flex items-center justify-between gap-2 mb-2">
                                     <p className={`text-sm font-medium ${toggleTitleClass(autoDeploy)}`}>Task preview</p>
-                                    <div className="flex items-center gap-2">
-                                        <span className={`text-[10px] font-bold tracking-wide ${autoDeploy ? 'text-emerald-400' : 'text-slate-400'}`}>
-                                            {autoDeploy ? 'ON' : 'OFF'}
-                                        </span>
-                                        <span className={toggleTrackClass(autoDeploy)}>
-                                            <span className={toggleThumbClass(autoDeploy)} />
-                                        </span>
-                                    </div>
+                                    <span className={toggleTrackClass(autoDeploy)}>
+                                        <span className={toggleThumbClass(autoDeploy)} />
+                                    </span>
                                 </div>
                                 <p className="text-xs text-muted-foreground">
-                                    Default {projectSettingsLoading ? 'loading...' : projectSettings ? ((projectSettings.auto_deploy || projectSettings.preview_enabled) ? 'ON' : 'OFF') : 'project'}.
+                                    Default {projectSettingsLoading ? 'loading...' : projectSettings ? ((projectSettings.auto_deploy || projectSettings.preview_enabled) ? 'on' : 'off') : 'project'}.
                                 </p>
                             </button>
                         </div>

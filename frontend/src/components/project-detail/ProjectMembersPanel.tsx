@@ -1,8 +1,8 @@
 /**
- * ProjectMembersPanel - Manage project members (Owner only)
+ * ProjectMembersPanel - Manage project members
  *
  * Lists members, allows add by selecting user from system list, update role, remove.
- * Requires ManageMembers permission (Owner).
+ * Requires ManageMembers permission (owner, or system admin via RBAC bypass).
  */
 
 import { useState, useEffect } from 'react';
@@ -201,7 +201,18 @@ export function ProjectMembersPanel({
             </tr>
           </thead>
           <tbody>
-            {members.map((m) => (
+            {members.length === 0 ? (
+              <tr className="border-t border-border">
+                <td
+                  colSpan={canManageMembers ? 4 : 3}
+                  className="px-4 py-6 text-center text-sm text-muted-foreground"
+                >
+                  {canManageMembers
+                    ? 'No visible members yet. Projects created by OpenClaw may start with only the hidden gateway account until you add the first human member.'
+                    : 'No visible members yet.'}
+                </td>
+              </tr>
+            ) : members.map((m) => (
               <tr key={m.id} className="border-t border-border">
                 <td className="px-4 py-2 text-card-foreground">{m.name}</td>
                 <td className="px-4 py-2 text-muted-foreground">{m.email}</td>

@@ -66,16 +66,20 @@ export function ToggleSwitch({ checked, onChange, disabled, ariaLabel }: ToggleS
             onClick={() => !disabled && onChange(!checked)}
             disabled={disabled}
             className={`
-                relative inline-flex h-6 w-11 items-center rounded-full transition-colors
+                relative inline-flex h-7 w-14 items-center overflow-hidden rounded-full border shadow-sm transition-all
                 focus:outline-none focus:ring-2 focus:ring-primary focus:ring-offset-2
-                ${checked ? 'bg-primary' : 'bg-slate-300 dark:bg-slate-600'}
+                ${checked
+                    ? 'border-primary/80 bg-primary shadow-primary/20'
+                    : 'border-white/30 bg-white/15 shadow-black/25 backdrop-blur-sm'}
                 ${disabled ? 'opacity-50 cursor-not-allowed' : 'cursor-pointer'}
             `}
         >
             <span
                 className={`
-                    inline-block h-4 w-4 transform rounded-full bg-white shadow-sm transition-transform
-                    ${checked ? 'translate-x-6' : 'translate-x-1'}
+                    inline-block h-5 w-5 transform rounded-full border shadow-sm transition-transform
+                    ${checked
+                        ? 'translate-x-8 border-white/80 bg-white'
+                        : 'translate-x-1 border-white/80 bg-white'}
                 `}
             />
         </button>

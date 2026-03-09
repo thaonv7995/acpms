@@ -54,11 +54,11 @@ export function AgentSettingsPanel({ settings, saving, onUpdateSetting }: AgentS
                 icon="verified_user"
                 iconColor="text-green-500"
                 title="Require Human Review"
-                description="Agent changes must be reviewed and approved before being committed to the repository."
+                description="Default review policy for new tasks in this project. Individual tasks can override it during task setup."
                 hint={
                     settings.require_review
-                        ? 'Review required: Agent implements changes but does NOT commit. You review diffs and approve before pushing.'
-                        : 'Auto-commit: Agent implements AND commits changes directly to the repository.'
+                        ? 'Default for new tasks: require human review. A task can still disable this during setup.'
+                        : 'Default for new tasks: no human review required. A task can still enable this during setup.'
                 }
             >
                 <ToggleSwitch
