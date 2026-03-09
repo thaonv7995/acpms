@@ -3,9 +3,11 @@ import { useParams, useNavigate } from 'react-router-dom';
 import { AppShell } from '../components/layout/AppShell';
 import { ConfigureAgentModal, ViewLogsModal, EditTaskModal, ConfirmModal } from '../components/modals';
 import { TaskDetailHeader, TaskMetadataSidebar, DiffViewerModal, TaskStatusContent } from '../components/task-detail-page';
+import { TaskContextPanel } from '../components/task-detail-page/TaskContextPanel';
 import { prefetchDiffData } from '../components/diff-viewer/useDiff';
 import { getTask, deleteTask, Task, type TaskStatus } from '../api/tasks';
 import { getTaskAttempts, createTaskAttempt, TaskAttempt } from '../api/taskAttempts';
+import { getTaskContexts, type TaskContext } from '../api/taskContexts';
 import type { KanbanTask } from '../types/project';
 import { logger } from '@/lib/logger';
 
@@ -60,6 +62,7 @@ export function TaskDetailPage() {
 
     const [task, setTask] = useState<Task | null>(null);
     const [attempts, setAttempts] = useState<TaskAttempt[]>([]);
+    const [taskContexts, setTaskContexts] = useState<TaskContext[]>([]);
     const [latestSuccessAttempt, setLatestSuccessAttempt] = useState<TaskAttempt | null>(null);
     const [loading, setLoading] = useState(true);
     const [error, setError] = useState<string | null>(null);
@@ -72,12 +75,14 @@ export function TaskDetailPage() {
     const [isDeletingTask, setIsDeletingTask] = useState(false);
 
     const refreshTaskData = useCallback(async (targetTaskId: string) => {
-        const [taskData, attemptsData] = await Promise.all([
+        const [taskData, attemptsData, contextsData] = await Promise.all([
             getTask(targetTaskId),
             getTaskAttempts(targetTaskId),
+            getTaskContexts(targetTaskId),
         ]);
         setTask(taskData);
         setAttempts(attemptsData);
+        setTaskContexts(contextsData);
         setLatestSuccessAttempt(getLatestSuccessAttempt(attemptsData));
     }, []);
 
@@ -209,15 +214,21 @@ export function TaskDetailPage() {
 
                     <div className="grid grid-cols-1 lg:grid-cols-3 gap-6">
                         <div className="lg:col-span-2">
-                            <TaskStatusContent
-                                task={task}
-                                normalizedStatus={normalizedStatus}
-                                artifactAttemptId={latestSuccessAttempt?.id}
-                                previewMetadata={
-                                    (latestSuccessAttempt?.metadata as Record<string, unknown> | undefined) ??
-                                    (task.metadata as Record<string, unknown> | undefined)
-                                }
-                            />
+                            <div className="flex flex-col gap-6">
+                                <TaskContextPanel
+                                    taskId={task.id}
+                                    contexts={taskContexts}
+                                />
+                                <TaskStatusContent
+                                    task={task}
+                                    normalizedStatus={normalizedStatus}
+                                    artifactAttemptId={latestSuccessAttempt?.id}
+                                    previewMetadata={
+                                        (latestSuccessAttempt?.metadata as Record<string, unknown> | undefined) ??
+                                        (task.metadata as Record<string, unknown> | undefined)
+                                    }
+                                />
+                            </div>
                         </div>
 
                         <TaskMetadataSidebar

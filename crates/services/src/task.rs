@@ -388,9 +388,10 @@ impl TaskService {
             UPDATE tasks
             SET title = COALESCE($2, title),
                 description = COALESCE($3, description),
-                status = COALESCE($4, status),
-                assigned_to = COALESCE($5, assigned_to),
-                sprint_id = COALESCE($6, sprint_id),
+                task_type = COALESCE($4, task_type),
+                status = COALESCE($5, status),
+                assigned_to = COALESCE($6, assigned_to),
+                sprint_id = COALESCE($7, sprint_id),
                 updated_at = NOW()
             WHERE id = $1
             RETURNING id, project_id, title, description, task_type, status, assigned_to, parent_task_id, requirement_id, sprint_id, gitlab_issue_id, metadata, created_by, created_at, updated_at
@@ -399,6 +400,7 @@ impl TaskService {
         .bind(task_id)
         .bind(req.title)
         .bind(req.description)
+        .bind(req.task_type)
         .bind(req.status)
         .bind(req.assigned_to)
         .bind(req.sprint_id)

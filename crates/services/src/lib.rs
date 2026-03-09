@@ -14,6 +14,7 @@ pub mod sprint;
 pub mod subagent;
 pub mod task;
 pub mod task_attempt; // Restored
+pub mod task_context;
 pub mod user;
 pub mod workspace_repos;
 
@@ -109,6 +110,10 @@ pub use system_settings_service::{
 };
 pub use task::{TaskService, TaskWithLatestAttempt};
 pub use task_attempt::*;
+pub use task_context::{
+    CreateTaskContextAttachmentInput, CreateTaskContextInput, TaskContextService,
+    TaskContextWithAttachments, UpdateTaskContextInput,
+};
 pub use token_blacklist_service::TokenBlacklistService;
 pub use token_refresh_service::RefreshTokenService;
 pub use user::{is_hidden_user_email, UserService, OPENCLAW_SERVICE_USER_EMAIL};

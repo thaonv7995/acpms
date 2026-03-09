@@ -152,11 +152,14 @@ pub struct UpdateProjectRequestDoc {
 }
 
 // Tasks
-use super::{TaskAttemptDto, TaskDto};
+use super::{TaskAttemptDto, TaskContextAttachmentDto, TaskContextDto, TaskDto};
 define_response!(TaskResponse, TaskDto);
 define_response!(TaskListResponse, Vec<TaskDto>);
 define_response!(TaskAttemptResponse, TaskAttemptDto);
 define_response!(TaskAttemptListResponse, Vec<TaskAttemptDto>);
+define_response!(TaskContextResponse, TaskContextDto);
+define_response!(TaskContextListResponse, Vec<TaskContextDto>);
+define_response!(TaskContextAttachmentResponse, TaskContextAttachmentDto);
 
 #[derive(ToSchema, serde::Deserialize, Validate)]
 pub struct CreateTaskRequestDoc {
@@ -203,11 +206,71 @@ pub struct UpdateTaskRequestDoc {
 
     #[schema(value_type = String)]
     #[allow(dead_code)]
+    pub task_type: Option<crate::api::TaskType>,
+    #[schema(value_type = String)]
+    #[allow(dead_code)]
     pub status: Option<crate::api::TaskStatus>,
     #[allow(dead_code)]
     pub assigned_to: Option<uuid::Uuid>,
     #[allow(dead_code)]
     pub sprint_id: Option<uuid::Uuid>,
+}
+
+#[derive(ToSchema, serde::Deserialize, Validate)]
+#[allow(dead_code)]
+pub struct CreateTaskContextRequestDoc {
+    #[validate(length(max = 255, message = "Title must not exceed 255 characters"))]
+    pub title: Option<String>,
+
+    #[validate(length(min = 1, max = 64, message = "Content type is required"))]
+    pub content_type: String,
+
+    #[validate(length(max = 20000, message = "Context content must not exceed 20000 characters"))]
+    pub raw_content: String,
+
+    #[validate(length(min = 1, max = 32, message = "Source is required"))]
+    pub source: String,
+
+    pub sort_order: i32,
+}
+
+#[derive(ToSchema, serde::Deserialize, Validate)]
+#[allow(dead_code)]
+pub struct UpdateTaskContextRequestDoc {
+    #[validate(length(max = 255, message = "Title must not exceed 255 characters"))]
+    pub title: Option<Option<String>>,
+
+    #[validate(length(min = 1, max = 64, message = "Content type is required"))]
+    pub content_type: Option<String>,
+
+    #[validate(length(max = 20000, message = "Context content must not exceed 20000 characters"))]
+    pub raw_content: Option<String>,
+
+    pub sort_order: Option<i32>,
+}
+
+#[derive(ToSchema, serde::Deserialize, Validate)]
+#[allow(dead_code)]
+pub struct CreateTaskContextAttachmentRequestDoc {
+    #[validate(length(
+        min = 1,
+        max = 512,
+        message = "Storage key must be between 1 and 512 characters"
+    ))]
+    pub storage_key: String,
+
+    #[validate(length(
+        min = 1,
+        max = 255,
+        message = "Filename must be between 1 and 255 characters"
+    ))]
+    pub filename: String,
+
+    #[validate(length(min = 1, max = 255, message = "Content type is required"))]
+    pub content_type: String,
+
+    pub size_bytes: Option<i64>,
+    pub checksum: Option<String>,
 }
 
 // Task Attempts - Agent Logs

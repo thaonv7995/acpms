@@ -86,10 +86,12 @@ export interface CreateTaskRequest {
  * @deprecated Use UpdateTaskRequestDoc from @/api/generated/models
  */
 export interface UpdateTaskRequest {
-  title?: string;
-  description?: string;
+  title?: string | null;
+  description?: string | null;
+  task_type?: TaskType | null;
   status?: TaskStatus;
-  assigned_to?: string;
+  assigned_to?: string | null;
+  sprint_id?: string | null;
 }
 
 /**

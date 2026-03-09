@@ -11,8 +11,13 @@ import type { ProjectMember } from '../../api/projects';
 import { useProjectMembers } from '../../hooks/useProjectMembers';
 import { useProjectSettings } from '../../hooks/useProjectSettings';
 import { useSettings } from '../../hooks/useSettings';
-import { createTask, getTaskAttachmentUploadUrl } from '../../api/tasks';
+import { createTask, deleteTask, updateTaskMetadata } from '../../api/tasks';
 import { createTaskAttempt } from '../../api/taskAttempts';
+import {
+    createTaskContext,
+    createTaskContextAttachment,
+    getTaskContextAttachmentUploadUrl,
+} from '../../api/taskContexts';
 import type { TaskType } from '../../shared/types';
 import type { RepositoryContext } from '../../types/repository';
 import {
@@ -26,21 +31,13 @@ import { SourceControlSetupRequiredDialog } from './SourceControlSetupRequiredDi
 type TaskTypeValue = Exclude<TaskType, 'init'>;
 type TaskPriorityValue = 'low' | 'medium' | 'high' | 'critical';
 
-interface UploadedAttachment {
-    key: string;
-    filename: string;
-    content_type: string;
-    size: number;
-    uploaded_at: string;
-}
-
-interface PendingAttachment {
+interface PendingContextFile {
     id: string;
     filename: string;
     contentType: string;
     size: number;
-    key?: string;
-    status: 'uploading' | 'uploaded' | 'failed';
+    file: File;
+    status: 'pending' | 'uploading' | 'uploaded' | 'failed';
     error?: string;
 }
 
@@ -127,7 +124,9 @@ export function CreateTaskModal({
     const [autoDeploy, setAutoDeploy] = useState(false);
     const [autoDeployTouched, setAutoDeployTouched] = useState(false);
 
-    const [attachments, setAttachments] = useState<PendingAttachment[]>([]);
+    const [taskContextTitle, setTaskContextTitle] = useState('');
+    const [taskContextContent, setTaskContextContent] = useState('');
+    const [taskContextFiles, setTaskContextFiles] = useState<PendingContextFile[]>([]);
 
     const selectedProjectRecord = useMemo(
         () => apiProjects.find((project) => project.id === effectiveProjectId),
@@ -146,23 +145,6 @@ export function CreateTaskModal({
     const projectTaskPreviewEnabled = Boolean(projectSettings?.auto_deploy);
     const taskPreviewLocked = !projectSettingsLoading && !projectTaskPreviewEnabled;
 
-    const uploadedAttachments: UploadedAttachment[] = useMemo(
-        () =>
-            attachments
-                .filter((attachment): attachment is PendingAttachment & { key: string } =>
-                    attachment.status === 'uploaded' && !!attachment.key
-                )
-                .map((attachment) => ({
-                    key: attachment.key,
-                    filename: attachment.filename,
-                    content_type: attachment.contentType,
-                    size: attachment.size,
-                    uploaded_at: new Date().toISOString(),
-                })),
-        [attachments]
-    );
-
-    const hasUploadingAttachments = attachments.some((attachment) => attachment.status === 'uploading');
     const showProjectSelector = !projectId;
     const isFormValid = Boolean(title.trim()) && Boolean(effectiveProjectId);
 
@@ -184,7 +166,9 @@ export function CreateTaskModal({
         setRequireReviewTouched(false);
         setAutoDeploy(false);
         setAutoDeployTouched(false);
-        setAttachments([]);
+        setTaskContextTitle('');
+        setTaskContextContent('');
+        setTaskContextFiles([]);
         setSubmitError(null);
         setShowSetupDialog(false);
     }, [isOpen, projectId]);
@@ -198,7 +182,7 @@ export function CreateTaskModal({
 
     useEffect(() => {
         if (!isOpen) return;
-        setAttachments([]);
+        setTaskContextFiles([]);
     }, [effectiveProjectId, isOpen]);
 
     useEffect(() => {
@@ -256,74 +240,96 @@ export function CreateTaskModal({
         }, 1500);
     };
 
-    const setAttachmentState = (id: string, updater: (item: PendingAttachment) => PendingAttachment) => {
-        setAttachments((prev) =>
+    const setContextFileState = (id: string, updater: (item: PendingContextFile) => PendingContextFile) => {
+        setTaskContextFiles((prev) =>
             prev.map((item) => (item.id === id ? updater(item) : item))
         );
     };
 
-    const uploadFiles = async (files: File[]) => {
-        if (!effectiveProjectId) {
-            setSubmitError('Please select a project before uploading attachments.');
-            return;
-        }
-
+    const addContextFiles = (files: File[]) => {
         for (const file of files) {
             const id = `${Date.now()}-${Math.random().toString(16).slice(2)}`;
             const contentType = file.type || 'application/octet-stream';
 
-            setAttachments((prev) => [
+            setTaskContextFiles((prev) => [
                 ...prev,
                 {
                     id,
                     filename: file.name,
                     contentType,
                     size: file.size,
-                    status: 'uploading',
+                    file,
+                    status: 'pending',
                 },
             ]);
+        }
+    };
+
+    const uploadTaskContextFiles = async (
+        taskId: string,
+        contextId: string,
+        files: PendingContextFile[]
+    ): Promise<number> => {
+        let uploadedCount = 0;
+
+        for (const file of files) {
+            setContextFileState(file.id, (item) => ({
+                ...item,
+                status: 'uploading',
+                error: undefined,
+            }));
 
             try {
-                const { upload_url, key } = await getTaskAttachmentUploadUrl({
-                    project_id: effectiveProjectId,
-                    filename: file.name,
-                    content_type: contentType,
+                const { upload_url, key } = await getTaskContextAttachmentUploadUrl(taskId, {
+                    filename: file.filename,
+                    content_type: file.contentType,
                 });
 
                 const uploadRes = await fetch(upload_url, {
                     method: 'PUT',
                     headers: {
-                        'Content-Type': contentType,
+                        'Content-Type': file.contentType,
                     },
-                    body: file,
+                    body: file.file,
                 });
 
                 if (!uploadRes.ok) {
                     throw new Error(`Upload failed with status ${uploadRes.status}`);
                 }
 
-                setAttachmentState(id, (item) => ({
+                await createTaskContextAttachment(taskId, contextId, {
+                    storage_key: key,
+                    filename: file.filename,
+                    content_type: file.contentType,
+                    size_bytes: file.size,
+                    checksum: null,
+                });
+
+                uploadedCount += 1;
+                setContextFileState(file.id, (item) => ({
                     ...item,
-                    key,
                     status: 'uploaded',
                     error: undefined,
                 }));
             } catch (error) {
-                logger.error('Attachment upload failed:', error);
-                setAttachmentState(id, (item) => ({
+                logger.error('Task context attachment upload failed:', error);
+                setContextFileState(file.id, (item) => ({
                     ...item,
                     status: 'failed',
                     error: 'Upload failed',
                 }));
+                throw error;
             }
         }
+
+        return uploadedCount;
     };
 
     const handleFileInputChange = async (event: ChangeEvent<HTMLInputElement>) => {
         const files = event.target.files ? Array.from(event.target.files) : [];
         event.target.value = '';
         if (files.length === 0) return;
-        await uploadFiles(files);
+        addContextFiles(files);
     };
 
     const handleDrop = async (event: DragEvent<HTMLDivElement>) => {
@@ -331,11 +337,11 @@ export function CreateTaskModal({
         setIsDragOver(false);
         const files = Array.from(event.dataTransfer.files || []);
         if (files.length === 0) return;
-        await uploadFiles(files);
+        addContextFiles(files);
     };
 
     const handleCreate = async () => {
-        if (!isFormValid || hasUploadingAttachments) return;
+        if (!isFormValid) return;
         if (sourceControlSetupRequired) {
             setShowSetupDialog(true);
             return;
@@ -343,14 +349,14 @@ export function CreateTaskModal({
         setIsCreating(true);
         setSubmitError(null);
 
+        let createdTaskId: string | null = null;
+
         try {
             const finalProjectId = effectiveProjectId;
             if (!finalProjectId) return;
 
-            const metadata = {
+            const baseMetadata = {
                 priority,
-                attachments: uploadedAttachments,
-                attachments_count: uploadedAttachments.length,
                 execution: {
                     require_review: requireReview,
                     run_build_and_tests: true,
@@ -366,7 +372,37 @@ export function CreateTaskModal({
                 task_type: type,
                 assigned_to: assignee || undefined,
                 sprint_id: sprint || undefined,
-                metadata,
+                metadata: baseMetadata,
+            });
+            createdTaskId = task.id;
+
+            let uploadedAttachmentCount = 0;
+            const hasTaskContext =
+                Boolean(taskContextTitle.trim()) ||
+                Boolean(taskContextContent.trim()) ||
+                taskContextFiles.length > 0;
+
+            if (hasTaskContext) {
+                const context = await createTaskContext(task.id, {
+                    title: taskContextTitle.trim() || null,
+                    content_type: 'text/markdown',
+                    raw_content: taskContextContent.trim(),
+                    source: 'user',
+                    sort_order: 0,
+                });
+
+                if (taskContextFiles.length > 0) {
+                    uploadedAttachmentCount = await uploadTaskContextFiles(
+                        task.id,
+                        context.id,
+                        taskContextFiles
+                    );
+                }
+            }
+
+            await updateTaskMetadata(task.id, {
+                ...baseMetadata,
+                attachments_count: uploadedAttachmentCount,
             });
 
             let autoStarted = false;
@@ -404,8 +440,19 @@ export function CreateTaskModal({
                 navigate(`/projects/${finalProjectId}`);
             }
         } catch (error) {
+            if (createdTaskId) {
+                try {
+                    await deleteTask(createdTaskId);
+                } catch (rollbackError) {
+                    logger.error('Failed to roll back task after context sync error:', rollbackError);
+                }
+            }
             logger.error('Failed to create task:', error);
-            setSubmitError(error instanceof Error ? error.message : 'Failed to create task');
+            setSubmitError(
+                error instanceof Error
+                    ? error.message
+                    : 'Failed to create task and sync task context'
+            );
         } finally {
             setIsCreating(false);
         }
@@ -493,7 +540,40 @@ export function CreateTaskModal({
                         onSprintChange={setSprint}
                     />
 
-                    <div className="space-y-3">
+                    <div className="space-y-4 rounded-xl border border-border bg-muted/30 p-4">
+                        <div>
+                            <h3 className="text-sm font-bold text-card-foreground">Task Context</h3>
+                            <p className="text-xs text-muted-foreground mt-1">
+                                Add exact notes and reference files the agent must follow for this task.
+                            </p>
+                        </div>
+
+                        <div>
+                            <label className="block text-sm font-bold text-card-foreground mb-1.5">
+                                Context Title
+                            </label>
+                            <input
+                                type="text"
+                                value={taskContextTitle}
+                                onChange={(event) => setTaskContextTitle(event.target.value)}
+                                placeholder="e.g. Login screen constraints"
+                                className="w-full bg-card border border-border rounded-lg px-3 py-2.5 text-sm text-card-foreground focus:ring-primary focus:border-primary placeholder-muted-foreground"
+                            />
+                        </div>
+
+                        <div>
+                            <label className="block text-sm font-bold text-card-foreground mb-1.5">
+                                Context Notes
+                            </label>
+                            <textarea
+                                value={taskContextContent}
+                                onChange={(event) => setTaskContextContent(event.target.value)}
+                                placeholder="Describe the required copy, design constraints, edge cases, or debugging context."
+                                rows={5}
+                                className="w-full bg-card border border-border rounded-lg px-3 py-2.5 text-sm text-card-foreground focus:ring-primary focus:border-primary placeholder-muted-foreground resize-none"
+                            />
+                        </div>
+
                         <input
                             ref={attachmentInputRef}
                             type="file"
@@ -506,7 +586,7 @@ export function CreateTaskModal({
 
                         <div
                             className={`border border-dashed rounded-lg p-4 flex flex-col items-center justify-center text-center transition-colors cursor-pointer ${
-                                isDragOver ? 'border-primary bg-primary/10' : 'border-border hover:bg-muted'
+                                isDragOver ? 'border-primary bg-primary/10' : 'border-border hover:bg-card'
                             }`}
                             onClick={() => attachmentInputRef.current?.click()}
                             onDragOver={(event) => {
@@ -520,35 +600,41 @@ export function CreateTaskModal({
                         >
                             <span className="material-symbols-outlined text-muted-foreground mb-2">cloud_upload</span>
                             <p className="text-xs font-medium text-muted-foreground">
-                                Drop files to attach, or <span className="text-primary underline">browse</span>
+                                Drop reference files, or <span className="text-primary underline">browse</span>
                             </p>
                         </div>
 
-                        {attachments.length > 0 && (
+                        {taskContextFiles.length > 0 && (
                             <div className="space-y-2">
-                                {attachments.map((attachment) => (
-                                    <div key={attachment.id} className="rounded-md border border-border bg-muted px-3 py-2 flex items-center justify-between gap-3">
+                                {taskContextFiles.map((file) => (
+                                    <div key={file.id} className="rounded-md border border-border bg-muted px-3 py-2 flex items-center justify-between gap-3">
                                         <div className="min-w-0">
-                                            <p className="text-sm text-card-foreground truncate">{attachment.filename}</p>
+                                            <p className="text-sm text-card-foreground truncate">{file.filename}</p>
                                             <p className="text-xs text-muted-foreground">
-                                                {formatBytes(attachment.size)}
-                                                {attachment.status === 'failed' && attachment.error ? ` • ${attachment.error}` : ''}
+                                                {formatBytes(file.size)}
+                                                {file.status === 'pending' && ' • queued'}
+                                                {file.status === 'failed' && file.error ? ` • ${file.error}` : ''}
                                             </p>
                                         </div>
                                         <div className="flex items-center gap-2">
-                                            {attachment.status === 'uploading' && (
+                                            {file.status === 'uploading' && (
                                                 <span className="w-4 h-4 border-2 border-muted-foreground/30 border-t-muted-foreground rounded-full animate-spin"></span>
                                             )}
-                                            {attachment.status === 'uploaded' && (
+                                            {file.status === 'uploaded' && (
                                                 <span className="material-symbols-outlined text-green-500 text-[18px]">check_circle</span>
                                             )}
-                                            {attachment.status === 'failed' && (
+                                            {file.status === 'failed' && (
                                                 <span className="material-symbols-outlined text-red-500 text-[18px]">error</span>
                                             )}
+                                            {file.status === 'pending' && (
+                                                <span className="material-symbols-outlined text-muted-foreground text-[18px]">schedule</span>
+                                            )}
                                             <button
-                                                onClick={() => setAttachments((prev) => prev.filter((item) => item.id !== attachment.id))}
+                                                onClick={() =>
+                                                    setTaskContextFiles((prev) => prev.filter((item) => item.id !== file.id))
+                                                }
                                                 className="text-muted-foreground hover:text-card-foreground"
-                                                disabled={attachment.status === 'uploading'}
+                                                disabled={file.status === 'uploading'}
                                                 title="Remove attachment"
                                             >
                                                 <span className="material-symbols-outlined text-[18px]">close</span>
@@ -691,7 +777,7 @@ export function CreateTaskModal({
                     </button>
                     <button
                         onClick={handleCreate}
-                        disabled={!isFormValid || isCreating || hasUploadingAttachments}
+                        disabled={!isFormValid || isCreating}
                         className="px-5 py-2 bg-primary hover:bg-primary/90 text-primary-foreground text-sm font-bold rounded-lg shadow-lg shadow-primary/20 flex items-center gap-2 transition-all active:scale-95 disabled:opacity-50 disabled:cursor-not-allowed"
                     >
                         {isCreating ? (

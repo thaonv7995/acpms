@@ -8,6 +8,7 @@ pub mod project_assistant;
 pub mod projects;
 pub mod streams;
 pub mod task_attempts;
+pub mod task_contexts;
 pub mod tasks;
 pub mod users;
 pub mod websocket;
@@ -303,6 +304,31 @@ pub(crate) fn build_business_api_routes() -> Router<AppState> {
         .route("/tasks/:id/children", get(tasks::get_task_children))
         .route("/tasks/:id/assign", post(tasks::assign_task))
         .route("/tasks/:id/metadata", put(tasks::update_task_metadata))
+        .route(
+            "/tasks/:task_id/contexts",
+            get(task_contexts::list_task_contexts).post(task_contexts::create_task_context),
+        )
+        .route(
+            "/tasks/:task_id/contexts/:context_id",
+            patch(task_contexts::update_task_context)
+                .delete(task_contexts::delete_task_context),
+        )
+        .route(
+            "/tasks/:task_id/context-attachments/upload-url",
+            post(task_contexts::get_task_context_attachment_upload_url),
+        )
+        .route(
+            "/tasks/:task_id/contexts/:context_id/attachments",
+            post(task_contexts::create_task_context_attachment),
+        )
+        .route(
+            "/tasks/:task_id/contexts/:context_id/attachments/:attachment_id",
+            delete(task_contexts::delete_task_context_attachment),
+        )
+        .route(
+            "/tasks/:task_id/context-attachments/download-url",
+            post(task_contexts::get_task_context_attachment_download_url),
+        )
         // Task Attempts routes
         .route(
             "/tasks/:task_id/attempts",

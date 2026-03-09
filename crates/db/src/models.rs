@@ -911,9 +911,41 @@ pub struct CreateTaskRequest {
 pub struct UpdateTaskRequest {
     pub title: Option<String>,
     pub description: Option<String>,
+    pub task_type: Option<TaskType>,
     pub status: Option<TaskStatus>,
     pub assigned_to: Option<Uuid>,
     pub sprint_id: Option<Uuid>,
+}
+
+// Task context model
+#[derive(Debug, Clone, Serialize, Deserialize, FromRow, TS)]
+#[ts(export)]
+pub struct TaskContext {
+    pub id: Uuid,
+    pub task_id: Uuid,
+    pub title: Option<String>,
+    pub content_type: String,
+    pub raw_content: String,
+    pub source: String,
+    pub sort_order: i32,
+    pub created_by: Option<Uuid>,
+    pub updated_by: Option<Uuid>,
+    pub created_at: DateTime<Utc>,
+    pub updated_at: DateTime<Utc>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, FromRow, TS)]
+#[ts(export)]
+pub struct TaskContextAttachment {
+    pub id: Uuid,
+    pub task_context_id: Uuid,
+    pub storage_key: String,
+    pub filename: String,
+    pub content_type: String,
+    pub size_bytes: Option<i64>,
+    pub checksum: Option<String>,
+    pub created_by: Option<Uuid>,
+    pub created_at: DateTime<Utc>,
 }
 
 // Task with computed attempt status fields for kanban view

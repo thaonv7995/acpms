@@ -1,9 +1,9 @@
 use acpms_db::models::{
     AgentLog, GitLabConfiguration, MergeRequestDb, Project, ProjectSettings, ProjectType,
-    RepositoryContext, Requirement, ReviewComment, Sprint, Task, TaskAttempt,
-    TaskWithAttemptStatus, User,
+    RepositoryContext, Requirement, ReviewComment, Sprint, Task, TaskAttempt, TaskContext,
+    TaskContextAttachment, TaskWithAttemptStatus, User,
 };
-use acpms_services::{ProjectComputedSummary, TaskWithLatestAttempt};
+use acpms_services::{ProjectComputedSummary, TaskContextWithAttachments, TaskWithLatestAttempt};
 use chrono::{DateTime, Utc};
 use serde::Serialize;
 use utoipa::ToSchema;
@@ -241,6 +241,73 @@ impl From<TaskWithAttemptStatus> for TaskDto {
             last_attempt_failed: Some(task.last_attempt_failed),
             executor: task.executor,
         }
+    }
+}
+
+#[derive(Debug, Serialize, ToSchema)]
+pub struct TaskContextAttachmentDto {
+    pub id: Uuid,
+    pub task_context_id: Uuid,
+    pub storage_key: String,
+    pub filename: String,
+    pub content_type: String,
+    pub size_bytes: Option<i64>,
+    pub checksum: Option<String>,
+    pub created_at: DateTime<Utc>,
+}
+
+impl From<TaskContextAttachment> for TaskContextAttachmentDto {
+    fn from(attachment: TaskContextAttachment) -> Self {
+        Self {
+            id: attachment.id,
+            task_context_id: attachment.task_context_id,
+            storage_key: attachment.storage_key,
+            filename: attachment.filename,
+            content_type: attachment.content_type,
+            size_bytes: attachment.size_bytes,
+            checksum: attachment.checksum,
+            created_at: attachment.created_at,
+        }
+    }
+}
+
+#[derive(Debug, Serialize, ToSchema)]
+pub struct TaskContextDto {
+    pub id: Uuid,
+    pub task_id: Uuid,
+    pub title: Option<String>,
+    pub content_type: String,
+    pub raw_content: String,
+    pub source: String,
+    pub sort_order: i32,
+    pub attachments: Vec<TaskContextAttachmentDto>,
+    pub created_at: DateTime<Utc>,
+    pub updated_at: DateTime<Utc>,
+}
+
+impl TaskContextDto {
+    pub fn from_parts(context: TaskContext, attachments: Vec<TaskContextAttachmentDto>) -> Self {
+        Self {
+            id: context.id,
+            task_id: context.task_id,
+            title: context.title,
+            content_type: context.content_type,
+            raw_content: context.raw_content,
+            source: context.source,
+            sort_order: context.sort_order,
+            attachments,
+            created_at: context.created_at,
+            updated_at: context.updated_at,
+        }
+    }
+}
+
+impl From<TaskContextWithAttachments> for TaskContextDto {
+    fn from(value: TaskContextWithAttachments) -> Self {
+        Self::from_parts(
+            value.context,
+            value.attachments.into_iter().map(TaskContextAttachmentDto::from).collect(),
+        )
     }
 }
 

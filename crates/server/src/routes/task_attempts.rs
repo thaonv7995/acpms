@@ -11,7 +11,7 @@ use acpms_executors::{
 };
 use acpms_services::{
     NormalizedLogService, ProjectService, RepositoryAccessService, SubagentService,
-    TaskAttemptService, TaskService,
+    TaskAttemptService, TaskContextService, TaskService,
 };
 use axum::extract::{Path, Query, State};
 use axum::http::StatusCode;
@@ -20,6 +20,7 @@ use chrono::Utc;
 use serde::{Deserialize, Serialize};
 use std::collections::HashSet;
 use std::path::PathBuf;
+use std::time::Duration;
 use uuid::Uuid;
 
 #[allow(unused_imports)]
@@ -520,6 +521,162 @@ fn prepend_language_instruction(instruction: String, preferred_language: Option<
         _ => return instruction,
     };
     format!("{}{}", line, instruction)
+}
+
+fn task_context_attachment_is_extractable(content_type: &str) -> bool {
+    content_type.starts_with("text/")
+        || matches!(
+            content_type,
+            "application/json" | "text/yaml" | "application/yaml" | "application/x-yaml"
+        )
+}
+
+fn task_context_attachment_is_vision_only(content_type: &str) -> bool {
+    matches!(content_type, "image/png" | "image/jpeg" | "image/webp")
+}
+
+fn prepend_task_context_instruction(instruction: String, task_context_block: Option<&str>) -> String {
+    match task_context_block.map(str::trim).filter(|value| !value.is_empty()) {
+        Some(block) => format!("{}\n\n{}", block, instruction),
+        None => instruction,
+    }
+}
+
+async fn build_task_context_prompt_block(
+    state: &AppState,
+    task_id: Uuid,
+) -> Result<Option<String>, ApiError> {
+    const MAX_CONTEXT_BLOCKS: usize = 10;
+    const MAX_ATTACHMENTS: usize = 5;
+    const MAX_ATTACHMENT_SIZE: i64 = 1_048_576;
+
+    let service = TaskContextService::new(state.db.clone());
+    let contexts = service
+        .list_task_contexts(task_id)
+        .await
+        .map_err(|e| ApiError::Internal(e.to_string()))?;
+
+    if contexts.is_empty() {
+        return Ok(None);
+    }
+
+    let mut lines = vec!["=== TASK CONTEXT ===".to_string()];
+    let mut seen_storage_keys = HashSet::new();
+    let mut processed_attachments = 0usize;
+
+    for (index, context_with_attachments) in contexts.into_iter().take(MAX_CONTEXT_BLOCKS).enumerate()
+    {
+        let label = context_with_attachments
+            .context
+            .title
+            .clone()
+            .map(|title| title.trim().to_string())
+            .filter(|title| !title.is_empty())
+            .unwrap_or_else(|| format!("Context {}", index + 1));
+
+        let mut section_lines = vec![format!("[Context: {}]", label)];
+
+        let raw_content = context_with_attachments.context.raw_content.trim();
+        if !raw_content.is_empty() {
+            section_lines.push(raw_content.to_string());
+        }
+
+        for attachment in context_with_attachments.attachments {
+            if processed_attachments >= MAX_ATTACHMENTS {
+                break;
+            }
+            if !seen_storage_keys.insert(attachment.storage_key.clone()) {
+                continue;
+            }
+
+            let fallback_reason = if task_context_attachment_is_vision_only(&attachment.content_type)
+            {
+                Some("vision_only")
+            } else if attachment.size_bytes.unwrap_or(i64::MAX) > MAX_ATTACHMENT_SIZE {
+                Some("too_large")
+            } else if !task_context_attachment_is_extractable(&attachment.content_type) {
+                Some("unsupported_type")
+            } else {
+                None
+            };
+
+            if let Some(reason) = fallback_reason {
+                let download_url = state
+                    .storage_service
+                    .get_presigned_download_url(&attachment.storage_key, Duration::from_secs(3600))
+                    .await
+                    .map_err(|e| ApiError::Internal(e.to_string()))?;
+                section_lines.push(format!(
+                    "[Attachment Link]\nfilename: {}\ncontent_type: {}\nreason: {}\ndownload_url: {}",
+                    attachment.filename, attachment.content_type, reason, download_url
+                ));
+                processed_attachments += 1;
+                continue;
+            }
+
+            match state
+                .storage_service
+                .get_log_bytes(&attachment.storage_key)
+                .await
+            {
+                Ok(bytes) => match String::from_utf8(bytes) {
+                    Ok(content) => {
+                        let trimmed = content.trim();
+                        if !trimmed.is_empty() {
+                            section_lines.push(format!(
+                                "[Attachment: {}]\n{}",
+                                attachment.filename, trimmed
+                            ));
+                            processed_attachments += 1;
+                        }
+                    }
+                    Err(_) => {
+                        let download_url = state
+                            .storage_service
+                            .get_presigned_download_url(
+                                &attachment.storage_key,
+                                Duration::from_secs(3600),
+                            )
+                            .await
+                            .map_err(|e| ApiError::Internal(e.to_string()))?;
+                        section_lines.push(format!(
+                            "[Attachment Link]\nfilename: {}\ncontent_type: {}\nreason: unsupported_type\ndownload_url: {}",
+                            attachment.filename, attachment.content_type, download_url
+                        ));
+                        processed_attachments += 1;
+                    }
+                },
+                Err(_) => {
+                    let download_url = state
+                        .storage_service
+                        .get_presigned_download_url(&attachment.storage_key, Duration::from_secs(3600))
+                        .await
+                        .map_err(|e| ApiError::Internal(e.to_string()))?;
+                    section_lines.push(format!(
+                        "[Attachment Link]\nfilename: {}\ncontent_type: {}\nreason: unsupported_type\ndownload_url: {}",
+                        attachment.filename, attachment.content_type, download_url
+                    ));
+                    processed_attachments += 1;
+                }
+            }
+        }
+
+        if section_lines.len() > 1 {
+            lines.extend(section_lines);
+            lines.push(String::new());
+        }
+    }
+
+    if lines.len() == 1 {
+        return Ok(None);
+    }
+
+    while lines.last().is_some_and(|line| line.is_empty()) {
+        lines.pop();
+    }
+    lines.push("=== END TASK CONTEXT ===".to_string());
+
+    Ok(Some(lines.join("\n")))
 }
 
 fn build_attempt_instruction(
@@ -1066,7 +1223,9 @@ pub async fn create_task_attempt(
     }
 
     let require_review = task_require_review(&task, &settings);
+    let task_context_block = build_task_context_prompt_block(&state, task.id).await?;
     let mut instruction = build_attempt_instruction(&task, &skill_context, require_review);
+    instruction = prepend_task_context_instruction(instruction, task_context_block.as_deref());
     let preferred_settings = state.settings_service.get().await.ok();
     let preferred_lang = preferred_settings
         .as_ref()
@@ -2007,6 +2166,8 @@ You previously worked on this task:
 Continue working on the same task. Build on your previous work."#,
         task_desc, wrapped_prompt
     );
+    let task_context_block = build_task_context_prompt_block(&state, task.id).await?;
+    instruction = prepend_task_context_instruction(instruction, task_context_block.as_deref());
     let preferred_settings = state.settings_service.get().await.ok();
     let preferred_lang = preferred_settings
         .as_ref()
@@ -4476,7 +4637,9 @@ pub async fn retry_attempt(
     }
 
     let require_review = task_require_review(&task, &settings);
+    let task_context_block = build_task_context_prompt_block(&state, task.id).await?;
     let mut instruction = build_attempt_instruction(&task, &skill_context, require_review);
+    instruction = prepend_task_context_instruction(instruction, task_context_block.as_deref());
     let preferred_settings = state.settings_service.get().await.ok();
     let preferred_lang = preferred_settings
         .as_ref()
