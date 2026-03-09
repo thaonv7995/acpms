@@ -32,15 +32,20 @@ import { useAttemptData } from './project-tasks/use-attempt-data';
 import { useKeyboardShortcuts } from './project-tasks/use-keyboard-shortcuts';
 import { ProjectTasksHeader } from './project-tasks/project-tasks-header';
 import { PreviewPanelWrapper } from './project-tasks/preview-panel-wrapper';
-import { createTaskAttempt, cancelAttempt, getTaskAttempts, getAttempt } from '../api/taskAttempts';
+import {
+  createTaskAttempt,
+  cancelAttempt,
+  getTaskAttempts,
+  getAttempt,
+  getAttemptArtifacts,
+} from '../api/taskAttempts';
 import { deleteTask } from '../api/tasks';
+import {
+  extractArtifactDownloadRefs,
+  type ArtifactDownloadRef,
+} from '../lib/artifact-downloads';
 
 type PreviewDeliveryKind = 'live_preview' | 'artifact_download' | 'unsupported';
-
-interface ArtifactDownloadEntry {
-  label: string;
-  url: string;
-}
 
 function normalizeProjectType(projectType?: string): string {
   return typeof projectType === 'string' ? projectType.trim().toLowerCase() : '';
@@ -59,41 +64,6 @@ function getPreviewDeliveryKind(projectType?: string): PreviewDeliveryKind {
     default:
       return 'unsupported';
   }
-}
-
-function getPrimaryArtifactDownload(
-  metadata?: Record<string, unknown>
-): ArtifactDownloadEntry | null {
-  if (!metadata) return null;
-
-  const appDownloads = Array.isArray(metadata.app_downloads)
-    ? metadata.app_downloads
-    : [];
-
-  for (const item of appDownloads) {
-    if (!item || typeof item !== 'object') continue;
-    const entry = item as Record<string, unknown>;
-    const url =
-      typeof entry.presigned_url === 'string'
-        ? entry.presigned_url
-        : typeof entry.url === 'string'
-          ? entry.url
-          : undefined;
-    if (!url) continue;
-    return {
-      label: typeof entry.label === 'string' ? entry.label : 'Download',
-      url,
-    };
-  }
-
-  if (typeof metadata.app_download_url === 'string' && metadata.app_download_url) {
-    return {
-      label: 'Download',
-      url: metadata.app_download_url,
-    };
-  }
-
-  return null;
 }
 
 function getAttemptPreviewUrl(
@@ -319,18 +289,16 @@ export function ProjectTasksPage() {
   const projectPreviewEnabled = Boolean(
     selectedProject?.settings?.auto_deploy || selectedProject?.settings?.preview_enabled
   );
-  const primaryArtifactDownload = useMemo(
-    () => getPrimaryArtifactDownload(selectedTask?.metadata),
-    [selectedTask?.metadata]
+  const artifactDownloads = useMemo(
+    () =>
+      usesArtifactDownloads
+        ? extractArtifactDownloadRefs(selectedAttempt?.metadata, selectedAttempt?.id)
+        : [],
+    [selectedAttempt?.id, selectedAttempt?.metadata, usesArtifactDownloads]
   );
   const selectedAttemptPreviewUrl = useMemo(
     () => getAttemptPreviewUrl(selectedAttempt?.metadata, selectedTask?.status),
     [selectedAttempt?.metadata, selectedTask?.status]
-  );
-  const isLatestAttemptSelected = Boolean(
-    selectedAttempt?.id &&
-    selectedTask?.latestAttemptId &&
-    selectedAttempt.id === selectedTask.latestAttemptId
   );
   const artifactDownloadDisabledReason = useMemo(() => {
     if (!usesArtifactDownloads) return undefined;
@@ -340,10 +308,7 @@ export function ProjectTasksPage() {
     if (!selectedAttempt) {
       return 'Open an attempt to access its preview artifact.';
     }
-    if (!isLatestAttemptSelected) {
-      return 'Download is available only for the latest attempt because artifact links are stored at task level.';
-    }
-    if (!primaryArtifactDownload) {
+    if (artifactDownloads.length === 0) {
       return 'Artifact will be available after this attempt completes and packaging succeeds.';
     }
     return undefined;
@@ -351,13 +316,8 @@ export function ProjectTasksPage() {
     usesArtifactDownloads,
     projectPreviewEnabled,
     selectedAttempt,
-    isLatestAttemptSelected,
-    primaryArtifactDownload,
+    artifactDownloads,
   ]);
-  const artifactDownloadUrl =
-    usesArtifactDownloads && !artifactDownloadDisabledReason
-      ? primaryArtifactDownload?.url
-      : undefined;
 
   // Navigation handlers
   // Use effectiveProjectIdFromUrl for navigation (only navigate if not 'all')
@@ -716,10 +676,42 @@ export function ProjectTasksPage() {
     });
   }, [selectedTask]);
 
-  const handleDownloadArtifactFromHeader = useCallback(() => {
-    if (!artifactDownloadUrl) return;
-    triggerArtifactDownload(artifactDownloadUrl);
-  }, [artifactDownloadUrl]);
+  const handleDownloadArtifactFromHeader = useCallback(
+    async (artifact?: ArtifactDownloadRef) => {
+      const targetArtifact = artifact ?? artifactDownloads[0];
+      if (!targetArtifact) return;
+
+      if (targetArtifact.legacyUrl && !targetArtifact.artifactId) {
+        triggerArtifactDownload(targetArtifact.legacyUrl);
+        return;
+      }
+
+      if (!targetArtifact.attemptId || !targetArtifact.artifactId) {
+        showToast('Artifact reference is incomplete for this attempt.', 'error');
+        return;
+      }
+
+      try {
+        const artifacts = await getAttemptArtifacts(targetArtifact.attemptId);
+        const matchedArtifact = artifacts.find(
+          (item) => item.id === targetArtifact.artifactId
+        );
+        const downloadUrl = matchedArtifact?.download_url;
+
+        if (!downloadUrl) {
+          showToast('Artifact is not ready for download yet.', 'error');
+          return;
+        }
+
+        triggerArtifactDownload(downloadUrl);
+      } catch (error) {
+        const message =
+          error instanceof Error ? error.message : 'Failed to prepare artifact download.';
+        showToast(message, 'error');
+      }
+    },
+    [artifactDownloads, showToast]
+  );
 
   // Cycle mode handler for keyboard shortcut
   const handleCycleMode = useCallback(() => {
@@ -850,8 +842,7 @@ export function ProjectTasksPage() {
       showPreviewToggle={supportsLivePreview}
       previewModeDisabled={false}
       previewModeDisabledReason={undefined}
-      downloadArtifactUrl={artifactDownloadUrl}
-      downloadArtifactLabel={primaryArtifactDownload?.label}
+      artifactDownloads={artifactDownloads}
       downloadDisabled={Boolean(usesArtifactDownloads && artifactDownloadDisabledReason)}
       downloadDisabledReason={artifactDownloadDisabledReason}
       onDownloadArtifact={usesArtifactDownloads ? handleDownloadArtifactFromHeader : undefined}

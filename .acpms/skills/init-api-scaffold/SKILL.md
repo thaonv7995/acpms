@@ -1,65 +1,80 @@
 ---
 name: init-api-scaffold
-description: Type-specific scaffolding requirements for API Service projects.
+description: Create a minimal but production-shaped API service scaffold with a runnable entrypoint, health endpoint, env/config structure, and verification-ready project layout.
 ---
 
-# Init API Service Scaffold
+# Init API Scaffold
 
 ## Objective
-Define scaffolding requirements for a new API service project. Use the project name and description from the Project Details section in the instruction. Follow Required Tech Stack or Required Stack By Layer if specified.
+Create a new API service baseline that is runnable, structured, and easy to
+extend without overbuilding infrastructure before the first useful endpoint
+exists.
 
-## Your Tasks
+When the API is HTTP-facing, the scaffold should also make the preview surface
+obvious: health/readiness must exist, and an OpenAPI or Swagger docs route
+should be added whenever the chosen framework can support it without forcing a
+heavy custom implementation.
 
-1. **Analyze the repository structure** (if existing) or create a new project scaffold
-2. **Set up the API development environment**:
-   - Initialize project (Cargo.toml for Rust, package.json for Node, requirements.txt for Python)
-   - Configure the web framework (Axum, Express, FastAPI, etc.)
-   - Set up database connectivity if needed
-3. **Create essential project files**:
-   - `README.md` with API overview, setup, and usage instructions
-   - `.gitignore` appropriate for the language/framework
-   - Environment configuration (`.env.example`)
-   - Docker configuration for local development
-4. **Set up API structure**:
-   - Route/endpoint organization
-   - Middleware setup (auth, logging, CORS, rate limiting)
-   - Error handling patterns
-   - Request/response validation
-5. **Configure database (if applicable)**:
-   - Migration system setup
-   - Connection pooling
-   - Initial schema design
-6. **Set up code quality tools**:
-   - Linting configuration
-   - Formatting configuration
-   - Type checking
-7. **Create initial API structure**:
-   - Health check endpoint (`/health`)
-   - API versioning (`/api/v1/`)
-   - Basic CRUD endpoint template
+## When This Applies
+- Project type is API or backend service
+- ACPMS is bootstrapping a new service from scratch
 
-## Tech Stack Recommendations
+## Inputs
+- Project name and brief
+- Required language/framework, if specified
+- Expected persistence or auth needs, if known
+- Preview/deploy expectation, especially if ACPMS preview should run from Docker
+- Supporting services such as database, cache, queue, broker, or worker
 
-For new projects, consider:
-- **Rust**: Axum + SQLx + tokio
-- **Node.js**: Express/Fastify + TypeScript + Prisma
-- **Python**: FastAPI + SQLAlchemy + Pydantic
-- **Go**: Gin/Echo + GORM
+## Workflow
+1. Choose the safest baseline stack that matches explicit requirements.
+2. Create the core project manifest and entrypoint.
+3. Add configuration handling and `.env.example`.
+4. Create at least:
+   - health endpoint
+   - versioned API root
+   - docs/spec route when the framework already has a clean low-friction path
+   - structured error handling shape
+5. Add container runtime files whenever ACPMS preview/deploy or helper services
+   require them:
+   - `Dockerfile`
+   - `docker-compose.yml` when orchestration or support services are needed
+6. Add Docker/dev defaults only when they support the baseline immediately.
+7. Leave the project in a runnable, verifiable state.
 
-## API Best Practices
+## Required Baseline
+- project manifest
+- source entrypoint
+- health endpoint
+- API version prefix
+- docs/spec route when the framework naturally supports it
+- README
+- `.gitignore`
+- `.env.example`
+- `Dockerfile` when the service is expected to run in ACPMS Docker preview/deploy
+- `docker-compose.yml` when helper services are part of the baseline runtime
 
-- Use RESTful conventions or GraphQL schema design
-- Implement proper HTTP status codes
-- Add request validation and sanitization
-- Include OpenAPI/Swagger documentation
-- Plan for authentication (JWT, OAuth2)
-- Consider rate limiting and caching strategies
+## Decision Rules
+| Situation | Action |
+|---|---|
+| Framework is explicitly requested | Follow it |
+| Framework can expose Swagger/OpenAPI with low friction | Include the docs route so preview can land on a useful API surface. |
+| Database need is unclear | Stub config, do not invent a full schema |
+| Auth is not in scope yet | Leave auth-ready structure but do not over-implement |
+| ACPMS preview/deploy expects Docker runtime | Include a working `Dockerfile` from init. |
+| Service depends on DB/cache/queue/broker | Include `docker-compose.yml` wiring for the app and support services. |
 
-## Output
+## Output Contract
+Emit:
+- `scaffold_status`
+- `selected_stack`
+- `created_files`
+- `container_strategy`
+- `api_preview_surface`
+- `verification_commands`
+- `assumptions`
 
-After completing initialization:
-1. List all created/modified files
-2. Provide API endpoint documentation
-3. Include example requests/responses
-4. Document database setup if applicable
-5. Highlight decisions made and rationale
+## Related Skills
+- `init-project-bootstrap`
+- `verify-test-build`
+- `init-project-context-file`

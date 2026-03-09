@@ -1,43 +1,43 @@
 ---
 name: requirement-breakdown
-description: Analyze a requirement and break it into focused tasks with evidence-based impact analysis, a dedicated AI breakdown session task, and a mandatory sprint confirmation gate before task creation.
+description: Analyze a requirement, gather concrete evidence, propose a bounded implementation plan, and prepare ACPMS-compatible task payloads after sprint confirmation.
 ---
 
 # Requirement Breakdown
 
 ## Objective
-Convert one requirement into a clear, implementable task plan for Vibe-Kanban without rambling.
+Turn one requirement into a focused implementation plan with evidence, impact
+analysis, a dedicated breakdown task, and clean proposed tasks that ACPMS can
+turn into work items.
 
-## When this applies
-- User asks to break/split requirement into tasks.
-- User asks for impact analysis before task creation.
-- User wants tasks attached to current sprint or user-selected sprint.
+## When This Applies
+- User asks to break down a requirement into tasks
+- User wants impact analysis before task creation
+- User wants structured task proposals tied to sprint planning
 
-## Mandatory workflow
-1. Clarify requirement intent and success criteria.
-2. Analyze current system evidence (files/endpoints/services/configs).
-3. Produce impact analysis (only relevant areas).
-4. Create one dedicated **AI breakdown session task** (analysis-only, not execution).
-5. Propose implementation tasks (small, reviewable, todo).
-6. Ask user to confirm sprint assignment.
-7. Only after confirmation, produce final task-creation payload(s).
+## Inputs
+- Requirement text
+- Relevant codebase/system evidence
+- Current sprint context, if known
 
-If critical context is missing, ask at most 3 targeted questions, then continue with explicit assumptions.
+## Workflow
+1. Clarify the requirement intent and success criteria.
+2. Inspect only the system evidence relevant to that requirement.
+3. Write a concise impact analysis.
+4. Propose one analysis-only breakdown task.
+5. Propose implementation tasks with scope, estimate, and definition of done.
+6. Ask for sprint assignment confirmation before final task-creation payloads.
 
-## AI breakdown session task (required)
-- This task belongs to Vibe-Kanban but is **not** an execution task.
-- Default `task_type`: `spike`.
-- Use `docs` only when the requirement is documentation-only.
-- If a dedicated `analysis` type is introduced later, prefer `analysis`.
-- Status must remain `todo`; do not auto-start or trigger coding attempt from this task.
-- Purpose: capture requirement analysis, impact summary, and proposed execution plan.
+## Decision Rules
+| Situation | Action |
+|---|---|
+| Critical context is missing | Ask a few targeted questions, then continue with explicit assumptions |
+| Requirement is docs-only | Prefer `docs` or `spike` where appropriate |
+| Requirement is broad | Break into 3-12 bounded implementation tasks |
+| Sprint is not confirmed | Stop before emitting final create-task payloads |
 
-Suggested title pattern:
-- `[Breakdown] <requirement title>`
-
-## Output contract
-Follow this section order exactly:
-
+## Output Contract
+Use this section order:
 1. `Requirement intent`
 2. `Current-system evidence`
 3. `Impact analysis`
@@ -45,38 +45,16 @@ Follow this section order exactly:
 5. `Implementation tasks (proposed)`
 6. `Sprint assignment (confirmation required)`
 
-### Realtime stream contract (required when running via agent attempt)
-- While analyzing, emit progressive lines exactly in this format so UI can append draft tasks in realtime:
-`BREAKDOWN_TASK {"title":"...","description":"...","task_type":"feature","priority":"medium","kind":"implementation"}`
-- Emit one `BREAKDOWN_TASK` line per task as soon as that task draft is ready (do not wait until the end).
-- After streaming lines, output one final JSON object matching `references/output_schema.md`.
+Realtime stream contract:
+- emit `BREAKDOWN_TASK { ... }` lines as drafts become ready
+- end with the final structured output or task payload proposal
 
-For each proposed implementation task include:
-- `title`
-- `goal` (1 sentence)
-- `scope` (in/out)
-- `task_type` (`feature|bug|refactor|docs|test|chore|hotfix|spike|small_task`)
-- `depends_on` (optional)
-- `estimate` (`S|M|L`)
-- `definition_of_done` (1-3 bullets)
+## Guardrails
+- No filler or repeated restatement
+- Every proposed task must map to a concrete impact item
+- Do not auto-start tasks from this flow
 
-## Mandatory confirmation gate
-Before outputting create-task payloads, ask user to confirm one option:
-- Assign all tasks to active/current sprint (recommended).
-- Assign all tasks to a specific sprint selected by user.
-- Leave sprint empty (`null`) for backlog.
-
-Do not skip this gate.
-
-## Task payload constraints
-- Breakdown session task + implementation tasks are all created with `status: "todo"`.
-- No task in this flow is auto-started.
-- Keep proposed tasks between 3 and 12 (implementation tasks only).
-
-Reference schema/checklist: [`references/output_schema.md`](references/output_schema.md)
-
-## Anti-rambling guardrails
-- No generic filler or repeated restatement.
-- Keep explanations concise and evidence-based.
-- Every task must map to a concrete impact item.
-- Use the same language as the user unless they request otherwise.
+## Related Skills
+- `project-assistant`
+- `init-import-analyze`
+- `task-preflight-check`

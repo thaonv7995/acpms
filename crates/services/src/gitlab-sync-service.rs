@@ -1,6 +1,8 @@
 use crate::gitlab::GitLabService;
+use crate::openclaw_gateway_events::OpenClawGatewayEventService;
 use anyhow::{Context, Result};
 use sqlx::{FromRow, PgPool};
+use std::sync::Arc;
 use uuid::Uuid;
 
 #[derive(FromRow)]
@@ -15,11 +17,24 @@ struct MrRow {
 pub struct GitLabSyncService {
     db: PgPool,
     gitlab_service: GitLabService,
+    openclaw_event_service: Option<Arc<OpenClawGatewayEventService>>,
 }
 
 impl GitLabSyncService {
     pub fn new(db: PgPool, gitlab_service: GitLabService) -> Self {
-        Self { db, gitlab_service }
+        Self {
+            db,
+            gitlab_service,
+            openclaw_event_service: None,
+        }
+    }
+
+    pub fn with_openclaw_events(
+        mut self,
+        openclaw_event_service: Arc<OpenClawGatewayEventService>,
+    ) -> Self {
+        self.openclaw_event_service = Some(openclaw_event_service);
+        self
     }
 
     /// Trigger incremental sync for a project
@@ -199,6 +214,25 @@ impl GitLabSyncService {
                     .bind(row.task_id)
                     .execute(&self.db)
                     .await;
+
+                    if let Some(openclaw_event_service) = &self.openclaw_event_service {
+                        if let Err(error) = openclaw_event_service
+                            .record_task_status_changed(
+                                project_id,
+                                row.task_id,
+                                "in_review",
+                                "done",
+                                "services.gitlab_sync_service.sync_mr_status_for_project",
+                            )
+                            .await
+                        {
+                            tracing::warn!(
+                                task_id = %row.task_id,
+                                error = %error,
+                                "Failed to emit OpenClaw task.status_changed event from GitLab sync"
+                            );
+                        }
+                    }
 
                     if let Some(aid) = row.attempt_id {
                         updated_attempt_ids.push(aid);

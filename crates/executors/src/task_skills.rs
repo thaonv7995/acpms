@@ -1989,11 +1989,14 @@ fn load_skill_from_roots(skill_id: &str, roots: &[SkillRootCandidate]) -> Option
             continue;
         };
 
+        let origin = crate::knowledge_index::skill_origin_from_content(&content)
+            .unwrap_or_else(|| root.origin.clone());
+
         return Some(LoadedSkill {
             id: skill_id.to_string(),
             content,
             source: Some(path),
-            origin: Some(root.origin.clone()),
+            origin: Some(origin),
         });
     }
 
@@ -2028,6 +2031,7 @@ fn candidate_skill_roots_from_globals(
     // 1. Per-project skills (worktree .acpms/skills)
     if let Some(repo) = repo_path {
         push(repo.join(".acpms").join("skills"), "repo-local");
+        push(repo.join(".acpms").join("vendor-skills"), "vendor");
     }
 
     for root in global_roots {
@@ -2072,6 +2076,12 @@ pub fn detect_skill_file(path: &Path) -> Option<DetectedSkillFile> {
 }
 
 fn detect_skill_origin(path: &Path) -> String {
+    if let Ok(content) = std::fs::read_to_string(path) {
+        if let Some(origin) = crate::knowledge_index::skill_origin_from_content(&content) {
+            return origin;
+        }
+    }
+
     let components = path
         .components()
         .filter_map(|component| component.as_os_str().to_str())
@@ -2089,11 +2099,20 @@ fn detect_skill_origin(path: &Path) -> String {
         if path.starts_with(&skills_root) {
             return "platform".to_string();
         }
+        if let Some(parent) = skills_root.parent() {
+            let vendor_root = parent.join("vendor-skills");
+            if path.starts_with(vendor_root) {
+                return "vendor".to_string();
+            }
+        }
     }
 
     if let Ok(cwd) = std::env::current_dir() {
         if path.starts_with(cwd.join(".acpms").join("skills")) {
             return "cwd".to_string();
+        }
+        if path.starts_with(cwd.join(".acpms").join("vendor-skills")) {
+            return "vendor".to_string();
         }
     }
 
@@ -2165,6 +2184,8 @@ fn builtin_skill_content(skill_id: &str) -> Option<&'static str> {
         ),
         "init-project-bootstrap" => Some(
             r#"Bootstrap initial project structure using selected stack.
+- If stack is not explicitly specified, infer it from the product shape instead of forcing one default framework.
+- If ACPMS preview/deploy expects Docker or the app needs helper services, scaffold Docker runtime files during init.
 - Keep setup minimal and reproducible.
 - Run baseline validation and summarize generated artifacts."#,
         ),
@@ -2174,22 +2195,57 @@ fn builtin_skill_content(skill_id: &str) -> Option<&'static str> {
 - Include key commands and workflows for future AI agents."#,
         ),
         "init-web-scaffold" => Some(
-            r#"Web app scaffold: package.json, build tools (Vite/Next.js), TypeScript, README, .gitignore, .env.example, ESLint/Prettier, src/, public/, routing. Use Project Details for name/description."#,
+            r#"Web app scaffold: choose stack from app shape, not from a hard-coded default.
+- Landing page/marketing site: keep stack lightweight.
+- SPA/dashboard/internal tool: prefer a client-first stack.
+- SSR/SEO-heavy site: prefer an SSR-capable stack.
+- Imported existing repo: preserve the existing viable stack.
+- If ACPMS preview uses Docker or helper services are needed, include Dockerfile and docker-compose.yml from init.
+- Deliver package.json, appropriate build tools, README, .gitignore, .env.example, src/, public/, routing/layout, and Docker runtime files only when the chosen stack/runtime needs them. Use Project Details for name/description."#,
         ),
         "init-api-scaffold" => Some(
-            r#"API scaffold: init project (Cargo/package/requirements), web framework, README, .gitignore, Docker, routes, middleware, health check, /api/v1/, CRUD template. Use Project Details for name/description."#,
+            r#"API scaffold: init project (Cargo/package/requirements), web framework, README, .gitignore, routes, middleware, health check, /api/v1/, CRUD template.
+- If the stack supports Swagger/OpenAPI cleanly, add docs/spec route so preview can land on API docs instead of a vague base URL.
+- Include Dockerfile when ACPMS preview/deploy expects Docker runtime.
+- Include docker-compose.yml when helper services such as DB/cache/queue are part of the baseline runtime.
+- Use Project Details for name/description."#,
         ),
         "init-mobile-scaffold" => Some(
-            r#"Mobile scaffold: React Native/Expo/Flutter, platform config, README, .gitignore, Info.plist, AndroidManifest, src/lib/, navigation, screens. Use Project Details for name/description."#,
+            r#"Mobile scaffold: choose stack from app shape, not from a hard-coded default.
+- Cross-platform MVP: prefer a fast-iteration stack.
+- Native-heavy cross-platform app: prefer a stack with deeper native control.
+- Mobile-first polished product: prefer the stack that best fits the requested runtime and team.
+- Imported existing app: preserve the current viable stack.
+- Decide whether this is a standalone mobile repo or a mobile app inside a monorepo.
+- Deliver platform config, entrypoint, navigation/screens structure, README, .gitignore, and preview/build commands appropriate for simulator, device, or artifact workflows.
+- Plan preview/build in explicit Android and iOS lanes, and report truthful limitations per lane. Use Project Details for name/description."#,
         ),
         "init-extension-scaffold" => Some(
-            r#"Extension scaffold: manifest.json V3, build tools, README, background/content/popup/options, permissions, multi-browser. Use Project Details for name/description."#,
+            r#"Extension scaffold: choose stack from extension shape, not from a hard-coded default.
+- Popup-only or lightweight extension: keep toolchain minimal.
+- Content-script-heavy or complex extension UI: choose a stack that matches those surfaces.
+- Imported existing extension: preserve the current viable stack.
+- Decide whether this is a standalone extension repo or an extension inside a monorepo.
+- Deliver manifest, background/service worker, required UI surfaces, README, .gitignore, and truthful load/build commands for unpacked or zip-based QA preview. Use Project Details for name/description."#,
         ),
         "init-desktop-scaffold" => Some(
-            r#"Desktop scaffold: Electron/Tauri, main/renderer, README, .gitignore, IPC, packaging, code signing. Use Project Details for name/description."#,
+            r#"Desktop scaffold: choose stack from app shape, not from a hard-coded default.
+- Lightweight native-feeling app: prefer a lighter desktop runtime.
+- JS/TS app with complex shell/native module needs: prefer a broader desktop shell stack.
+- Platform-specific app with deep OS integration: prefer the platform-native language/toolkit.
+- macOS + deep system integration: strongly consider Swift/SwiftUI/AppKit.
+- Windows + deep system integration: strongly consider .NET/WinUI/WPF.
+- Imported existing app: preserve the current viable stack.
+- Decide whether this is a standalone desktop repo or a desktop app inside a monorepo.
+- Deliver runtime entrypoint, UI entrypoint, package/build config, README, .gitignore, and truthful preview/build commands for dev app or packaged artifact workflows.
+- Plan preview/build in explicit Windows and macOS lanes, and report truthful limitations per lane. Use Project Details for name/description."#,
         ),
         "init-microservice-scaffold" => Some(
-            r#"Microservice scaffold: go.mod/Cargo.toml, Dockerfile, docker-compose, health/ready/live, metrics, logging, cmd/, api/, configs/. Use Project Details for name/description."#,
+            r#"Microservice scaffold: decide first whether this is a standalone service repo or one service inside a monorepo.
+- Scaffold health/ready/live, logging, config, and container runtime for the targeted service only.
+- If the service exposes an HTTP contract and the stack supports docs/specs cleanly, add that route so preview can land on the service contract surface.
+- Include docker-compose.yml when the service depends on supporting services or local orchestration.
+- Use Project Details for name/description."#,
         ),
         "init-import-analyze" => Some(
             r#"Analyze imported repository: explore directory structure, identify services/components, evaluate tech stack.
@@ -2202,19 +2258,24 @@ fn builtin_skill_content(skill_id: &str) -> Option<&'static str> {
         "build-artifact" => Some(
             r#"Produce build artifacts appropriate for project type.
 - Ensure output path exists.
+- API/microservice with HTTP contract: include docs/spec output when that is part of the preview surface.
+- Mobile: report Android and iOS artifact lanes separately.
+- Desktop: report Windows and macOS artifact lanes separately.
 - Record artifact commands and output summary in report."#,
         ),
         "preview-artifact-desktop" => Some(
-            r#"For desktop task previews, produce installable desktop artifacts.
+            r#"For desktop task previews, produce QA-usable desktop artifacts.
 - Keep build command/output dir aligned with project metadata.
-- Prefer native installers or platform bundles in the desktop output folder.
-- Report install notes for macOS and Windows when applicable."#,
+- Report explicit Windows and macOS lanes.
+- Prefer installers or bundles when they truly exist; otherwise report runnable or unpacked app truthfully.
+- Report install notes and environment limitations per lane."#,
         ),
         "preview-artifact-mobile" => Some(
             r#"For mobile task previews, produce downloadable test artifacts.
+- Report explicit Android and iOS lanes.
 - Prefer APK/AAB for Android; note clearly when iOS requires signing or simulator-only output.
 - Keep build command/output dir aligned with project metadata.
-- Report install steps and platform limitations."#,
+- Report install steps and platform limitations per lane."#,
         ),
         "preview-artifact-extension" => Some(
             r#"For extension task previews, produce downloadable extension bundles.
@@ -3185,20 +3246,31 @@ mod tests {
 
     #[test]
     fn detect_skill_file_extracts_skill_id_and_origin() {
-        let path = PathBuf::from("/Users/test/.acpms/skills/community-openai/openai-docs/SKILL.md");
+        let temp_dir = tempfile::tempdir().unwrap();
+        let skill_dir = temp_dir.path().join(".acpms").join("skills").join("openai-docs");
+        std::fs::create_dir_all(&skill_dir).unwrap();
+        let path = skill_dir.join("SKILL.md");
+        std::fs::write(
+            &path,
+            "---\nname: openai-docs\ndescription: repo managed copy\norigin: community-openai\n---\ncommunity copy",
+        )
+        .unwrap();
 
         let detected = detect_skill_file(&path).expect("skill file should be detected");
 
         assert_eq!(detected.skill_id, "openai-docs");
         assert_eq!(detected.origin, "community-openai");
-        assert_eq!(detected.source_path, path.to_string_lossy());
+        assert_eq!(
+            detected.source_path,
+            std::fs::canonicalize(path).unwrap().to_string_lossy()
+        );
     }
 
     #[test]
     fn detect_skill_file_resolves_symlinked_overlay_paths_to_real_source() {
         let temp_dir = tempfile::tempdir().unwrap();
         let platform_dir = temp_dir.path().join("platform-skills");
-        let community_skill_dir = platform_dir.join("community-openai").join("openai-docs");
+        let community_skill_dir = platform_dir.join("openai-docs");
         let overlay_dir = temp_dir
             .path()
             .join("overlay")
@@ -3209,7 +3281,7 @@ mod tests {
         std::fs::create_dir_all(overlay_dir.parent().unwrap()).unwrap();
         std::fs::write(
             community_skill_dir.join("SKILL.md"),
-            "---\nname: openai-docs\ndescription: repo managed copy\n---\ncommunity copy",
+            "---\nname: openai-docs\ndescription: repo managed copy\norigin: community-openai\n---\ncommunity copy",
         )
         .unwrap();
 
@@ -3246,10 +3318,9 @@ mod tests {
     fn runtime_skill_attachment_prefers_repo_managed_duplicate_over_codex_home() {
         let temp_dir = tempfile::tempdir().unwrap();
         let platform_dir = temp_dir.path().join("platform-skills");
-        let community_dir = platform_dir.join("community-openai");
         let codex_home_dir = temp_dir.path().join("codex-home").join("skills");
 
-        let community_skill_dir = community_dir.join("openai-docs");
+        let community_skill_dir = platform_dir.join("openai-docs");
         let codex_skill_dir = codex_home_dir.join("openai-docs");
 
         std::fs::create_dir_all(&community_skill_dir).unwrap();
@@ -3257,7 +3328,7 @@ mod tests {
 
         std::fs::write(
             community_skill_dir.join("SKILL.md"),
-            "---\nname: openai-docs\ndescription: bundled copy\n---\ncommunity copy",
+            "---\nname: openai-docs\ndescription: bundled copy\norigin: community-openai\n---\ncommunity copy",
         )
         .unwrap();
         std::fs::write(
@@ -3274,10 +3345,6 @@ mod tests {
                     origin: "platform".to_string(),
                 },
                 crate::knowledge_index::KnowledgeRoot {
-                    path: community_dir,
-                    origin: "community-openai".to_string(),
-                },
-                crate::knowledge_index::KnowledgeRoot {
                     path: codex_home_dir,
                     origin: "codex-home".to_string(),
                 },
@@ -3292,8 +3359,6 @@ mod tests {
             .source
             .as_ref()
             .expect("source path should exist")
-            .ends_with(Path::new(
-                "platform-skills/community-openai/openai-docs/SKILL.md"
-            )));
+            .ends_with(Path::new("platform-skills/openai-docs/SKILL.md")));
     }
 }

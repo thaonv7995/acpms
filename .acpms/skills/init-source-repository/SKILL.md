@@ -1,56 +1,53 @@
 ---
 name: init-source-repository
-description: Khởi tạo source code repository trên GitLab hoặc GitHub, push initial commit và ghi REPO_URL vào file contract.
+description: Initialize the source repository on GitLab or GitHub, push the first commit, and write REPO_URL to the init output contract.
 ---
 
 # Init Source Repository
 
 ## Objective
-Tạo repository source code mới trên GitLab hoặc GitHub (tùy GITLAB_URL), khởi tạo git, push commit đầu tiên và **bắt buộc** ghi REPO_URL vào file `.acpms/init-output.json` để hệ thống lưu vào database.
+Create or connect the remote source repository, push the initial commit, and
+write `repo_url` into `.acpms/init-output.json` so ACPMS can persist it
+reliably.
+
+## When This Applies
+- A new project needs its first remote repository
+- ACPMS init flow requires machine-readable `repo_url` output after push
+- The remote may already exist and only needs to be connected and recorded
 
 ## Inputs
-- Project name và slug.
-- PAT (env: GITLAB_PAT) — dùng cho GitLab hoặc GitHub.
-- Base URL (env: GITLAB_URL) — ví dụ https://gitlab.com hoặc https://github.com.
-- Visibility (public/private).
+- Project name and slug
+- `GITLAB_PAT` for GitLab or GitHub auth
+- `GITLAB_URL` to determine provider and base URL
+- Requested visibility
 
 ## Workflow
-1. Khởi tạo git repo: `git init`
-2. Tạo cấu trúc cơ bản: README.md, .gitignore
-3. Add và commit: `git add .` → `git commit -m "Initial commit"`
-4. Add remote: `git remote add origin <repo_url>`
-5. Push lên main: `git push -u origin main`
-6. **Ghi file contract** `.acpms/init-output.json` (bắt buộc)
-
-## Mandatory Output — File Contract
-Sau khi push thành công, **phải** tạo file `.acpms/init-output.json` với nội dung:
-
-```json
-{"repo_url": "https://gitlab.example.com/username/project-name"}
-```
-
-Ví dụ GitLab:
-```json
-{"repo_url": "https://gitlab.example.com/org/project-name"}
-```
-
-Ví dụ GitHub:
-```json
-{"repo_url": "https://github.com/username/project-name"}
-```
-
-- Tạo thư mục `.acpms/` nếu chưa có: `mkdir -p .acpms`
-- Ghi file: `echo '{"repo_url":"<url>"}' > .acpms/init-output.json`
-- Hệ thống đọc file này, lưu vào `projects.repository_url`, rồi xóa file.
+1. Create or locate the remote repository on the correct provider.
+2. Initialize git locally if needed and ensure there is a valid first commit.
+3. Add the remote URL and push the default branch.
+4. Only after push succeeds, write `.acpms/init-output.json`.
+5. If the remote already exists, reuse it and still persist the contract file.
 
 ## Decision Rules
-| Tình huống | Hành động |
-|------------|-----------|
-| Push thành công | Ghi `.acpms/init-output.json` ngay sau khi push. |
-| Push thất bại | Dừng, báo lỗi, không ghi file. |
-| Repo đã tồn tại | Dùng URL hiện có, vẫn ghi file. |
+| Situation | Action |
+|---|---|
+| Push succeeds | Write `.acpms/init-output.json` immediately after push. |
+| Push fails | Stop, report the error, and do not write the contract file. |
+| Repo already exists | Reuse the existing URL and still write the contract file. |
 
 ## Output Contract
-- `repo_url`: URL đầy đủ của repository (trong file JSON)
-- `init_status`: `success` | `failed`
-- File `.acpms/init-output.json` tồn tại với `repo_url` hợp lệ (bắt buộc)
+Write:
+
+```json
+{"repo_url":"https://example-host/org/project-name"}
+```
+
+Also emit:
+- `init_status`
+- `repo_url`
+
+## Related Skills
+- `init-project-bootstrap`
+- `gitlab-branch-and-commit`
+- `gitlab-merge-request`
+- `final-report`

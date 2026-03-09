@@ -9,8 +9,9 @@ use acpms_preview::PreviewManager;
 use acpms_services::{generate_jwt, hash_password};
 use acpms_services::{
     BuildService, EncryptionService, GitLabOAuthService, GitLabService, GitLabSyncService,
-    PatchStore, ProductionDeployService, SprintService, StorageService, StreamService,
-    SystemSettingsService, UserService, WebhookAdminService, WebhookManager,
+    OpenClawGatewayEventService, PatchStore, ProductionDeployService, SprintService,
+    StorageService, StreamService, SystemSettingsService, UserService, WebhookAdminService,
+    WebhookManager,
 };
 use axum::{
     body::Body,
@@ -28,7 +29,7 @@ use uuid::Uuid;
 use acpms_server::services::project_assistant_worker_pool::{
     ProjectAssistantJobHandler, ProjectAssistantWorkerPool,
 };
-use acpms_server::state::AppState;
+use acpms_server::state::{AppState, OpenClawGatewayConfig};
 // use acpms_server::routes; // Not needed, only create_router is used
 
 // Re-export for convenience
@@ -128,17 +129,34 @@ pub async fn create_test_app_state(pool: PgPool) -> AppState {
         .expect("Failed to create orchestrator")
         .with_skill_knowledge(acpms_executors::SkillKnowledgeHandle::disabled()),
     );
+    let metrics = acpms_server::observability::Metrics::new()
+        .expect("Failed to initialize metrics for tests");
+    let openclaw_gateway = Arc::new(OpenClawGatewayConfig::from_env());
+    let openclaw_event_service = Arc::new(
+        OpenClawGatewayEventService::new(pool.clone(), openclaw_gateway.event_retention_hours)
+            .with_optional_webhook(
+                openclaw_gateway.webhook_url.clone(),
+                openclaw_gateway.webhook_secret.clone(),
+            )
+            .with_metrics_observer(Arc::new(metrics.clone())),
+    );
+    openclaw_event_service
+        .sync_retained_event_row_count_metric()
+        .await
+        .expect("Failed to initialize OpenClaw retained-row metric for tests");
 
     // Initialize Services (GitLabService returns Result)
     let gitlab_service =
         Arc::new(GitLabService::new(pool.clone()).expect("Failed to create GitLab service"));
-    let gitlab_sync_service = Arc::new(GitLabSyncService::new(
-        pool.clone(),
-        (*gitlab_service).clone(),
-    ));
+    let gitlab_sync_service = Arc::new(
+        GitLabSyncService::new(pool.clone(), (*gitlab_service).clone())
+            .with_openclaw_events(openclaw_event_service.clone()),
+    );
     let user_service = UserService::new(pool.clone());
     let sprint_service = SprintService::new(pool.clone());
-    let webhook_manager = Arc::new(WebhookManager::new(pool.clone()));
+    let webhook_manager = Arc::new(
+        WebhookManager::new(pool.clone()).with_openclaw_events(openclaw_event_service.clone()),
+    );
 
     // GitLabOAuthService - set test env vars if not already set
     if std::env::var("GITLAB_CLIENT_ID").is_err() {
@@ -199,12 +217,10 @@ pub async fn create_test_app_state(pool: PgPool) -> AppState {
         broadcast_tx.clone(),
         pool.clone(),
     ));
-
     let mut state = AppState {
         worktrees_path: worktrees_path.clone(),
         db: pool,
-        metrics: acpms_server::observability::Metrics::new()
-            .expect("Failed to initialize metrics for tests"),
+        metrics,
         orchestrator,
         worker_pool: None,
         deployment_worker_pool: None,
@@ -225,7 +241,13 @@ pub async fn create_test_app_state(pool: PgPool) -> AppState {
         patch_store,
         stream_service,
         auth_session_store: Arc::new(acpms_server::services::agent_auth::AuthSessionStore::new()),
+        openclaw_gateway,
+        openclaw_event_service: openclaw_event_service.clone(),
     };
+
+    openclaw_event_service
+        .clone()
+        .spawn_agent_event_bridge(state.broadcast_tx.subscribe());
 
     let project_assistant_handler_state = state.clone();
     let project_assistant_handler: ProjectAssistantJobHandler =

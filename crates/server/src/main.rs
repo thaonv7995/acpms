@@ -12,10 +12,11 @@ mod types;
 use acpms_executors::ExecutorOrchestrator;
 use acpms_preview::PreviewManager;
 use anyhow::Context;
+use api::openapi_spec::ApiDoc;
 use axum::middleware as axum_middleware;
 use clap::Parser;
 use observability::{init_logging, request_id, Metrics};
-use state::AppState;
+use state::{AppState, OpenClawGatewayConfig};
 use std::collections::HashSet;
 use std::net::SocketAddr;
 use std::path::PathBuf;
@@ -29,7 +30,7 @@ use utoipa_swagger_ui::SwaggerUi;
 
 use acpms_db::models::AttemptStatus;
 use acpms_executors::AgentEvent;
-use acpms_services::{StorageService, TaskAttemptService};
+use acpms_services::{OpenClawGatewayEventService, StorageService, TaskAttemptService};
 
 /// R7: Spawn task that uploads JSONL logs to S3 when attempt completes.
 fn spawn_log_upload_on_complete(
@@ -96,205 +97,14 @@ fn spawn_log_upload_on_complete(
     });
 }
 
-#[derive(OpenApi)]
-#[openapi(
-    paths(
-        routes::auth::register,
-        routes::auth::login,
-        routes::users::list_users,
-        routes::users::get_user,
-        routes::users::update_user,
-        routes::users::delete_user,
-        routes::users::get_avatar_upload_url,
-        routes::projects::create_project,
-        routes::projects::list_projects,
-        routes::projects::get_project,
-        routes::projects::update_project,
-        routes::projects::delete_project,
-        routes::projects::recheck_project_repository_access,
-        routes::projects::link_existing_fork,
-        routes::projects::create_project_fork,
-        routes::projects::import_project_preflight,
-        routes::projects::import_project_create_fork,
-        routes::projects::import_project,
-        // Tasks
-        routes::tasks::create_task,
-        routes::tasks::list_tasks,
-        routes::tasks::get_task,
-        routes::tasks::update_task,
-        routes::tasks::delete_task,
-        routes::tasks::update_task_status,
-        routes::tasks::get_task_children,
-        routes::tasks::assign_task,
-        routes::tasks::update_task_metadata,
-        // Sprints
-        routes::sprints::list_project_sprints,
-        routes::sprints::create_sprint,
-        routes::sprints::generate_sprints,
-        routes::sprints::get_sprint,
-        routes::sprints::update_sprint,
-        routes::sprints::delete_sprint,
-        routes::sprints::get_active_sprint,
-        routes::sprints::activate_sprint,
-        routes::sprints::close_sprint,
-        routes::sprints::get_sprint_overview,
-        // Requirements
-        routes::requirements::create_requirement,
-        routes::requirements::list_project_requirements,
-        routes::requirements::get_requirement,
-        routes::requirements::update_requirement,
-        routes::requirements::delete_requirement,
-        routes::requirement_breakdowns::start_requirement_breakdown,
-        routes::requirement_breakdowns::get_requirement_breakdown_session,
-        routes::requirement_breakdowns::confirm_requirement_breakdown,
-        routes::requirement_breakdowns::confirm_requirement_breakdown_manual,
-        routes::requirement_breakdowns::cancel_requirement_breakdown,
-        routes::requirement_breakdowns::start_requirement_task_sequence,
-        // Dashboard
-        routes::dashboard::get_dashboard,
-        // Task Attempts
-        routes::task_attempts::create_task_attempt,
-        routes::task_attempts::get_task_attempts,
-        routes::task_attempts::get_attempt,
-        routes::task_attempts::get_attempt_logs,
-        routes::task_attempts::patch_attempt_log,
-        routes::execution_processes::list_execution_processes,
-        routes::execution_processes::get_execution_process,
-        routes::execution_processes::get_execution_process_raw_logs,
-        routes::execution_processes::get_execution_process_normalized_logs,
-        routes::execution_processes::follow_up_execution_process,
-        routes::execution_processes::reset_execution_process,
-        routes::task_attempts::send_attempt_input,
-        routes::task_attempts::cancel_attempt,
-        // GitLab
-        routes::gitlab::list_merge_requests,
-        routes::gitlab::get_merge_request_stats,
-        routes::gitlab::link_project,
-        routes::gitlab::get_status,
-        routes::gitlab::get_task_merge_requests,
-        routes::gitlab::handle_webhook,
-        // Health
-        routes::health::health_check,
-        routes::health::readiness_check,
-        routes::health::liveness_check,
-    ),
-    components(
-        schemas(
-            api::UserDto,
-            api::AuthResponseDto,
-            api::UserResponse,
-            api::UserListResponse,
-            api::AuthResponse,
-            api::EmptyResponse,
-            api::ResponseCode,
-            api::ApiErrorDetail,
-            routes::auth::RegisterRequest,
-            routes::auth::LoginRequest,
-            routes::users::UpdateUserRequest,
-            routes::users::GetUploadUrlRequest,
-            routes::users::UploadUrlResponse,
-            api::ProjectDto,
-            api::ProjectResponse,
-            api::ProjectListResponse,
-            api::ProjectStackSelectionDoc,
-            api::CreateProjectRequestDoc,
-            api::UpdateProjectRequestDoc,
-            acpms_db::models::ProjectSettings,
-            acpms_db::models::ProjectSettingsResponse,
-            routes::projects::ImportProjectRequest,
-            routes::projects::ImportProjectResponse,
-            // Tasks
-            api::TaskDto,
-            api::TaskResponse,
-            api::TaskListResponse,
-            api::CreateTaskRequestDoc,
-            api::UpdateTaskRequestDoc,
-            routes::tasks::UpdateStatusRequest,
-            routes::tasks::AssignTaskRequest,
-            routes::tasks::UpdateMetadataRequest,
-            // Sprints
-            api::SprintDto,
-            api::SprintResponse,
-            api::SprintListResponse,
-            api::CreateSprintRequestDoc,
-            api::UpdateSprintRequestDoc,
-            api::GenerateSprintsRequestDoc,
-            api::CreateNextSprintRequestDoc,
-            api::CloseSprintRequestDoc,
-            api::CloseSprintResultResponse,
-            api::SprintOverviewResponse,
-            acpms_db::models::SprintCarryOverMode,
-            acpms_db::models::CreateNextSprintRequest,
-            acpms_db::models::CloseSprintRequest,
-            acpms_db::models::CloseSprintResult,
-            acpms_db::models::SprintOverview,
-            // Requirements
-            api::RequirementDto,
-            api::RequirementResponse,
-            api::RequirementListResponse,
-            api::CreateRequirementRequestDoc,
-            api::UpdateRequirementRequestDoc,
-            // Dashboard
-            api::DashboardResponse,
-            api::DashboardDataDoc,
-            api::DashboardStatsDoc,
-            api::StatsMetricDoc,
-            api::AgentStatsDoc,
-            api::SystemLoadDoc,
-            api::PrStatsDoc,
-            api::DashboardProjectDoc,
-            api::AgentAvatarDoc,
-            api::DashboardAgentLogDoc,
-            api::DashboardHumanTaskDoc,
-            api::UserAvatarDoc,
-            // Task Attempts
-            api::TaskAttemptDto,
-            api::TaskAttemptResponse,
-            api::TaskAttemptListResponse,
-            api::AgentLogDto,
-            api::AgentLogListResponse,
-            api::CreateTaskAttemptRequestDoc,
-            api::SendInputRequestDoc,
-            routes::task_attempts::CancelAttemptRequest,
-            routes::task_attempts::ResumeAttemptRequest,
-            routes::execution_processes::ExecutionProcessDto,
-            // GitLab
-            api::GitLabConfigurationDto,
-            api::MergeRequestDto,
-            api::MergeRequestOverviewDto,
-            api::MergeRequestStatsDto,
-            api::GitLabConfigurationResponse,
-            api::MergeRequestListResponse,
-            api::MergeRequestOverviewListResponse,
-            api::MergeRequestStatsResponse,
-            api::LinkGitLabProjectRequestDoc,
-            // Health
-            routes::health::HealthStatus,
-            routes::health::ComponentHealth,
-            routes::health::HealthResponse,
-        )
-    ),
-    tags(
-        (name = "Auth", description = "Authentication endpoints"),
-        (name = "Users", description = "User management endpoints"),
-        (name = "Projects", description = "Project management endpoints"),
-        (name = "Tasks", description = "Task management endpoints"),
-        (name = "Sprints", description = "Sprint management endpoints"),
-        (name = "Requirements", description = "Requirement management endpoints"),
-        (name = "Dashboard", description = "Dashboard endpoints"),
-        (name = "Task Attempts", description = "Task attempt endpoints"),
-        (name = "GitLab", description = "GitLab integration endpoints"),
-        (name = "Health", description = "Health check endpoints"),
-    )
-)]
-struct ApiDoc;
-
 fn infer_download_target(artifact_type: &str) -> (&'static str, &'static str) {
     let value = artifact_type.to_ascii_lowercase();
     if value.contains("windows") {
         ("windows", "Windows")
     } else if value.contains("macos") || value.contains("darwin") || value.contains("osx") {
         ("macos", "macOS")
+    } else if value.contains("linux") || value.contains("appimage") {
+        ("linux", "Linux")
     } else if value.contains("ios") {
         ("ios", "iOS")
     } else if value.contains("android") {
@@ -310,17 +120,18 @@ fn download_rank(os: &str) -> i32 {
     match os {
         "windows" => 0,
         "macos" => 1,
-        "ios" => 2,
+        "linux" => 2,
         "android" => 3,
-        "browser" => 4,
-        _ => 5,
+        "ios" => 4,
+        "browser" => 5,
+        _ => 6,
     }
 }
 
 fn finalize_app_downloads(
     project_type: acpms_db::models::ProjectType,
     mut app_downloads: Vec<serde_json::Value>,
-) -> (Option<String>, Vec<serde_json::Value>) {
+) -> Vec<serde_json::Value> {
     if project_type == acpms_db::models::ProjectType::Desktop {
         let mut desktop_only: Vec<serde_json::Value> = app_downloads
             .iter()
@@ -328,7 +139,7 @@ fn finalize_app_downloads(
                 entry
                     .get("os")
                     .and_then(|value| value.as_str())
-                    .map(|os| os == "windows" || os == "macos")
+                    .map(|os| os == "windows" || os == "macos" || os == "linux")
                     .unwrap_or(false)
             })
             .cloned()
@@ -347,13 +158,7 @@ fn finalize_app_downloads(
             .unwrap_or(99)
     });
 
-    let primary_url = app_downloads
-        .first()
-        .and_then(|entry| entry.get("url"))
-        .and_then(|value| value.as_str())
-        .map(ToString::to_string);
-
-    (primary_url, app_downloads)
+    app_downloads
 }
 
 async fn update_task_metadata_patch(
@@ -370,6 +175,26 @@ async fn update_task_metadata_patch(
         "#,
     )
     .bind(task_id)
+    .bind(metadata_patch)
+    .execute(db)
+    .await?;
+    Ok(())
+}
+
+async fn update_attempt_metadata_patch(
+    db: &acpms_db::PgPool,
+    attempt_id: Uuid,
+    metadata_patch: serde_json::Value,
+) -> anyhow::Result<()> {
+    sqlx::query(
+        r#"
+        UPDATE task_attempts
+        SET metadata = COALESCE(metadata, '{}'::jsonb) || $2::jsonb,
+            updated_at = NOW()
+        WHERE id = $1
+        "#,
+    )
+    .bind(attempt_id)
     .bind(metadata_patch)
     .execute(db)
     .await?;
@@ -826,6 +651,7 @@ async fn handle_attempt_success_deployment(
         || attempt.metadata.get("deployment_report").is_some();
 
     let mut metadata_patch = serde_json::Map::new();
+    let mut attempt_metadata_patch = serde_json::Map::new();
 
     match delivery_mode {
         TaskSuccessDeliveryMode::Preview => {
@@ -947,6 +773,14 @@ async fn handle_attempt_success_deployment(
                     "app_downloads".to_string(),
                     serde_json::Value::Array(Vec::new()),
                 );
+                attempt_metadata_patch.insert(
+                    "app_download_url".to_string(),
+                    serde_json::Value::Null,
+                );
+                attempt_metadata_patch.insert(
+                    "app_downloads".to_string(),
+                    serde_json::Value::Array(Vec::new()),
+                );
             } else if let Err(e) = build_service.run_build(&project, attempt_id, None).await {
                 tracing::error!(
                     "Build pipeline failed for attempt {} ({:?}): {}",
@@ -956,45 +790,38 @@ async fn handle_attempt_success_deployment(
                 );
             } else {
                 let artifacts = build_service.get_attempt_artifacts(attempt_id).await?;
-                let _primary_artifact = artifacts.first();
                 if !artifacts.is_empty() {
                     let mut app_downloads: Vec<serde_json::Value> = Vec::new();
 
                     for artifact in &artifacts {
                         let (target, label) = infer_download_target(&artifact.artifact_type);
-                        let public_url = storage_service.get_public_url(&artifact.artifact_key);
-                        let presigned_url = build_service
-                            .get_artifact_download_url(&artifact.artifact_key)
-                            .await
-                            .ok();
 
                         app_downloads.push(serde_json::json!({
+                            "attempt_id": attempt_id,
                             "artifact_id": artifact.id,
+                            "artifact_key": artifact.artifact_key,
                             "artifact_type": artifact.artifact_type,
                             "os": target,
                             "label": label,
-                            "url": public_url,
-                            "presigned_url": presigned_url,
                             "size_bytes": artifact.size_bytes,
                             "created_at": artifact.created_at,
                         }));
                     }
 
-                    let (primary_url, app_downloads) =
-                        finalize_app_downloads(project.project_type, app_downloads);
-
-                    if let Some(primary_url) = primary_url {
-                        metadata_patch.insert(
-                            "app_download_url".to_string(),
-                            serde_json::Value::String(primary_url),
-                        );
-                    }
-
+                    let app_downloads = finalize_app_downloads(project.project_type, app_downloads);
                     metadata_patch.insert(
+                        "app_downloads".to_string(),
+                        serde_json::Value::Array(app_downloads.clone()),
+                    );
+                    metadata_patch.insert(
+                        "deployment_kind".to_string(),
+                        serde_json::Value::String("artifact_downloads".to_string()),
+                    );
+                    attempt_metadata_patch.insert(
                         "app_downloads".to_string(),
                         serde_json::Value::Array(app_downloads),
                     );
-                    metadata_patch.insert(
+                    attempt_metadata_patch.insert(
                         "deployment_kind".to_string(),
                         serde_json::Value::String("artifact_downloads".to_string()),
                     );
@@ -1005,6 +832,10 @@ async fn handle_attempt_success_deployment(
 
     if !metadata_patch.is_empty() {
         update_task_metadata_patch(db, task.id, serde_json::Value::Object(metadata_patch)).await?;
+    }
+    if !attempt_metadata_patch.is_empty() {
+        update_attempt_metadata_patch(db, attempt_id, serde_json::Value::Object(attempt_metadata_patch))
+            .await?;
     }
 
     Ok(())
@@ -1403,15 +1234,13 @@ mod tests {
     #[test]
     fn finalize_app_downloads_prefers_native_desktop_installers() {
         let app_downloads = vec![
-            serde_json::json!({ "os": "generic", "url": "https://example.test/bundle.zip" }),
-            serde_json::json!({ "os": "macos", "url": "https://example.test/app.dmg" }),
-            serde_json::json!({ "os": "windows", "url": "https://example.test/app.exe" }),
+            serde_json::json!({ "os": "generic", "artifact_key": "builds/bundle.zip" }),
+            serde_json::json!({ "os": "macos", "artifact_key": "builds/app.dmg" }),
+            serde_json::json!({ "os": "windows", "artifact_key": "builds/app.exe" }),
         ];
 
-        let (primary_url, filtered) =
-            finalize_app_downloads(acpms_db::models::ProjectType::Desktop, app_downloads);
+        let filtered = finalize_app_downloads(acpms_db::models::ProjectType::Desktop, app_downloads);
 
-        assert_eq!(primary_url.as_deref(), Some("https://example.test/app.exe"));
         assert_eq!(filtered.len(), 2);
         assert_eq!(
             filtered[0].get("os").and_then(|value| value.as_str()),
@@ -1426,31 +1255,25 @@ mod tests {
     #[test]
     fn finalize_app_downloads_keeps_desktop_bundle_when_no_native_installer_exists() {
         let app_downloads = vec![
-            serde_json::json!({ "os": "generic", "url": "https://example.test/bundle.tar.gz" }),
-            serde_json::json!({ "os": "browser", "url": "https://example.test/web.zip" }),
+            serde_json::json!({ "os": "generic", "artifact_key": "builds/bundle.tar.gz" }),
+            serde_json::json!({ "os": "browser", "artifact_key": "builds/web.zip" }),
         ];
 
-        let (primary_url, filtered) =
-            finalize_app_downloads(acpms_db::models::ProjectType::Desktop, app_downloads);
+        let filtered = finalize_app_downloads(acpms_db::models::ProjectType::Desktop, app_downloads);
 
-        assert_eq!(primary_url.as_deref(), Some("https://example.test/web.zip"));
         assert_eq!(filtered.len(), 2);
     }
 
     #[test]
     fn finalize_app_downloads_preserves_extension_entries_and_browser_priority() {
         let app_downloads = vec![
-            serde_json::json!({ "os": "generic", "url": "https://example.test/source.zip" }),
-            serde_json::json!({ "os": "browser", "url": "https://example.test/extension.zip" }),
+            serde_json::json!({ "os": "generic", "artifact_key": "builds/source.zip" }),
+            serde_json::json!({ "os": "browser", "artifact_key": "builds/extension.zip" }),
         ];
 
-        let (primary_url, filtered) =
+        let filtered =
             finalize_app_downloads(acpms_db::models::ProjectType::Extension, app_downloads);
 
-        assert_eq!(
-            primary_url.as_deref(),
-            Some("https://example.test/extension.zip")
-        );
         assert_eq!(filtered.len(), 2);
         assert_eq!(
             filtered[0].get("os").and_then(|value| value.as_str()),
@@ -1500,14 +1323,10 @@ mod tests {
             Some("artifact_downloads")
         );
 
-        let app_download_url = metadata
-            .get("app_download_url")
-            .and_then(|value| value.as_str())
-            .expect("missing primary app_download_url");
         assert!(
-            app_download_url.contains("/builds/"),
-            "expected public artifact URL, got: {}",
-            app_download_url
+            metadata.get("app_download_url").is_none()
+                || metadata.get("app_download_url") == Some(&serde_json::Value::Null),
+            "expected app_download_url to be absent for fresh artifact flow"
         );
 
         let app_downloads = metadata
@@ -1525,9 +1344,16 @@ mod tests {
         );
         assert!(app_downloads.iter().all(|entry| {
             entry
-                .get("presigned_url")
+                .get("artifact_key")
                 .and_then(|value| value.as_str())
-                .map(|url| url.contains("/builds/"))
+                .map(|key| key.contains("/builds/"))
+                .unwrap_or(false)
+        }));
+        assert!(app_downloads.iter().all(|entry| {
+            entry
+                .get("attempt_id")
+                .and_then(|value| value.as_str())
+                .map(|id| id == attempt_id.to_string())
                 .unwrap_or(false)
         }));
 
@@ -1607,9 +1433,9 @@ mod tests {
             Some("Browser")
         );
         assert!(app_downloads[0]
-            .get("url")
+            .get("artifact_key")
             .and_then(|value| value.as_str())
-            .map(|url| url.contains("/builds/"))
+            .map(|key| key.contains("/builds/"))
             .unwrap_or(false));
 
         let artifact_type = sqlx::query_scalar::<_, String>(
@@ -1882,16 +1708,38 @@ async fn main() -> anyhow::Result<()> {
     // Initialize encryption service
     let encryption_key = std::env::var("ENCRYPTION_KEY").context("ENCRYPTION_KEY must be set")?;
     let encryption_service = Arc::new(EncryptionService::new(&encryption_key)?);
+    let metrics = Metrics::new()?;
+    tracing::info!("Prometheus metrics initialized");
+    let openclaw_gateway = Arc::new(OpenClawGatewayConfig::from_env());
+    let openclaw_event_service = Arc::new(
+        OpenClawGatewayEventService::new(pool.clone(), openclaw_gateway.event_retention_hours)
+            .with_optional_webhook(
+                openclaw_gateway.webhook_url.clone(),
+                openclaw_gateway.webhook_secret.clone(),
+            )
+            .with_metrics_observer(Arc::new(metrics.clone())),
+    );
+    if let Err(error) = openclaw_event_service
+        .sync_retained_event_row_count_metric()
+        .await
+    {
+        tracing::warn!(
+            "Failed to initialize OpenClaw retained-row metric: {}",
+            error
+        );
+    }
 
     // Initialize Services
     let gitlab_service = Arc::new(GitLabService::new(pool.clone())?);
-    let gitlab_sync_service = Arc::new(GitLabSyncService::new(
-        pool.clone(),
-        (*gitlab_service).clone(),
-    ));
+    let gitlab_sync_service = Arc::new(
+        GitLabSyncService::new(pool.clone(), (*gitlab_service).clone())
+            .with_openclaw_events(openclaw_event_service.clone()),
+    );
     let user_service = UserService::new(pool.clone());
     let sprint_service = SprintService::new(pool.clone());
-    let webhook_manager = Arc::new(WebhookManager::new(pool.clone()));
+    let webhook_manager = Arc::new(
+        WebhookManager::new(pool.clone()).with_openclaw_events(openclaw_event_service.clone()),
+    );
     let gitlab_oauth_service = Arc::new(GitLabOAuthService::from_env(pool.clone())?);
     let webhook_admin_service = Arc::new(WebhookAdminService::new(pool.clone()));
 
@@ -2029,10 +1877,6 @@ async fn main() -> anyhow::Result<()> {
         .and_then(|s| s.parse().ok())
         .unwrap_or(4);
 
-    // Initialize metrics
-    let metrics = Metrics::new()?;
-    tracing::info!("Prometheus metrics initialized");
-
     // Phase 3: Initialize JSON Patch streaming infrastructure
     let patch_store = Arc::new(acpms_services::PatchStore::new(100)); // Keep last 100 patches
     let stream_service = Arc::new(
@@ -2040,7 +1884,6 @@ async fn main() -> anyhow::Result<()> {
             .with_storage(storage_service.clone()),
     );
     tracing::info!("JSON Patch streaming infrastructure initialized");
-
     // Create AppState
     let mut state = AppState {
         worktrees_path: worktrees_path,
@@ -2066,7 +1909,16 @@ async fn main() -> anyhow::Result<()> {
         patch_store,
         stream_service,
         auth_session_store: Arc::new(crate::services::agent_auth::AuthSessionStore::new()),
+        openclaw_gateway,
+        openclaw_event_service: openclaw_event_service.clone(),
     };
+
+    openclaw_event_service
+        .clone()
+        .spawn_agent_event_bridge(broadcast_tx.subscribe());
+    openclaw_event_service
+        .clone()
+        .spawn_webhook_delivery_worker();
 
     let deployment_handler_state = state.clone();
     let deployment_handler = Arc::new(move |job: DeploymentJob| {
@@ -2137,6 +1989,22 @@ async fn main() -> anyhow::Result<()> {
             interval.tick().await;
             if let Err(e) = preview_manager_cleanup.cleanup_expired_previews().await {
                 tracing::error!("Failed to cleanup expired previews: {}", e);
+            }
+        }
+    });
+
+    let openclaw_event_cleanup_service = openclaw_event_service.clone();
+    tokio::spawn(async move {
+        tracing::info!("Starting OpenClaw event cleanup job");
+        let mut interval = tokio::time::interval(std::time::Duration::from_secs(3600));
+
+        loop {
+            interval.tick().await;
+            if let Err(error) = openclaw_event_cleanup_service
+                .cleanup_expired_events()
+                .await
+            {
+                tracing::warn!("Failed to cleanup expired OpenClaw events: {}", error);
             }
         }
     });

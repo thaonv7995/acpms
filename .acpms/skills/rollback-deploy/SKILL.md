@@ -1,33 +1,49 @@
 ---
 name: rollback-deploy
-description: Roll back to a known-good deployment when current release is unsafe or non-functional.
+description: Restore the last known good deployment when the current release is unsafe, unhealthy, or clearly worse than the previous verified state.
 ---
 
 # Rollback Deploy
 
 ## Objective
-Restore service stability quickly when deployment introduces critical regressions.
+Return service to the last verified good deployment as quickly and safely as
+possible when the current release should not remain active.
 
-## Trigger Conditions
-- Health checks fail after deploy.
-- Critical endpoint regression detected.
-- Invalid routing/configuration causes outage.
+## When This Applies
+- Health checks fail after deploy
+- Critical endpoint regression is confirmed
+- Routing or artifact changes created a severe outage
+- A post-deploy smoke check recommends rollback
+
+## Inputs
+- Current failing deployment reference
+- Last known good deployment reference
+- Verification evidence for both current and previous state
 
 ## Workflow
-1. Identify last known good deployment reference.
-2. Execute rollback for the active target.
-3. Verify service health post-rollback.
-4. Record rollback reason, target reference, and verification evidence.
+1. Confirm rollback is warranted.
+2. Identify the last known good deployment or route.
+3. Perform the rollback for the active target.
+4. Re-run post-rollback verification.
+5. Report whether rollback fully recovered service or only partially improved it.
 
 ## Decision Rules
 | Situation | Action |
 |---|---|
-| No verified previous deployment exists | Escalate and mark rollback blocked. |
-| Partial recovery only | Report degraded state and next mitigation steps. |
+| No verified previous deployment exists | Mark rollback blocked |
+| Rollback succeeds and verification passes | Mark recovered |
+| Rollback succeeds but verification is still degraded | Mark partial |
+| Rollback command fails | Mark failed and keep incident open |
 
 ## Output Contract
-Include `Rollback Summary`:
-- `rollback_executed`: `true` or `false`.
-- `rollback_target`: deployment ref/ID.
-- `rollback_reason`: concise root cause.
-- `post_rollback_verification`: checks and result.
+Emit:
+- `rollback_executed`
+- `rollback_target`
+- `rollback_reason`
+- `rollback_status`: `recovered` | `partial` | `blocked` | `failed`
+- `post_rollback_verification`
+
+## Related Skills
+- `post-deploy-smoke-and-healthcheck`
+- `deploy-cancel-stop-cleanup`
+- `cloudflare-incident-rollback`

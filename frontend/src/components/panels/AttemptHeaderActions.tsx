@@ -4,12 +4,16 @@ import { ToggleGroup, ToggleGroupItem } from '@/components/ui/toggle-group';
 import {
   DropdownMenu,
   DropdownMenuContent,
+  DropdownMenuLabel,
   DropdownMenuItem,
   DropdownMenuTrigger,
 } from '@/components/ui/dropdown-menu';
 import type { LayoutMode } from '../layout/TasksLayout';
 import type { KanbanTask } from '../../types/project';
 import type { TaskAttempt } from '../../types/task-attempt';
+import type { ArtifactDownloadRef } from '@/lib/artifact-downloads';
+
+export interface AttemptArtifactDownloadItem extends ArtifactDownloadRef {}
 
 interface AttemptHeaderActionsProps {
   onClose: () => void;
@@ -20,11 +24,10 @@ interface AttemptHeaderActionsProps {
   showPreviewToggle?: boolean;
   previewDisabled?: boolean;
   previewDisabledReason?: string;
-  downloadArtifactUrl?: string;
-  downloadArtifactLabel?: string;
+  artifactDownloads?: AttemptArtifactDownloadItem[];
   downloadDisabled?: boolean;
   downloadDisabledReason?: string;
-  onDownloadArtifact?: () => void;
+  onDownloadArtifact?: (artifact?: AttemptArtifactDownloadItem) => void;
   onCreateAttempt?: () => void;
   onOpenGitActions?: () => void;
   onDeleteTask?: () => void;
@@ -39,8 +42,7 @@ export function AttemptHeaderActions({
   showPreviewToggle = true,
   previewDisabled = false,
   previewDisabledReason,
-  downloadArtifactUrl,
-  downloadArtifactLabel,
+  artifactDownloads = [],
   downloadDisabled = false,
   downloadDisabledReason,
   onDownloadArtifact,
@@ -48,13 +50,16 @@ export function AttemptHeaderActions({
   onOpenGitActions,
   onDeleteTask,
 }: AttemptHeaderActionsProps) {
+  const enabledDownloads = artifactDownloads.filter(
+    (artifact) => Boolean(artifact.legacyUrl || (artifact.attemptId && artifact.artifactId))
+  );
   const hasMenuItems = Boolean(
     (task && onCreateAttempt) ||
       (attempt && onOpenGitActions) ||
       (task && onDeleteTask)
   );
   const hasDownloadAction = Boolean(
-    downloadArtifactUrl || downloadDisabledReason || downloadDisabled
+    enabledDownloads.length > 0 || downloadDisabledReason || downloadDisabled
   );
   const toggleValue = hasDownloadAction
     ? mode === 'diffs'
@@ -62,14 +67,15 @@ export function AttemptHeaderActions({
       : ''
     : mode ?? '';
 
-  const handleDownloadArtifact = () => {
+  const handleDownloadArtifact = (artifact?: AttemptArtifactDownloadItem) => {
     if (downloadDisabled) return;
     if (onDownloadArtifact) {
-      onDownloadArtifact();
+      onDownloadArtifact(artifact);
       return;
     }
-    if (downloadArtifactUrl) {
-      window.open(downloadArtifactUrl, '_blank', 'noopener,noreferrer');
+    const fallbackUrl = artifact?.legacyUrl ?? enabledDownloads[0]?.legacyUrl;
+    if (fallbackUrl) {
+      window.open(fallbackUrl, '_blank', 'noopener,noreferrer');
     }
   };
 
@@ -78,16 +84,48 @@ export function AttemptHeaderActions({
       {typeof mode !== 'undefined' && onModeChange && (
         <div className="inline-flex items-center gap-1">
           {hasDownloadAction ? (
-            <Button
-              variant="ghost"
-              size="sm"
-              className="h-8 w-8 p-0"
-              onClick={handleDownloadArtifact}
-              disabled={downloadDisabled || !downloadArtifactUrl}
-              title={downloadDisabledReason || downloadArtifactLabel || 'Download artifact'}
-            >
-              <Download className="h-4 w-4" />
-            </Button>
+            enabledDownloads.length > 1 && !downloadDisabled ? (
+              <DropdownMenu>
+                <DropdownMenuTrigger asChild>
+                  <Button
+                    variant="ghost"
+                    size="sm"
+                    className="h-8 w-8 p-0"
+                    title="Download artifact"
+                  >
+                    <Download className="h-4 w-4" />
+                  </Button>
+                </DropdownMenuTrigger>
+                <DropdownMenuContent align="end">
+                  <DropdownMenuLabel className="text-xs font-semibold uppercase tracking-wide">
+                    Download artifact
+                  </DropdownMenuLabel>
+                  {enabledDownloads.map((artifact, index) => (
+                    <DropdownMenuItem
+                      key={`${artifact.artifactId ?? artifact.legacyUrl ?? artifact.label}-${index}`}
+                      onClick={() => handleDownloadArtifact(artifact)}
+                    >
+                      {artifact.label}
+                    </DropdownMenuItem>
+                  ))}
+                </DropdownMenuContent>
+              </DropdownMenu>
+            ) : (
+              <Button
+                variant="ghost"
+                size="sm"
+                className="h-8 w-8 p-0"
+                onClick={() => handleDownloadArtifact(enabledDownloads[0])}
+                disabled={downloadDisabled || enabledDownloads.length === 0}
+                title={
+                  downloadDisabledReason ||
+                  enabledDownloads[0]?.label ||
+                  'Download artifact'
+                }
+              >
+                <Download className="h-4 w-4" />
+              </Button>
+            )
           ) : (
             <ToggleGroup
               type="single"

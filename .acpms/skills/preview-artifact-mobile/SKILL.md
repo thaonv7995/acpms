@@ -1,37 +1,77 @@
 ---
 name: preview-artifact-mobile
-description: Use when a mobile project has task preview enabled and the agent must make the post-task preview artifact installable, reproducible, and clear for QA to test on device or simulator.
+description: Produce QA-usable mobile preview artifacts such as APK, AAB, IPA, or equivalent packaged outputs, with honest installability notes.
 ---
 
-# Mobile Preview Artifact
+# Preview Artifact Mobile
 
-Use this after `build-artifact` for mobile projects where task preview is delivered as a downloadable artifact.
+## Objective
+Generate mobile artifacts that QA can actually use, while being explicit about
+platform, signing, and device/simulator limitations.
 
-## Goal
-- Produce a QA-usable mobile build from the standard project build pipeline.
-- Keep the build command and output directory aligned with ACPMS artifact collection.
+Mobile preview is not a browser URL by default. Prefer the most honest preview
+surface for the current stack and environment: simulator/emulator run, Expo/dev
+bundle, or installable artifact.
+
+Treat mobile delivery as two preview lanes when the product targets both major
+platforms:
+- Android
+- iOS
+
+## When This Applies
+- Project type is mobile
+- Task preview is delivered as downloadable build output
+
+## Inputs
+- Mobile stack
+- Build/package command
+- Output directory
+- Platform signing constraints
+- Available preview surfaces:
+  - simulator/emulator
+  - Expo/dev client
+  - Android artifact
+  - iOS artifact
+  - screenshots or evidence captured from a successful run
 
 ## Workflow
-1. Identify the actual stack first: React Native, Expo, Flutter, Capacitor, native iOS, native Android, or another mobile toolchain.
-2. Reuse the repository's canonical packaging flow when possible. If the current command is broken, fix the repo so packaging is repeatable.
-3. Keep metadata aligned with the real mobile output:
-   - default command is `npx eas build --local`
-   - default output directory is `build`
-   - if the project uses a different command or folder, update project metadata
-4. Prefer direct tester artifacts:
-   - Android: `.apk` first, `.aab` if that is the supported release format
-   - iOS: `.ipa` only when signing is available; otherwise document simulator or local signing constraints
-5. Make sure the output directory contains at least one artifact or packaged bundle that QA can use.
+1. Detect the mobile stack and the real preview path for that stack.
+2. Prefer the best preview surface available in this order:
+   - simulator/emulator run
+   - Expo/dev client or equivalent dev bundle
+   - Android artifact (`.apk`) or other installable package
+   - iOS artifact only when signing/export is actually available
+3. Reuse the project’s native packaging flow when it works.
+4. Produce the artifact or preview bundle appropriate to the environment.
+5. Validate each platform lane separately:
+   - Android lane
+   - iOS lane
+6. Document installability, simulator limitations, and signing constraints
+   honestly.
 
-## Guardrails
-- Do not claim iOS installability if signing, provisioning, or notarization is missing.
-- Do not switch the task to live preview behavior.
-- If only one platform is buildable in the current environment, report the unsupported platform explicitly instead of hiding it.
+## Decision Rules
+| Situation | Action |
+|---|---|
+| Expo or equivalent dev bundle is the main preview path | Report that preview path instead of pretending there is a web URL |
+| Android artifact exists | Prefer `.apk` for easiest QA install |
+| iOS signing is unavailable | Do not claim device installability |
+| Only one platform can be built | Report the unsupported platform clearly |
+| Android and iOS are both in scope | Always report both lanes, even if one ends as `unavailable_in_current_environment` |
+| No installable artifact can be produced but simulator/dev bundle works | Treat simulator/dev bundle as the preview surface and report it clearly |
 
-## Final Report
-Include:
-- build command used
-- output directory
-- produced artifact types
-- install steps for Android and iOS when relevant
-- signing, simulator, or device limitations
+## Output Contract
+Emit:
+- `artifact_preview_status`
+- `artifact_build_command`
+- `artifact_output_directory`
+- `artifact_types`
+- `preview_surface`: `simulator` | `emulator` | `dev_bundle` | `android_artifact` | `ios_artifact`
+- `android_artifact_status`
+- `android_artifact_path`
+- `ios_artifact_status`
+- `ios_artifact_path`
+- `qa_install_notes`
+
+## Related Skills
+- `build-artifact`
+- `init-mobile-scaffold`

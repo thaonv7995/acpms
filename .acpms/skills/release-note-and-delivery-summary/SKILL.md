@@ -1,38 +1,50 @@
 ---
 name: release-note-and-delivery-summary
-description: Generate release-ready delivery summary for task, MR, issue, and deployment consumers.
+description: Produce a concise, reusable delivery summary that can feed MR descriptions, issue updates, task completion notes, and handoff communications.
 ---
 
 # Release Note And Delivery Summary
 
 ## Objective
-Provide one canonical summary that can be reused across MR, issue updates, and task completion logs.
+Write one concise delivery summary that other ACPMS steps can reuse instead of
+repeating different versions of the same outcome across MRs, issues, and final
+reports.
+
+## When This Applies
+- A task finished with meaningful delivery output
+- A merge request, issue comment, or handoff note needs a concise summary
+- ACPMS needs one canonical delivery block for downstream reuse
 
 ## Inputs
-- Code change summary.
-- Verification outcomes.
-- Deployment/rollback outcomes.
-- Known risks and follow-ups.
+- What changed
+- Verification results
+- Deployment or preview status
+- Known risks and next steps
 
 ## Workflow
-1. Summarize user-visible and technical changes separately.
-2. Add verification evidence and links.
-3. Add deployment state and endpoints/URLs.
-4. Add risk and follow-up actions with owners where possible.
-5. Produce concise, copy-ready release note block.
+1. Summarize the actual user-visible or operator-visible change.
+2. Capture the most important verification outcomes.
+3. Add deploy/preview status only when relevant.
+4. Add follow-up risk only if it matters for the next reader.
+5. Keep the final summary compact and reusable.
 
-## Required Sections
-1. `What Changed`
-2. `Why`
-3. `Validation`
-4. `Deployment`
-5. `Risk / Follow-up`
+## Decision Rules
+| Situation | Action |
+|---|---|
+| Docs-only or small change | Keep summary very short |
+| Verification has a pre-existing failure | Mention it only if it affects trust in delivery |
+| No deploy occurred | Say so briefly or omit deploy section entirely |
 
 ## Output Contract
-Include:
+Emit:
 - `delivery_status`: `complete` | `partial` | `blocked`
 - `user_impact`
 - `technical_impact`
 - `verification_highlights`
 - `deployment_highlights`
 - `followups`
+
+## Related Skills
+- `final-report`
+- `review-handoff`
+- `gitlab-issue-sync`

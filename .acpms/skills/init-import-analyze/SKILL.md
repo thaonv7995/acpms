@@ -1,88 +1,54 @@
 ---
 name: init-import-analyze
-description: Analyze an imported GitLab repository to understand structure, services, and current state for architecture mapping.
+description: Analyze an imported repository and write `.acpms/import-analysis.json` so ACPMS understands the architecture, services, and current technical state before planning further work.
 ---
 
 # Init Import Analyze
 
 ## Objective
-After cloning a repository from GitLab, analyze the project to understand its structure, identify services/components, evaluate current state, and produce an architecture map for ACPMS.
+Turn a cloned/imported repository into a structured ACPMS architecture summary
+without modifying application code or guessing beyond available evidence.
 
 ## When This Applies
-- GitLab import init task (existing repository cloned locally)
-- Run after `git clone` completes, before bootstrap/PRD generation
+- ACPMS cloned an existing repository
+- The init flow is import-based rather than from-scratch
+- Architecture mapping is needed before planning tasks or generating PRD context
+
+## Inputs
+- Current repository contents
+- Key manifests, configs, and entry points
+- Detected project type or service topology
 
 ## Workflow
-
-1. **Explore Directory Structure**
-   - List root directory and key subdirectories (src/, app/, packages/, services/, etc.)
-   - Identify monorepo vs single-package layout
-   - Note configuration files: package.json, Cargo.toml, go.mod, requirements.txt, docker-compose, etc.
-
-2. **Identify Services and Components**
-   - Frontend: React/Vue/Svelte/Angular apps, static sites, Next.js/Nuxt
-   - Backend/API: Express/FastAPI/NestJS/Axum/Actix, serverless handlers
-   - Database: Prisma, migrations, ORM configs
-   - Workers/Queue: Bull/Celery/background jobs
-   - Auth: NextAuth/Clerk/Auth0/JWT config
-   - Storage: S3/MinIO/upload handlers
-   - Microservices: Docker/K8s, gRPC, internal APIs
-
-3. **Evaluate Current State**
-   - Tech stack (languages, frameworks, databases)
-   - Build system (Vite/Webpack/Cargo/npm scripts)
-   - Test/lint setup
-   - Deployment config (Dockerfile, CI, cloud configs)
-   - Document any notable gaps or technical debt
-
-4. **Produce Output**
-   - Write `.acpms/import-analysis.json` with the required schema (see Output Contract)
-
-## Output Contract
-
-Create `.acpms/import-analysis.json` in the project root with this structure:
-
-```json
-{
-  "architecture": {
-    "nodes": [
-      { "id": "browser", "label": "Browser Client", "type": "client", "status": "healthy" },
-      { "id": "frontend", "label": "Web Frontend", "type": "frontend", "status": "healthy" },
-      { "id": "api", "label": "Application API", "type": "api", "status": "healthy" },
-      { "id": "database", "label": "Primary Database", "type": "database", "status": "healthy" }
-    ],
-    "edges": [
-      { "source": "browser", "target": "frontend", "label": "HTTPS" },
-      { "source": "frontend", "target": "api", "label": "REST/GraphQL" },
-      { "source": "api", "target": "database", "label": "Read/Write" }
-    ]
-  },
-  "assessment": {
-    "project_type": "web",
-    "summary": "Next.js full-stack app with PostgreSQL",
-    "services": ["frontend", "api", "database"],
-    "tech_stack": ["next", "react", "postgresql", "prisma"]
-  }
-}
-```
-
-### Node Types
-- `client`, `frontend`, `api`, `database`, `cache`, `queue`, `storage`, `auth`, `gateway`, `service`, `mobile`, `worker`
-
-### Edge Labels
-- `HTTPS`, `REST/GraphQL`, `Read/Write`, `Cache`, `Jobs`, `OIDC/OAuth`, `Token Verify`, `IPC`, etc.
+1. Inspect root files and key subdirectories.
+2. Identify deployable units and major components.
+3. Infer the architecture graph from manifests, configs, and source structure.
+4. Summarize tech stack, services, and current project shape.
+5. Write `.acpms/import-analysis.json` with valid JSON.
 
 ## Decision Rules
 | Situation | Action |
-|-----------|--------|
-| Simple frontend-only app | Minimal nodes: browser, frontend (maybe database if direct) |
-| Full-stack with API | Include api, database, auth if present |
-| Monorepo with multiple packages | Map each deployable service as a node |
-| Unclear structure | Infer from package.json scripts, Dockerfile, entry points |
-| No .acpms/ directory | Create it before writing the file |
+|---|---|
+| Frontend-only app | Keep the graph minimal |
+| Full-stack app | Include frontend, API, database, auth, and storage when evidenced |
+| Monorepo | Model each deployable service separately |
+| Structure is unclear | Infer conservatively and explain uncertainty in summary |
+
+## Output Contract
+Create `.acpms/import-analysis.json` with:
+- `architecture.nodes`
+- `architecture.edges`
+- `assessment.project_type`
+- `assessment.summary`
+- `assessment.services`
+- `assessment.tech_stack`
 
 ## Guardrails
-- Do NOT modify any source code. Read-only analysis.
-- Do NOT run install/build unless necessary to infer structure (prefer static analysis).
-- Output must be valid JSON. Validate before writing.
-- If analysis fails, still write a minimal valid JSON with empty nodes/edges and assessment.summary explaining the failure.
+- Read-only analysis; do not modify source files
+- Prefer static analysis over install/build
+- If analysis is partial, still write valid JSON with the best supported summary
+
+## Related Skills
+- `init-read-references`
+- `init-project-context-file`
+- `requirement-breakdown`

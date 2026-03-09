@@ -17,6 +17,7 @@ use uuid::Uuid;
 use crate::api::{ApiResponse, RequestChangesResponseDto, ReviewCommentDto};
 use crate::error::{ApiError, ApiResult};
 use crate::middleware::{AuthUser, Permission, RbacChecker};
+use crate::routes::openclaw;
 use crate::AppState;
 
 #[derive(Debug, FromRow)]
@@ -578,6 +579,15 @@ pub async fn request_changes(
                 error
             )));
         }
+        openclaw::emit_task_status_changed(
+            &state,
+            task.project_id,
+            task.id,
+            task.status,
+            TaskStatus::InProgress,
+            "routes.reviews.request_changes.new_attempt",
+        )
+        .await;
 
         let instruction = format!(
             r#"## Previous Context
@@ -674,6 +684,15 @@ Address the feedback and continue. Build on your previous work."#,
             error
         )));
     }
+    openclaw::emit_task_status_changed(
+        &state,
+        task.project_id,
+        task.id,
+        task.status,
+        TaskStatus::InProgress,
+        "routes.reviews.request_changes.resume_attempt",
+    )
+    .await;
     match attempt_service
         .transition_completed_to_running(attempt_id)
         .await

@@ -1,38 +1,56 @@
 ---
 name: preview-artifact-extension
-description: Use when a browser extension project has task preview enabled and the agent must make the post-task preview artifact downloadable, loadable in the browser, and predictable for QA.
+description: Produce a browser-extension artifact that QA can load predictably, either as a zip or as a built unpacked extension directory.
 ---
 
-# Extension Preview Artifact
+# Preview Artifact Extension
 
-Use this after `build-artifact` for extension projects where task preview is delivered as a downloadable bundle rather than a live URL.
+## Objective
+Generate a QA-ready extension artifact that matches the repo’s real build output
+and can be loaded or distributed without extra hidden steps.
 
-## Goal
-- Produce a browser-loadable extension preview package from the normal build pipeline.
-- Keep ACPMS artifact collection aligned with the real extension output.
+Extension preview is artifact-based by default. Prefer the most honest preview
+surface for the current toolchain: zip when supported, otherwise a complete
+unpacked extension directory with clear load steps.
+
+## When This Applies
+- Project type is extension
+- Task preview is artifact-based, not live URL based
+
+## Inputs
+- Extension build toolchain
+- Real build command
+- Real output directory
+- Available preview surfaces:
+  - zipped extension package
+  - unpacked extension directory
+  - browser-specific load instructions when required
 
 ## Workflow
-1. Detect the build stack first: raw WebExtension, Plasmo, WXT, Vite-based extension tooling, or another framework.
-2. Reuse the current extension build if it works. If it does not, fix the repository so the standard build command succeeds reliably.
-3. Keep metadata aligned with the real output:
-   - default command is `npm run build:ext`
-   - default output directory is `ext`
-   - if the project emits to another path, update project metadata
-4. Prefer a ready-made `.zip` when the toolchain already produces one. Otherwise make sure the built extension directory is complete so ACPMS can zip it for download.
-5. Verify the built output contains the files QA needs:
-   - manifest
-   - background/service worker bundle when applicable
-   - popup/options/content script assets when applicable
+1. Detect the extension stack and current build output.
+2. Reuse the normal extension build flow.
+3. Ensure the built output contains the manifest and required runtime assets.
+4. Prefer zip output when the toolchain already supports it.
+5. Otherwise provide a complete unpacked extension directory.
+6. Document browser-specific load steps when QA needs to load it manually.
 
-## Guardrails
-- Do not treat extension preview as a live preview URL.
-- Do not ship only source files when a built bundle is expected.
-- Preserve browser-specific manifest requirements and document any unsupported browser targets.
+## Decision Rules
+| Situation | Action |
+|---|---|
+| Zip output exists | Prefer zip for QA download |
+| Only unpacked directory exists | Use it and document load steps |
+| Browser target requires manual developer-mode loading | Provide accurate QA load steps instead of pretending installability |
+| Build succeeds but manifest/runtime files are missing | Treat artifact as invalid |
 
-## Final Report
-Include:
-- build command used
-- output directory
-- whether QA should use the generated zip or unpacked directory
-- browser load steps
-- browser-specific limitations
+## Output Contract
+Emit:
+- `artifact_preview_status`
+- `artifact_build_command`
+- `artifact_output_directory`
+- `artifact_delivery_mode`
+- `preview_surface`: `zip` | `unpacked_extension`
+- `qa_load_steps`
+
+## Related Skills
+- `build-artifact`
+- `init-extension-scaffold`

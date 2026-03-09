@@ -1,66 +1,105 @@
 ---
 name: init-desktop-scaffold
-description: Type-specific scaffolding requirements for Desktop Application projects.
+description: Create a desktop application baseline with a runnable shell, packaging-aware structure, and clear separation between app runtime layers.
 ---
 
-# Init Desktop Application Scaffold
+# Init Desktop Scaffold
 
 ## Objective
-Define scaffolding requirements for a new desktop application project. Use the project name and description from the Project Details section in the instruction. Follow Required Tech Stack or Required Stack By Layer if specified.
+Bootstrap a desktop app that is runnable and packaging-aware, while keeping the
+initial scaffold simple enough to iterate on safely.
 
-## Your Tasks
+Do not hard-code one desktop framework for all apps. If the user does not
+explicitly specify a stack, choose the desktop stack that best fits the product
+shape, native/runtime depth, platform targets, and team constraints.
 
-1. **Analyze the repository structure** (if existing) or create a new project scaffold
-2. **Set up the desktop development environment**:
-   - Initialize Electron or Tauri project
-   - Configure build system for multi-platform support
-   - Set up TypeScript/Rust configuration
-3. **Create essential project files**:
-   - `README.md` with project overview and build instructions
-   - `.gitignore` for desktop projects (build outputs, platform-specific)
-   - Environment configuration
-4. **Configure desktop framework**:
-   - **Electron**: Main process, renderer process, preload scripts
-   - **Tauri**: Rust backend, frontend configuration, security settings
-5. **Set up native integrations**:
-   - System tray support
-   - Native menus
-   - File system access
-   - IPC (Inter-Process Communication)
-6. **Set up code quality tools**:
-   - ESLint/Clippy configuration
-   - Prettier/rustfmt configuration
-   - Security auditing
-7. **Create initial project structure**:
-   - Main process entry point
-   - Renderer/frontend application
-   - Shared types and utilities
-8. **Configure packaging and distribution**:
-   - Code signing setup (placeholder)
-   - Auto-update configuration
-   - Platform-specific installers
+## When This Applies
+- Project type is desktop
+- ACPMS is creating an Electron, Tauri, Wails, or similar desktop baseline
 
-## Tech Stack Recommendations
+## Inputs
+- Project brief
+- Requested stack or framework
+- Target platforms, if known
+- Product shape inferred from the brief:
+  - lightweight desktop wrapper
+  - native-heavy desktop app
+  - JS/TS desktop app with complex shell integrations
+  - imported existing desktop app
+- Native integration depth inferred from the brief:
+  - light shell only
+  - moderate OS integration
+  - deep platform/system integration
+- Repo-shape clues:
+  - standalone desktop repo
+  - desktop app inside a monorepo
 
-For new projects, consider:
-- **Tauri** (Rust + Web frontend): Smaller bundle, better security, native performance
-- **Electron** (Node.js): Larger ecosystem, easier web developer transition
-- **Frontend**: React, Vue, or Svelte with TypeScript
-- **Build Tools**: electron-builder, tauri-cli
+## Workflow
+1. Decide repo shape from the brief or existing layout:
+   - standalone desktop app repo
+   - desktop app inside a monorepo
+2. Select the desktop stack:
+   - explicit stack requirement -> follow it
+   - lightweight native-feeling cross-platform app -> prefer Tauri or equivalent
+   - JS/TS app with broad Node/native module ecosystem needs -> prefer Electron
+   - Go-heavy desktop stack -> prefer Wails or equivalent
+   - macOS-first app with deep system integration -> prefer Swift/SwiftUI/AppKit
+   - Windows-first app with deep system integration -> prefer .NET/WinUI/WPF or equivalent
+   - Linux-first app with deep native desktop requirements -> prefer the native toolkit/runtime most appropriate to the distro target
+   - imported existing app -> preserve the current viable stack
+3. Create the desktop runtime shell and frontend/backend split appropriate to
+   the selected stack.
+4. Add basic packaging/build configuration.
+5. Plan preview/build outputs in two platform lanes from the start when the
+   brief expects cross-platform delivery:
+   - Windows
+   - macOS
+6. Create README, ignore files, and environment/config stubs.
+7. Leave a runnable dev path and a clear package path.
 
-## Desktop-Specific Considerations
+## Required Baseline
+- main/runtime entrypoint
+- UI entrypoint
+- build/package config
+- README
+- `.gitignore`
+- dev run command
+- package/build command path
+- a Windows artifact lane when Windows is in scope
+- a macOS artifact lane when macOS is in scope
 
-- Handle multiple windows and window management
-- Implement proper security (context isolation, CSP)
-- Consider offline functionality
-- Handle native OS integrations (notifications, file associations)
-- Plan for auto-updates and version management
-- Test on all target platforms (Windows, macOS, Linux)
+## Decision Rules
+| Situation | Action |
+|---|---|
+| Stack explicitly specified | Follow it |
+| Brief implies the app lives with other apps/services in one repo | Preserve or create a monorepo-friendly layout; do not force standalone structure |
+| Imported existing app already has a viable stack | Preserve it instead of re-platforming |
+| App is cross-platform and mostly UI/shell logic | Prefer a cross-platform desktop stack before reaching for a platform-native one |
+| App needs moderate native integration but still targets multiple OSes | Prefer a cross-platform runtime with a credible native bridge story |
+| App is platform-specific and must integrate deeply with the OS | Prefer the platform-native language/toolkit over Electron/Tauri/Wails |
+| macOS app needs deep system hooks, privileged APIs, or native UX fidelity | Prefer Swift/SwiftUI/AppKit unless the user explicitly requires another stack |
+| Windows app needs deep shell/system integration | Prefer a Windows-native stack such as .NET/WinUI/WPF unless the user explicitly requires another stack |
+| Signing/notarization unavailable | Document it; do not pretend it is solved |
+| Both Windows and macOS are in scope | Define preview/package expectations for both lanes even if only one can be produced in the current environment. |
+| Native integrations are not required yet | Stub structure, do not overbuild |
+| ACPMS only needs artifact or app-run preview | Do not add Docker runtime files by default |
 
-## Output
+## Output Contract
+Emit:
+- `scaffold_status`
+- `selected_stack`
+- `stack_selection_reason`
+- `repo_shape_selected`
+- `created_files`
+- `package_strategy`
+- `verification_commands`
+- `desktop_preview_strategy`
+- `windows_preview_lane`
+- `macos_preview_lane`
+- `assumptions`
 
-After completing initialization:
-1. List all created/modified files
-2. Provide build instructions for each platform
-3. Document IPC patterns and security considerations
-4. Highlight decisions made and rationale
+## Related Skills
+- `init-project-bootstrap`
+- `monorepo-service-selector`
+- `preview-artifact-desktop`
+- `verify-test-build`

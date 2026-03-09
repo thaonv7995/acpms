@@ -142,6 +142,20 @@ export async function getAttemptDiffSummary(attemptId: string): Promise<DiffSumm
   return apiGet<DiffSummaryResponse>(`${API_PREFIX}/attempts/${attemptId}/diff-summary`);
 }
 
+export interface AttemptArtifact {
+  id: string;
+  artifact_key: string;
+  artifact_type: string;
+  size_bytes: number | null;
+  file_count: number | null;
+  download_url: string | null;
+  created_at: string;
+}
+
+export async function getAttemptArtifacts(attemptId: string): Promise<AttemptArtifact[]> {
+  return apiGet<AttemptArtifact[]>(`${API_PREFIX}/attempts/${attemptId}/artifacts`);
+}
+
 export async function approveAttempt(attemptId: string, commitMessage?: string): Promise<void> {
   return apiPost<void>(`${API_PREFIX}/attempts/${attemptId}/approve`, {
     commit_message: commitMessage,

@@ -1,5 +1,6 @@
 pub mod auth;
 pub mod metrics;
+pub mod openclaw_gateway;
 pub mod validation;
 
 #[path = "rbac-types.rs"]
@@ -12,6 +13,7 @@ pub mod rbac_checker;
 pub mod rate_limit;
 
 pub use auth::*;
+pub use openclaw_gateway::*;
 pub use rbac_checker::*;
 pub use rbac_types::*;
 pub use validation::*;

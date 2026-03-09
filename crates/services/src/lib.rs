@@ -57,6 +57,9 @@ pub mod gitlab_oauth_service;
 #[path = "gitlab-sync-service.rs"]
 pub mod gitlab_sync_service;
 
+#[path = "openclaw-gateway-events.rs"]
+pub mod openclaw_gateway_events;
+
 #[path = "system-settings-service.rs"]
 pub mod system_settings_service;
 
@@ -81,6 +84,10 @@ pub use gitlab_oauth_service::GitLabOAuthService;
 pub use gitlab_oauth_types::*;
 pub use gitlab_sync_service::{GitLabSyncService, SyncResult};
 pub use normalized_logs::NormalizedLogService;
+pub use openclaw_gateway_events::{
+    FailedOpenClawWebhookDelivery, NewOpenClawGatewayEvent, OpenClawGatewayEvent,
+    OpenClawGatewayEventService, OpenClawGatewayMetricsObserver, OpenClawWebhookDeliveryStats,
+};
 pub use project::ProjectService;
 pub use project_assistant_instruction::{
     apply_preferred_language_to_follow_up_input, build_instruction, build_start_instruction,

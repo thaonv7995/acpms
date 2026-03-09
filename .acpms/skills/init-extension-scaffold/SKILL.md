@@ -1,81 +1,81 @@
 ---
 name: init-extension-scaffold
-description: Type-specific scaffolding requirements for Browser Extension projects.
+description: Create a browser extension baseline with manifest, background runtime, UI surface, and build output suitable for QA and later store packaging.
 ---
 
-# Init Browser Extension Scaffold
+# Init Extension Scaffold
 
 ## Objective
-Define scaffolding requirements for a new browser extension project. Use the project name and description from the Project Details section in the instruction. Follow Required Tech Stack or Required Stack By Layer if specified.
+Bootstrap a browser extension that is runnable as an unpacked extension and has
+the minimum correct structure for permissions, background logic, and UI.
 
-## Your Tasks
+Do not hard-code one extension toolchain for all projects. If the user does not
+explicitly specify a stack, choose the extension stack that best fits the
+required browser targets, UI surface, and maintainability needs.
 
-1. **Analyze the repository structure** (if existing) or create a new project scaffold
-2. **Set up the extension development environment**:
-   - Create `manifest.json` (Manifest V3 preferred)
-   - Configure build tools (Webpack, Vite, or Rollup)
-   - Set up TypeScript configuration
-3. **Create essential project files**:
-   - `README.md` with extension overview and installation instructions
-   - `.gitignore` for extension projects
-   - Environment configuration for different browsers
-4. **Configure manifest.json**:
-   - Define permissions (minimal required)
-   - Set up content scripts
-   - Configure background service worker
-   - Define popup and options pages
-5. **Set up extension components**:
-   - Background service worker
-   - Content scripts (if needed)
-   - Popup UI
-   - Options page (if needed)
-   - Side panel (if applicable)
-6. **Set up code quality tools**:
-   - ESLint with browser extension rules
-   - Prettier configuration
-   - Type checking for WebExtension APIs
-7. **Create initial project structure**:
-   - `src/background/` - Service worker
-   - `src/content/` - Content scripts
-   - `src/popup/` - Popup UI
-   - `src/options/` - Options page
-   - `public/` - Static assets (icons, etc.)
-8. **Configure multi-browser support**:
-   - Chrome extension manifest
-   - Firefox compatibility (if needed)
-   - Safari compatibility (if needed)
+## When This Applies
+- Project type is browser extension
+- ACPMS is creating a new extension from scratch
 
-## Tech Stack Recommendations
+## Inputs
+- Project brief
+- Browser target assumptions
+- Required UI surfaces, if specified
+- Product shape inferred from the brief:
+  - popup-only extension
+  - content-script-heavy extension
+  - background/service-worker-heavy extension
+  - multi-browser extension
+  - imported existing extension
+- Repo-shape clues:
+  - standalone extension repo
+  - extension inside a monorepo
 
-For new projects, consider:
-- **Manifest**: V3 (Chrome) with V2 fallback for Firefox if needed
-- **Framework**: React, Vue, or vanilla TypeScript
-- **Build Tool**: Vite with CRXJS or Webpack
-- **Storage**: chrome.storage.sync/local
-- **Messaging**: chrome.runtime.sendMessage
+## Workflow
+1. Decide repo shape from the brief or existing layout:
+   - standalone extension repo
+   - extension inside a monorepo
+2. Choose the extension toolchain and manifest strategy:
+   - explicit stack requirement -> follow it
+   - lightweight popup/content extension -> prefer the lightest maintainable stack
+   - complex extension UI or state model -> choose a framework/toolchain that matches the UI needs
+   - imported existing extension -> preserve the current viable stack
+3. Create the manifest with least-privilege defaults.
+4. Create background runtime and the required UI surfaces.
+5. Add build tooling, README, and ignore files.
+6. Ensure the extension can be built and loaded unpacked.
 
-## Extension-Specific Considerations
+## Required Baseline
+- manifest
+- background/service worker
+- popup or equivalent UI when needed
+- build config
+- README
+- `.gitignore`
+- extension load/build command path
 
-- Follow principle of least privilege for permissions
-- Handle different browser contexts (background, content, popup)
-- Implement proper message passing between contexts
-- Consider performance impact on web pages (content scripts)
-- Plan for extension updates and migration
-- Test in multiple browsers
-- Prepare for web store submission requirements
+## Decision Rules
+| Situation | Action |
+|---|---|
+| Permissions are unclear | Start minimal |
+| Brief implies the extension lives inside a larger repo | Preserve or create a monorepo-friendly layout; do not force standalone structure |
+| Multi-browser support is not required yet | Optimize for the primary browser first |
+| Framework is unspecified | Choose the lightest maintainable stack that fits the extension shape |
+| Imported existing extension already has a viable stack | Preserve it instead of re-platforming |
 
-## Security Best Practices
+## Output Contract
+Emit:
+- `scaffold_status`
+- `selected_stack`
+- `repo_shape_selected`
+- `created_files`
+- `manifest_version`
+- `verification_commands`
+- `extension_preview_strategy`
+- `assumptions`
 
-- Avoid using `eval()` or inline scripts
-- Sanitize any user input
-- Use Content Security Policy
-- Minimize host permissions
-- Handle cross-origin requests properly
-
-## Output
-
-After completing initialization:
-1. List all created/modified files
-2. Provide loading instructions for each browser (unpacked extension)
-3. Document permission requirements and justifications
-4. Highlight decisions made and rationale
+## Related Skills
+- `init-project-bootstrap`
+- `monorepo-service-selector`
+- `preview-artifact-extension`
+- `verify-test-build`

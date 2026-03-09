@@ -1,62 +1,59 @@
 ---
 name: deploy-ssh-remote
-description: Build artifact and deploy directly to remote server via SSH.
+description: Build locally, transfer artifacts to a configured SSH target, execute the remote deploy step, and verify the remote runtime before declaring success.
 ---
 
 # Deploy SSH Remote
 
 ## Objective
-Build the artifact, then **deploy directly** to the configured SSH server. You SSH to the server, copy the artifact, and run the deploy—no API call.
+Deploy to a remote server over SSH using ACPMS-provided deploy context, while
+keeping the flow reproducible and reporting a real verified outcome.
 
 ## When This Applies
-- Task type is **Deploy**
-- Project has an SSH deployment environment configured (Project → Deployments → Environments)
-- System has prepared deploy context in `.acpms/deploy/`
+- The project deploy target is a remote server
+- `.acpms/deploy/` exists with SSH deploy context
+- Deployment should happen directly over SSH rather than through a platform API
 
-## Deploy Context (Prepared by System)
-Before you run, the system writes to `.acpms/deploy/`:
-- **ssh_key**: SSH private key (chmod 600)
-- **config.json**: `{ "host", "port", "username", "deploy_path" }`
+## Inputs
+- `.acpms/deploy/config.json`
+- `.acpms/deploy/ssh_key`
+- Built artifact or deployable repository state
+- Remote deploy path and server identity
 
 ## Workflow
-
-### 1. Build Artifact
-- Run the project's build command (e.g. `npm run build`, `cargo build --release`, `make build`)
-- Verify artifact output exists (e.g. `dist/`, `build/`, `target/release/`)
-- Record artifact path(s)
-
-### 2. Run Tests (Optional)
-- If the project has tests, run them before deploy
-- Do not proceed if critical tests fail
-
-### 3. Deploy via SSH
-- Read `.acpms/deploy/config.json` for host, port, username, deploy_path
-- Use `ssh -i .acpms/deploy/ssh_key -o StrictHostKeyChecking=accept-new -p <port> <user>@<host>` to connect
-- Copy artifact to remote: `rsync -avz -e "ssh -i .acpms/deploy/ssh_key -p <port>" <artifact_path>/ <user>@<host>:<deploy_path>/`
-- Or use `scp -i .acpms/deploy/ssh_key -P <port> <artifact_path>/* <user>@<host>:<deploy_path>/`
-- If the project has a deploy script on the server (e.g. `./deploy.sh`), SSH and run it after copying
-
-### 4. Report Success
-- Confirm deployment completed
-- Include in final report: `build_status`, `artifact_paths`, `deployment_status`, `deploy_target`
+1. Confirm `.acpms/deploy/` exists and is usable.
+2. Build the artifact or prepare the deployable state.
+3. Verify the artifact exists locally.
+4. Connect to the remote server with the provided SSH key.
+5. Transfer artifacts or repository content to the configured deploy path.
+6. Run the remote deploy/start command when required.
+7. Verify the deployed service remotely or via its public/local endpoint.
+8. Report the exact target and verification outcome.
 
 ## Decision Rules
 | Situation | Action |
-|-----------|--------|
-| Build fails | Report failure, do not complete. Fix build issues first. |
-| No build script found | Report blocked. Project needs build configuration. |
-| `.acpms/deploy/` missing | Report blocked. No deploy context configured. |
-| SSH connection fails | Report failure, include error. Check host/port/credentials. |
-| Copy/deploy fails | Report failure, include error. |
+|---|---|
+| Deploy context missing | Stop as `blocked` |
+| Build fails | Stop; do not deploy |
+| SSH connection fails | Report `failed` with connection cause |
+| Transfer succeeds but runtime verification fails | Report `verification_failed` |
+| All steps succeed | Report `success` |
+
+## Guardrails
+- Never log the SSH private key
+- Never claim deploy success before verifying the remote runtime
+- Never skip the build/artifact existence check unless the task explicitly uses
+  source-only remote deploy
 
 ## Output Contract
-Include in final report:
-- `build_status`: `success` or `failed`
-- `artifact_paths`: list of produced artifact paths
-- `deployment_status`: `success` or `failed`
-- `deploy_target`: host and path (e.g. `user@host:deploy_path`)
+Emit:
+- `build_status`
+- `artifact_paths`
+- `deployment_status`
+- `deploy_target`
+- `post_deploy_verification`
 
-## Notes
-- You deploy **directly** via SSH. No API call needed.
-- The SSH key is in `.acpms/deploy/ssh_key`—use it for all SSH/rsync/scp commands.
-- Keep the key secure; do not log or expose it.
+## Related Skills
+- `build-artifact`
+- `post-deploy-smoke-and-healthcheck`
+- `deploy-cancel-stop-cleanup`

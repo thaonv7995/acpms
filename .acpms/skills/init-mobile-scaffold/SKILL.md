@@ -1,56 +1,94 @@
 ---
 name: init-mobile-scaffold
-description: Type-specific scaffolding requirements for Mobile Application projects.
+description: Create a mobile application baseline with platform-aware structure, run instructions, and the minimum setup needed for simulator/device development.
 ---
 
-# Init Mobile Application Scaffold
+# Init Mobile Scaffold
 
 ## Objective
-Define scaffolding requirements for a new mobile application project. Use the project name and description from the Project Details section in the instruction. Follow Required Tech Stack or Required Stack By Layer if specified.
+Bootstrap a mobile app that can move quickly into real feature work without
+hiding platform constraints around Android, iOS, signing, or simulator setup.
 
-## Your Tasks
+Do not hard-code one mobile framework for all apps. If the user does not
+explicitly specify a stack, choose the mobile stack that best fits the product
+shape and team/runtime constraints.
 
-1. **Analyze the repository structure** (if existing) or create a new project scaffold
-2. **Set up the mobile development environment**:
-   - Initialize React Native / Expo / Flutter project
-   - Configure platform-specific settings (iOS/Android)
-   - Set up TypeScript/Dart configuration
-3. **Create essential project files**:
-   - `README.md` with project overview, setup, and run instructions
-   - `.gitignore` for mobile projects (node_modules, build artifacts, platform-specific)
-   - Environment configuration for different environments (dev, staging, prod)
-4. **Configure native platforms**:
-   - iOS: Update `Info.plist`, configure Xcode project settings
-   - Android: Update `AndroidManifest.xml`, configure Gradle settings
-5. **Set up code quality tools**:
-   - ESLint/Dart analyzer configuration
-   - Prettier configuration
-   - Type checking configuration
-6. **Create initial project structure**:
-   - `src/` or `lib/` directory with entry point
-   - Navigation setup (React Navigation / GoRouter)
-   - Basic screen templates
+## When This Applies
+- Project type is mobile
+- ACPMS is creating a new mobile app baseline
 
-## Tech Stack Recommendations
+## Inputs
+- Project brief
+- Requested stack or framework
+- Target platform assumptions
+- Product shape inferred from the brief:
+  - cross-platform MVP
+  - native-heavy cross-platform app
+  - mobile-first product with strong platform polish
+  - imported existing mobile app
+- Repo-shape clues:
+  - standalone mobile app repo
+  - mobile app inside a monorepo
 
-For new projects, consider:
-- **Framework**: React Native with Expo (managed workflow) or Flutter
-- **Language**: TypeScript (RN) or Dart (Flutter)
-- **Navigation**: React Navigation 6+ or GoRouter
-- **State Management**: Zustand/Redux Toolkit (RN) or Riverpod/Bloc (Flutter)
-- **Testing**: Jest + React Native Testing Library or Flutter Test
+## Workflow
+1. Decide repo shape from the brief or existing layout:
+   - standalone mobile app repo
+   - mobile app inside a monorepo
+2. Choose the mobile stack:
+   - explicit stack requirement -> follow it
+   - cross-platform MVP -> prefer React Native + Expo or equivalent fast-iteration stack
+   - native-heavy cross-platform app -> prefer bare React Native or equivalent
+   - mobile-first product with strong platform polish -> prefer Flutter or the explicitly requested stack
+   - imported existing app -> preserve the current viable stack
+3. Create the core app entrypoint and app structure.
+4. Add platform-aware config and environment stubs.
+5. Add navigation baseline, screen structure, and shared UI/theme foundations.
+6. Add README and developer run instructions for simulator/device workflows.
+7. Plan preview/build outputs in two platform lanes from the start:
+   - Android
+   - iOS
+8. Leave the project in a state that can be built, bundled, or run in
+   simulator/emulator without pretending unavailable signing/device steps work.
 
-## Platform Considerations
+## Required Baseline
+- app source entrypoint
+- platform config
+- navigation baseline
+- screen/app structure
+- README
+- `.gitignore`
+- build/run command path
+- `.env.example` when the app expects runtime config
+- an explicit Android preview/build lane
+- an explicit iOS preview/build lane
 
-- Handle both iOS and Android platform differences
-- Consider safe area insets and notch handling
-- Plan for offline-first architecture
-- Consider app signing and deployment pipelines
+## Decision Rules
+| Situation | Action |
+|---|---|
+| Framework is explicitly requested | Follow it unless it is impossible in the current environment |
+| Cross-platform framework is unspecified | Choose the fastest stack that fits the requested app shape |
+| Brief implies the mobile app lives with other apps/services in one repo | Preserve or create a monorepo-friendly layout; do not force standalone structure |
+| Imported existing app already has a viable stack | Preserve it instead of re-platforming |
+| iOS signing is unavailable | Document the limitation, do not fake installability |
+| One platform is out of scope | Be explicit rather than pretending dual-platform parity |
+| Both Android and iOS are in scope | Define build/preview expectations for both lanes even if only one can be produced in the current environment. |
+| ACPMS preview path only needs a mobile artifact or dev bundle | Do not add Docker runtime files by default |
 
-## Output
+## Output Contract
+Emit:
+- `scaffold_status`
+- `selected_stack`
+- `repo_shape_selected`
+- `created_files`
+- `platform_support`
+- `verification_commands`
+- `mobile_preview_strategy`
+- `android_preview_lane`
+- `ios_preview_lane`
+- `assumptions`
 
-After completing initialization:
-1. List all created/modified files
-2. Provide platform-specific setup instructions (iOS Simulator, Android Emulator)
-3. Document any native module requirements
-4. Highlight decisions made and rationale
+## Related Skills
+- `init-project-bootstrap`
+- `monorepo-service-selector`
+- `preview-artifact-mobile`
+- `verify-test-build`

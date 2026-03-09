@@ -1,40 +1,62 @@
 ---
 name: db-migration-safety
-description: Execute schema migration changes safely with backward compatibility, validation, and rollback awareness.
+description: Plan and execute schema changes safely with backward compatibility, staged rollout thinking, validation, and rollback awareness.
 ---
 
 # DB Migration Safety
 
 ## Objective
-Apply schema changes without breaking running services or data integrity.
+Make schema or data-shape changes without breaking running application code,
+corrupting data, or creating an irreversible deploy path.
+
+## When This Applies
+- The task changes database schema
+- The task adds, renames, or removes columns/tables/indexes
+- The task introduces data backfill or migration scripts
+- Application and migration changes will be deployed together
 
 ## Inputs
-- Proposed migration scripts.
-- Current schema assumptions and dependent code paths.
-- Rollback and deployment constraints.
+- Proposed migration files or schema diff
+- Current application read/write behavior
+- Database engine and migration tooling
+- Deployment/rollback constraints
 
 ## Workflow
-1. Classify migration type (additive/change/drop/backfill).
-2. Prefer backward-compatible, additive migrations first.
-3. Update application code for dual-read/write when necessary.
-4. Validate migration on test/staging path.
-5. Document rollback and data safety notes.
+1. Classify the migration pattern:
+   - additive
+   - rename/drop
+   - type change
+   - backfill
+   - constraint/index change
+2. Prefer additive, backward-compatible steps first.
+3. If destructive change is needed, split into multiple deploy-safe stages.
+4. Ensure application code can tolerate the intermediate schema state.
+5. Validate migration behavior in the safest available environment.
+6. Record rollback and compatibility notes before marking the task ready.
 
 ## Decision Rules
 | Migration Pattern | Safe Default |
 |---|---|
-| Add column/table/index | Usually safe additive step. |
-| Rename/drop column | Use multi-step migration with compatibility bridge. |
-| Type change | Use shadow column/backfill/switch strategy. |
-| Large backfill | Run chunked job, not blocking request path. |
+| Add column/table/index | Usually safe additive step |
+| Rename/drop column | Multi-step migration with compatibility bridge |
+| Type change | Shadow column, backfill, switch-over strategy |
+| Large backfill | Chunked job, not request-path blocking |
+| New constraint | Add only after data already satisfies it |
 
 ## Guardrails
-- Do not bundle irreversible destructive steps with unverified deploy.
-- Keep migrations idempotent when possible.
+- Never bundle irreversible destructive changes with an unverified deploy
+- Never assume application code and schema change can land simultaneously if old
+  nodes may still run
+- Prefer idempotent migrations when the tooling supports it
 
 ## Output Contract
-Include:
+Emit:
 - `migration_risk`: `low` | `medium` | `high`
 - `migration_strategy`
 - `compatibility_notes`
 - `rollback_plan`
+
+## Related Skills
+- `code-implement`
+- `verify-test-build`
+- `rollback-deploy`

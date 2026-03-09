@@ -76,6 +76,10 @@ where
     type Rejection = ApiError;
 
     async fn from_request_parts(parts: &mut Parts, state: &S) -> Result<Self, Self::Rejection> {
+        if let Some(auth_user) = parts.extensions.get::<AuthUser>().cloned() {
+            return Ok(auth_user);
+        }
+
         // Extract Authorization header
         let TypedHeader(Authorization(bearer)) = parts
             .extract::<TypedHeader<Authorization<Bearer>>>()

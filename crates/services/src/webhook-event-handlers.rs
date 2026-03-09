@@ -1,16 +1,31 @@
 use acpms_executors::webhook_job::WebhookJob;
 use anyhow::{Context, Result};
 use sqlx::PgPool;
+use std::sync::Arc;
+
+use crate::openclaw_gateway_events::OpenClawGatewayEventService;
 
 /// Handlers for different GitLab webhook event types
 #[derive(Clone)]
 pub struct WebhookEventHandlers {
     db: PgPool,
+    openclaw_event_service: Option<Arc<OpenClawGatewayEventService>>,
 }
 
 impl WebhookEventHandlers {
     pub fn new(db: PgPool) -> Self {
-        Self { db }
+        Self {
+            db,
+            openclaw_event_service: None,
+        }
+    }
+
+    pub fn with_openclaw_events(
+        mut self,
+        openclaw_event_service: Arc<OpenClawGatewayEventService>,
+    ) -> Self {
+        self.openclaw_event_service = Some(openclaw_event_service);
+        self
     }
 
     /// Handle GitLab push events
@@ -81,6 +96,7 @@ impl WebhookEventHandlers {
         #[derive(sqlx::FromRow)]
         struct TaskId {
             id: uuid::Uuid,
+            previous_status: String,
         }
 
         // Update merge_requests status first for consistency
@@ -101,14 +117,21 @@ impl WebhookEventHandlers {
 
         let updated = sqlx::query_as::<_, TaskId>(
             r#"
+            WITH matched_task AS (
+                SELECT tasks.id, tasks.status::text AS previous_status
+                FROM tasks
+                JOIN merge_requests ON tasks.id = merge_requests.task_id
+                WHERE merge_requests.gitlab_mr_iid = $1
+                  AND (merge_requests.target_project_id = $3 OR merge_requests.target_project_id IS NULL)
+                  AND tasks.project_id = $2
+                  AND tasks.status <> 'done'
+                LIMIT 1
+            )
             UPDATE tasks
             SET status = 'done', updated_at = NOW()
-            FROM merge_requests
-            WHERE tasks.id = merge_requests.task_id
-            AND merge_requests.gitlab_mr_iid = $1
-            AND (merge_requests.target_project_id = $3 OR merge_requests.target_project_id IS NULL)
-            AND tasks.project_id = $2
-            RETURNING tasks.id
+            FROM matched_task
+            WHERE tasks.id = matched_task.id
+            RETURNING tasks.id, matched_task.previous_status
             "#,
         )
         .bind(mr_iid)
@@ -123,6 +146,25 @@ impl WebhookEventHandlers {
                 "Auto-completed task {} due to MR merge (webhook)",
                 record.id
             );
+
+            if let Some(openclaw_event_service) = &self.openclaw_event_service {
+                if let Err(error) = openclaw_event_service
+                    .record_task_status_changed(
+                        project_id,
+                        record.id,
+                        &record.previous_status,
+                        "done",
+                        "services.webhook_event_handlers.auto_complete_task_on_merge",
+                    )
+                    .await
+                {
+                    tracing::warn!(
+                        task_id = %record.id,
+                        error = %error,
+                        "Failed to emit OpenClaw task.status_changed event from webhook merge"
+                    );
+                }
+            }
 
             // TODO: Send notification to task assignee
             // - Create notification record

@@ -2,104 +2,126 @@
 
 ## 1. RESTful Response Standardization
 
-To ensure maximum compatibility with OpenClaw and other automated LLM-based agents, the gateway will enforce a strict, predictable JSON response format for all API endpoints.
+To ensure maximum compatibility with OpenClaw while preserving parity with the real product contract, the gateway should **reuse the same response and error shapes as the internal API wherever possible**.
 
 ### 1.1 Success Response Wrapper
-Successful queries should directly return the requested resource (flat object or array) without unnecessary meta-wrappers, adhering to OpenAPI best practices for LLM function calling.
+Mirrored OpenClaw endpoints should not invent a new "simplified" success format. The preferred standard is to preserve the existing internal API response envelope.
 
-**Example (GET /projects):**
-```json
-[
-  {
-    "id": "proj_123",
-    "name": "Backend Refactor",
-    "status": "active"
-  }
-]
-```
+In the current backend, successful REST responses use the `ApiResponse<T>` wrapper:
 
-### 1.2 Error Response Wrapper
-When an API call fails, the gateway will **always** return a standardized JSON error object containing a deterministic error code, a human-readable message, and optional detailed context.
-
-**Schema:**
 ```json
 {
+  "success": true,
+  "code": "0000",
+  "message": "Projects retrieved successfully",
+  "data": [
+    {
+      "id": "proj_123",
+      "name": "Backend Refactor"
+    }
+  ]
+}
+```
+
+This same wrapper should be preserved for mirrored OpenClaw REST endpoints unless a specific internal endpoint already returns a different shape.
+
+### 1.2 Error Response Wrapper
+When an API call fails, the gateway should preserve the existing internal `ApiError -> ApiResponse<()>` mapping instead of creating a second OpenClaw-only error schema.
+
+**Preferred Error Shape:**
+```json
+{
+  "success": false,
+  "code": "4010",
+  "message": "Authentication failed",
   "error": {
-    "code": "ERROR_CODE_STRING",
-    "message": "Human readable explanation of the failure.",
-    "details": {} // Optional object with specific validation errors
+    "details": "Authentication failed",
+    "trace_id": null
   }
 }
 ```
 
+Gateway-specific auth failures should still use the same global envelope, with details that explain the OpenClaw-specific failure.
+
 ## 2. Global HTTP Status Codes
 
-The gateway relies on standard HTTP semantics. Agents interacting with the API must interpret the HTTP Status Code first.
+The gateway relies on standard HTTP semantics. Agents interacting with the mirrored API must interpret the HTTP status code first, exactly as they would with the internal API.
 
 | Status Code | Meaning | Use Case |
 | :--- | :--- | :--- |
 | **200 OK** | Success | Standard response for successful `GET`, `PUT`, `POST` (if not creating), `DELETE` (if returning data). |
-| **201 Created** | Resource Created | Returned when `POST /tasks` or `POST /orchestrator/trigger` successfully generates a new entity. |
+| **201 Created** | Resource Created | Returned when a mirrored `POST` creates a new entity. |
 | **400 Bad Request** | Validation Error | The JSON payload was malformed, missing required fields, or violated business logic rules. |
 | **401 Unauthorized** | Auth Failure | Missing, invalid, or expired `Authorization: Bearer <TOKEN>`. |
-| **403 Forbidden** | Access Denied | The Token is valid, but OpenClaw lacks the specific role/permission to perform the action. |
-| **404 Not Found** | Resource Missing| The requested Project ID, Task ID, or Session ID does not exist. |
+| **403 Forbidden** | Gateway Disabled / Explicitly Blocked | The token is valid, but the OpenClaw gateway is disabled or a route is intentionally blocked from external automation. |
+| **404 Not Found** | Resource Missing| The requested Project ID, Task ID, or Attempt ID does not exist. |
+| **409 Conflict** | State Conflict | The operation is valid syntactically but conflicts with current resource state. |
 | **429 Too Many Requests** | Rate Limited | OpenClaw has exceeded its allowed quota of API calls per minute. |
 | **500 Internal Server Error** | System Failure | Agentic-Coding experienced an unexpected panic or database failure. |
 | **503 Service Unavailable** | Overloaded | The orchestrator queue is completely full; no new sessions can be triggered. |
 
 ## 3. Specific Error Codes (Payload `code`)
 
-To help the OpenClaw Agent autonomously recover from errors, the `"code"` field in the error payload will map to specific, actionable issues.
+To help OpenClaw recover from failures programmatically, the gateway should continue using the internal response-code families wherever possible.
 
 ### 3.1 Authentication & Authorization
-*   `AUTH_MISSING_TOKEN`: No `Authorization` header found. *(Action: OpenClaw must attach the token).*
-*   `AUTH_INVALID_TOKEN`: The provided token does not match `OPENCLAW_API_KEY`. *(Action: Stop retrying, alert admin).*
+*   `4010` / `Unauthorized`: No valid `Authorization` header was provided. *(Action: Attach or rotate the token).*
+*   `4030` / `Forbidden`: The gateway is disabled or the endpoint is intentionally blocked from OpenClaw. *(Action: Stop retrying and alert the operator).*
 
 ### 3.2 Resource Errors
-*   `RESOURCE_NOT_FOUND`: General 404.
-*   `PROJECT_NOT_FOUND`: The targeted `project_id` is invalid.
-*   `TASK_NOT_FOUND`: The targeted `task_id` does not exist.
+*   `4040` / `NotFound`: General 404.
+*   `4042` / `ProjectNotFound`: The targeted `project_id` is invalid.
+*   `4041` / `TaskNotFound`: The targeted `task_id` does not exist.
+*   Other internal resource codes should be preserved when available.
 
 ### 3.3 Orchestration Errors
-*   `ORCHESTRATOR_BUSY`: The system cannot start a new session because the maximum concurrency limit is reached. *(Action: OpenClaw should retry with exponential backoff).*
-*   `SESSION_ALREADY_RUNNING`: Attempted to trigger a task that is already actively being executed by another agent session.
-*   `INVALID_TRANSITION`: Attempted to pause a session that is already 'completed', or resume a session that is 'failed'.
+*   `5003` / `ServiceUnavailable`: The system is temporarily overloaded. *(Action: Retry with backoff).*
+*   `4090` / `Conflict`: Attempted an operation that is incompatible with the current state.
+*   Existing endpoint-specific messages should be preserved in `message` / `error.details`.
 
 ### 3.4 Validation Errors
-*   `VALIDATION_FAILED`: Payload schema mismatch. The `details` object will contain the exact field names.
+*   `4001` / `ValidationError`: Payload schema mismatch or invalid field constraints.
     ```json
     {
+      "success": false,
+      "code": "4001",
+      "message": "Invalid request payload.",
       "error": {
-        "code": "VALIDATION_FAILED",
-        "message": "Invalid request payload.",
-        "details": {
-          "title": "Field is required and cannot be empty."
-        }
+        "details": "Validation error: title is required",
+        "trace_id": null
       }
     }
     ```
 
-## 4. OpenAPI / Swagger Documentation Enforcement
+## 4. Super Admin Authorization Semantics
 
-All status codes and error responses **must** be explicitly documented in the `utoipa` macros so that OpenClaw's code generator expects them.
+Because OpenClaw is intentionally treated as a Super Admin integration:
+
+*   project-level permission failures should be rare after successful gateway authentication
+*   a `403` generally indicates a gateway-level policy decision, not ordinary project RBAC
+*   every request should still be audited as having originated from the OpenClaw principal
+
+## 5. OpenAPI / Swagger Documentation Enforcement
+
+All mirrored status codes and error responses **must** be explicitly documented in `utoipa` so that OpenClaw's generated tools match the real backend behavior.
 
 **Rust `utoipa` Implementation Example:**
 ```rust
 #[utoipa::path(
     post,
-    path = "/api/openclaw/v1/orchestrator/trigger",
-    request_body = TriggerPayload,
+    path = "/api/openclaw/v1/tasks/{task_id}/attempts",
+    request_body = CreateAttemptPayload,
     responses(
-        (status = 201, description = "Session successfully triggered", body = SessionResponse),
-        (status = 400, description = "Validation failed", body = ErrorResponse, example = json!({"error": {"code": "VALIDATION_FAILED", "message": "Missing task_id"}})),
-        (status = 401, description = "Invalid API Key", body = ErrorResponse),
-        (status = 503, description = "Orchestrator queue is full", body = ErrorResponse, example = json!({"error": {"code": "ORCHESTRATOR_BUSY"}}))
+        (status = 201, description = "Attempt created", body = ApiResponseTaskAttemptDto),
+        (status = 400, description = "Validation failed", body = ApiResponseEmpty),
+        (status = 401, description = "Invalid API Key", body = ApiResponseEmpty),
+        (status = 403, description = "Gateway disabled or blocked", body = ApiResponseEmpty),
+        (status = 409, description = "State conflict", body = ApiResponseEmpty)
     ),
     security(
         ("openclaw_api_key" = [])
     )
 )]
-pub async fn trigger_session(...) { ... }
+pub async fn create_attempt(...) { ... }
 ```
-This ensures the `/api/openclaw/openapi.json` contract is strictly typed, allowing OpenClaw to write deterministic generic-error-handling routines when calling Agentic-Coding.
+This ensures the `/api/openclaw/openapi.json` contract stays aligned with the real internal API surface that OpenClaw is meant to operate.

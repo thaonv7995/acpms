@@ -63,6 +63,128 @@ BANNER
   echo
 }
 
+normalize_bool() {
+  case "${1:-}" in
+    1|true|TRUE|True|yes|YES|Yes|y|Y|on|ON|On) echo "true" ;;
+    *) echo "false" ;;
+  esac
+}
+
+generate_prefixed_secret() {
+  local prefix="$1" random=""
+  if command -v openssl >/dev/null 2>&1; then
+    random="$(openssl rand -hex 16 2>/dev/null)" || true
+  fi
+  if [ -z "$random" ]; then
+    random="$(head -c 16 /dev/urandom 2>/dev/null | xxd -p -c 256)" || true
+  fi
+  [ -z "$random" ] && random="$(date +%s)$(od -An -N4 -tx1 /dev/urandom 2>/dev/null | tr -d ' \n')"
+  printf '%s%s' "$prefix" "$random"
+}
+
+render_openclaw_bootstrap_prompt() {
+  [ "${OPENCLAW_GATEWAY_ENABLED:-false}" = "true" ] || return 0
+  local public_base guide_url openapi_url events_url base_endpoint ws_base
+  public_base="$(resolve_s3_public_base)"
+  base_endpoint="${public_base}/api/openclaw/v1"
+  openapi_url="${public_base}/api/openclaw/openapi.json"
+  guide_url="${public_base}/api/openclaw/guide-for-openclaw"
+  events_url="${public_base}/api/openclaw/v1/events/stream"
+  case "$public_base" in
+    https://*) ws_base="wss://${public_base#https://}/api/openclaw/ws" ;;
+    http://*) ws_base="ws://${public_base#http://}/api/openclaw/ws" ;;
+    *) ws_base="${public_base}/api/openclaw/ws" ;;
+  esac
+  OPENCLAW_PROMPT_FILE="$CONF_DIR/openclaw_bootstrap_prompt.txt"
+  OPENCLAW_READY_PROMPT="$(cat <<EOF
+You are being connected to an ACPMS (Agentic Coding Project Management System) instance.
+
+Your role for this ACPMS instance:
+- act as a trusted Super Admin integration
+- act as an operations assistant for the primary user
+- load ACPMS context before making decisions
+- analyze requirements using ACPMS data
+- create/update ACPMS work only when requested or allowed by autonomy policy
+- monitor running attempts and report meaningful updates to the user
+
+ACPMS connection bundle:
+- Base Endpoint URL: ${base_endpoint}
+- OpenAPI (Swagger): ${openapi_url}
+- Guide Endpoint: ${guide_url}
+- Global Event SSE: ${events_url}
+- WebSocket Base: ${ws_base}
+- API Key (Bearer): ${OPENCLAW_API_KEY}
+- Webhook Secret: ${OPENCLAW_WEBHOOK_SECRET} (optional)
+
+Your required first actions:
+1. Store the API Key as the Bearer credential for ACPMS.
+2. Call the Guide Endpoint first and treat its response as the authoritative runtime guide.
+3. Load the OpenAPI document.
+4. Open and maintain the Global Event SSE connection.
+5. Use only ACPMS OpenClaw routes.
+   - /api/openclaw/v1/*
+   - /api/openclaw/ws/*
+6. Follow the ACPMS operating rules returned by the Guide Endpoint.
+
+Human reporting rules:
+- report important status, analyses, plans, started attempts, completed attempts, failed attempts, blocked work, and approval requests
+- do not expose secrets, API keys, or webhook secrets in user-facing output
+- distinguish clearly between:
+  - what ACPMS currently says
+  - what you recommend
+  - what you already changed
+
+Do not ask the user to manually map these ACPMS credentials unless strictly necessary.
+Use the Guide Endpoint to bootstrap yourself automatically.
+EOF
+)"
+}
+
+write_openclaw_prompt_file() {
+  [ "${OPENCLAW_GATEWAY_ENABLED:-false}" = "true" ] || return 0
+  render_openclaw_bootstrap_prompt
+  [ -n "${OPENCLAW_READY_PROMPT:-}" ] || return 0
+  local tmp_file
+  tmp_file="$(mktemp)"
+  umask 077
+  printf '%s\n' "$OPENCLAW_READY_PROMPT" > "$tmp_file"
+  if [ -n "$USE_SUDO" ]; then
+    $USE_SUDO mkdir -p "$CONF_DIR"
+    $USE_SUDO cp "$tmp_file" "$OPENCLAW_PROMPT_FILE"
+    $USE_SUDO chmod 600 "$OPENCLAW_PROMPT_FILE"
+  else
+    mkdir -p "$CONF_DIR"
+    cp "$tmp_file" "$OPENCLAW_PROMPT_FILE"
+    chmod 600 "$OPENCLAW_PROMPT_FILE"
+  fi
+  rm -f "$tmp_file"
+}
+
+prompt_openclaw_gateway() {
+  if [ -n "${OPENCLAW_GATEWAY_ENABLED:-}" ]; then
+    OPENCLAW_GATEWAY_ENABLED="$(normalize_bool "$OPENCLAW_GATEWAY_ENABLED")"
+  elif [ -n "${ACPMS_NONINTERACTIVE:-}" ]; then
+    OPENCLAW_GATEWAY_ENABLED="false"
+  elif ask_yes "Do you want to enable the OpenClaw Integration Gateway for external AI control? [y/N]" "n"; then
+    OPENCLAW_GATEWAY_ENABLED="true"
+  else
+    OPENCLAW_GATEWAY_ENABLED="false"
+  fi
+
+  if [ "${OPENCLAW_GATEWAY_ENABLED}" != "true" ]; then
+    OPENCLAW_API_KEY=""
+    OPENCLAW_WEBHOOK_URL=""
+    OPENCLAW_WEBHOOK_SECRET=""
+    OPENCLAW_READY_PROMPT=""
+    OPENCLAW_PROMPT_FILE=""
+    return 0
+  fi
+
+  [ -n "${OPENCLAW_API_KEY:-}" ] || OPENCLAW_API_KEY="$(generate_prefixed_secret "oc_live_")"
+  [ -n "${OPENCLAW_WEBHOOK_SECRET:-}" ] || OPENCLAW_WEBHOOK_SECRET="$(generate_prefixed_secret "wh_sec_")"
+  render_openclaw_bootstrap_prompt
+}
+
 print_success_report() {
   local url="http://127.0.0.1:${ACPMS_PORT}"
   local email="${ACPMS_ADMIN_EMAIL:-${ADMIN_EMAIL:-see above}}"
@@ -91,6 +213,42 @@ print_success_report() {
   echo "${C_GREEN}║${C_RESET}  ${C_DIM}           install.sh | bash -s -- --uninstall${C_RESET}                               ${C_GREEN}║${C_RESET}"
   echo "${C_GREEN}╚══════════════════════════════════════════════════════════════════════════════╝${C_RESET}"
   echo
+
+  if [ "${OPENCLAW_GATEWAY_ENABLED:-false}" = "true" ]; then
+    render_openclaw_bootstrap_prompt
+    local public_base base_endpoint openapi_url guide_url events_url webhook_url_label
+    public_base="$(resolve_s3_public_base)"
+    base_endpoint="${public_base}/api/openclaw/v1"
+    openapi_url="${public_base}/api/openclaw/openapi.json"
+    guide_url="${public_base}/api/openclaw/guide-for-openclaw"
+    events_url="${public_base}/api/openclaw/v1/events/stream"
+    webhook_url_label="${OPENCLAW_WEBHOOK_URL:-not configured}"
+    cat << EOF
+================================================================================
+ OPENCLAW GATEWAY CONFIGURATION
+================================================================================
+ Base Endpoint URL : ${base_endpoint}
+ OpenAPI (Swagger) : ${openapi_url}
+ Guide Endpoint    : ${guide_url}
+ Global Event SSE  : ${events_url}
+ API Key (Bearer)  : ${OPENCLAW_API_KEY}
+ Webhook URL       : ${webhook_url_label}
+ Webhook Secret    : ${OPENCLAW_WEBHOOK_SECRET} (optional)
+ Prompt File       : ${OPENCLAW_PROMPT_FILE}
+================================================================================
+
+================================================================================
+ OPENCLAW READY-TO-SEND PROMPT
+================================================================================
+ Copy everything below and send it to OpenClaw:
+
+EOF
+    printf '%s\n' "$OPENCLAW_READY_PROMPT"
+    cat << 'EOF'
+================================================================================
+EOF
+    echo
+  fi
 }
 
 # Ask for consent (skip when ACPMS_NONINTERACTIVE=1). Usage: ask_yes "Prompt [Y/n]" "y"  or  ask_yes "Remove? [y/N]" "n"
@@ -848,7 +1006,14 @@ ACPMS_AGENT_CODEX_BIN=$codex_bin
 ACPMS_AGENT_GEMINI_BIN=$gemini_bin
 ACPMS_AGENT_CURSOR_BIN=$cursor_bin
 ACPMS_AGENT_NPX_BIN=$npx_bin
+
+# OpenClaw Gateway
+OPENCLAW_GATEWAY_ENABLED=${OPENCLAW_GATEWAY_ENABLED:-false}
+OPENCLAW_API_KEY=${OPENCLAW_API_KEY:-}
+OPENCLAW_WEBHOOK_URL=${OPENCLAW_WEBHOOK_URL:-}
+OPENCLAW_WEBHOOK_SECRET=${OPENCLAW_WEBHOOK_SECRET:-}
 EOF
+  write_openclaw_prompt_file
 }
 
 resolve_s3_public_base() {
@@ -1209,6 +1374,7 @@ main_install() {
   ACPMS_PORT=$(find_free_port)
   log "Using port: $ACPMS_PORT"
   prompt_public_url
+  prompt_openclaw_gateway
 
   if [ -z "${ACPMS_NONINTERACTIVE:-}" ]; then
     log "S3 public endpoint will be: $(resolve_s3_public_base)/s3"

@@ -1,33 +1,49 @@
 ---
 name: init-read-references
-description: Read reference files from .acpms-refs/ before scaffolding (when user uploaded refs during project creation).
+description: Read `.acpms-refs/` before scaffolding so uploaded references influence the generated project instead of being ignored until after bootstrap.
 ---
 
 # Init Read References
 
 ## Objective
-If reference files exist in `.acpms-refs/`, read them **before** scaffolding so the agent can replicate structure, patterns, or follow specs.
+Use uploaded reference material early in init so the scaffold reflects real
+constraints, examples, designs, or patterns from the start.
 
 ## When This Applies
-- Init task (from-scratch project creation)
-- Directory `.acpms-refs/` exists and is non-empty
+- `.acpms-refs/` exists and contains files
+- The task is an init/bootstrap flow
+- The user uploaded code, specs, mockups, or sample projects as references
+
+## Inputs
+- Contents of `.acpms-refs/`
+- Project type and init goal
 
 ## Workflow
-1. **Check**: Does `.acpms-refs/` exist? If not, skip this skill.
-2. **List**: Enumerate files in `.acpms-refs/` (including subdirectories if extracted from ZIP).
-3. **Read**: Read relevant files (source code, configs, specs, mockups) to understand:
-   - Project structure and naming
-   - Tech stack and dependencies
-   - Patterns to replicate
-4. **Apply**: Use insights when executing init-project-bootstrap and init-source-repository.
+1. Check whether `.acpms-refs/` exists and is non-empty.
+2. Identify the most informative files first:
+   - package manifests
+   - configs
+   - README/specs
+   - source structure
+3. Read only the relevant references needed to steer the scaffold.
+4. Carry the extracted decisions into bootstrap and scaffold skills.
+5. Mention in the bootstrap summary which references materially influenced the
+   output.
 
 ## Decision Rules
 | Situation | Action |
-|-----------|--------|
-| `.acpms-refs/` empty or missing | Skip, proceed to next skill. |
-| ZIP/tar extracted with nested structure | Read key files (package.json, README, configs) first. |
-| Images/PDF only | Extract requirements/design intent; mention in bootstrap summary. |
+|---|---|
+| Reference directory missing or empty | Skip cleanly |
+| Archive or nested project present | Read key manifests/configs first |
+| Only images or design docs exist | Extract design/intent, not code structure |
 
 ## Output Contract
-- If refs were read: note in bootstrap summary which refs influenced the scaffold.
-- If skipped: no output needed.
+Emit:
+- `reference_read_status`: `used` | `skipped`
+- `reference_summary`
+- `reference_influence`
+
+## Related Skills
+- `init-project-bootstrap`
+- `init-web-scaffold`
+- `init-api-scaffold`
