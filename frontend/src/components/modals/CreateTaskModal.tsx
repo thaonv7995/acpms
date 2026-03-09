@@ -118,14 +118,12 @@ export function CreateTaskModal({
     const [assignee, setAssignee] = useState('');
     const [sprint, setSprint] = useState('');
 
-    const [autoStart, setAutoStart] = useState(true);
+    const [autoStart, setAutoStart] = useState(false);
     const [requireReview, setRequireReview] = useState(false);
     const [requireReviewTouched, setRequireReviewTouched] = useState(false);
     const [autoDeploy, setAutoDeploy] = useState(false);
     const [autoDeployTouched, setAutoDeployTouched] = useState(false);
 
-    const [taskContextTitle, setTaskContextTitle] = useState('');
-    const [taskContextContent, setTaskContextContent] = useState('');
     const [taskContextFiles, setTaskContextFiles] = useState<PendingContextFile[]>([]);
 
     const selectedProjectRecord = useMemo(
@@ -161,13 +159,11 @@ export function CreateTaskModal({
         setPriority('medium');
         setAssignee('');
         setSprint('');
-        setAutoStart(true);
+        setAutoStart(false);
         setRequireReview(true);
         setRequireReviewTouched(false);
         setAutoDeploy(false);
         setAutoDeployTouched(false);
-        setTaskContextTitle('');
-        setTaskContextContent('');
         setTaskContextFiles([]);
         setSubmitError(null);
         setShowSetupDialog(false);
@@ -377,16 +373,13 @@ export function CreateTaskModal({
             createdTaskId = task.id;
 
             let uploadedAttachmentCount = 0;
-            const hasTaskContext =
-                Boolean(taskContextTitle.trim()) ||
-                Boolean(taskContextContent.trim()) ||
-                taskContextFiles.length > 0;
+            const hasTaskContext = taskContextFiles.length > 0;
 
             if (hasTaskContext) {
                 const context = await createTaskContext(task.id, {
-                    title: taskContextTitle.trim() || null,
+                    title: null,
                     content_type: 'text/markdown',
-                    raw_content: taskContextContent.trim(),
+                    raw_content: '',
                     source: 'user',
                     sort_order: 0,
                 });
@@ -542,36 +535,10 @@ export function CreateTaskModal({
 
                     <div className="space-y-4 rounded-xl border border-border bg-muted/30 p-4">
                         <div>
-                            <h3 className="text-sm font-bold text-card-foreground">Task Context</h3>
+                            <h3 className="text-sm font-bold text-card-foreground">Reference Files</h3>
                             <p className="text-xs text-muted-foreground mt-1">
-                                Add exact notes and reference files the agent must follow for this task.
+                                Upload specs, screenshots, logs, or any files the agent should use for this task.
                             </p>
-                        </div>
-
-                        <div>
-                            <label className="block text-sm font-bold text-card-foreground mb-1.5">
-                                Context Title
-                            </label>
-                            <input
-                                type="text"
-                                value={taskContextTitle}
-                                onChange={(event) => setTaskContextTitle(event.target.value)}
-                                placeholder="e.g. Login screen constraints"
-                                className="w-full bg-card border border-border rounded-lg px-3 py-2.5 text-sm text-card-foreground focus:ring-primary focus:border-primary placeholder-muted-foreground"
-                            />
-                        </div>
-
-                        <div>
-                            <label className="block text-sm font-bold text-card-foreground mb-1.5">
-                                Context Notes
-                            </label>
-                            <textarea
-                                value={taskContextContent}
-                                onChange={(event) => setTaskContextContent(event.target.value)}
-                                placeholder="Describe the required copy, design constraints, edge cases, or debugging context."
-                                rows={5}
-                                className="w-full bg-card border border-border rounded-lg px-3 py-2.5 text-sm text-card-foreground focus:ring-primary focus:border-primary placeholder-muted-foreground resize-none"
-                            />
                         </div>
 
                         <input

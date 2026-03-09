@@ -38,6 +38,11 @@ import {
   getRepositoryModeLabel,
   normalizeRepositoryContext,
 } from '../utils/repositoryAccess';
+import {
+  getProjectProgressAccentColor,
+  getProjectProgressTextColor,
+  normalizeProjectProgress,
+} from '../utils/projectProgress';
 import { logger } from '@/lib/logger';
 
 // Loading skeleton
@@ -255,6 +260,10 @@ export function ProjectDetailPage() {
     );
   }
 
+  const projectProgressValue = normalizeProjectProgress(project.stats.buildStatus);
+  const projectProgressTextColor = getProjectProgressTextColor(projectProgressValue);
+  const projectProgressAccentColor = getProjectProgressAccentColor(projectProgressValue);
+
   const handleAddTask = () => {
     setShowCreateTaskModal(true);
   };
@@ -465,12 +474,12 @@ export function ProjectDetailPage() {
             </div>
             <div className="p-4 bg-card rounded-xl border border-border">
               <div className="flex items-center gap-3 mb-2">
-                <div className="p-2 rounded-lg bg-green-500/10 dark:bg-green-500/20 text-green-500">
+                <div className={`p-2 rounded-lg ${projectProgressAccentColor}`}>
                   <span className="material-symbols-outlined">check_circle</span>
                 </div>
                 <span className="text-sm font-medium text-muted-foreground">Project Progress</span>
               </div>
-              <p className="text-2xl font-bold text-green-600 dark:text-green-400">{project.stats.buildStatus}%</p>
+              <p className={`text-2xl font-bold ${projectProgressTextColor}`}>{projectProgressValue}%</p>
             </div>
           </div>
 

@@ -58,6 +58,8 @@ const CONTENT_TYPE_SUGGESTIONS = [
   { value: 'text/x-rust', label: 'Rust' },
 ] as const;
 
+const CUSTOM_CONTENT_TYPE_VALUE = '__custom__';
+
 const IMPORT_FILE_ACCEPT = [
   '.md',
   '.markdown',
@@ -193,6 +195,10 @@ export function DocumentsTab({ projectId }: DocumentsTabProps) {
     () => documents.find((document) => document.id === selectedDocumentId) || null,
     [documents, selectedDocumentId]
   );
+  const selectedContentTypeOption = useMemo(() => {
+    const hasPreset = CONTENT_TYPE_SUGGESTIONS.some(({ value }) => value === draft.contentType);
+    return hasPreset ? draft.contentType : CUSTOM_CONTENT_TYPE_VALUE;
+  }, [draft.contentType]);
 
   const loadDocuments = async (preferredDocumentId?: string | null) => {
     setLoadingList(true);
@@ -622,25 +628,43 @@ export function DocumentsTab({ projectId }: DocumentsTabProps) {
               <label className="block text-xs font-bold text-muted-foreground uppercase mb-1.5">
                 Content type
               </label>
-              <input
-                list="project-document-content-types"
-                value={draft.contentType}
-                onChange={(event) =>
-                  setDraft((prev) => ({ ...prev, contentType: event.target.value }))
-                }
+              <select
+                value={selectedContentTypeOption}
+                onChange={(event) => {
+                  const nextValue = event.target.value;
+                  setDraft((prev) => ({
+                    ...prev,
+                    contentType:
+                      nextValue === CUSTOM_CONTENT_TYPE_VALUE
+                        ? CONTENT_TYPE_SUGGESTIONS.some(({ value }) => value === prev.contentType)
+                          ? ''
+                          : prev.contentType
+                        : nextValue,
+                  }));
+                }}
                 className="w-full bg-muted border border-border rounded-lg px-3 py-2.5 text-sm text-card-foreground focus:ring-primary focus:border-primary"
-                placeholder="text/markdown"
-                spellCheck={false}
-              />
-              <datalist id="project-document-content-types">
+              >
                 {CONTENT_TYPE_SUGGESTIONS.map(({ value, label }) => (
                   <option key={value} value={value}>
-                    {label}
+                    {label} ({value})
                   </option>
                 ))}
-              </datalist>
+                <option value={CUSTOM_CONTENT_TYPE_VALUE}>Custom MIME type</option>
+              </select>
+              {selectedContentTypeOption === CUSTOM_CONTENT_TYPE_VALUE && (
+                <input
+                  type="text"
+                  value={draft.contentType}
+                  onChange={(event) =>
+                    setDraft((prev) => ({ ...prev, contentType: event.target.value }))
+                  }
+                  className="mt-2 w-full bg-muted border border-border rounded-lg px-3 py-2.5 text-sm text-card-foreground focus:ring-primary focus:border-primary"
+                  placeholder="application/vnd.custom+json"
+                  spellCheck={false}
+                />
+              )}
               <p className="text-[11px] text-muted-foreground mt-1">
-                Suggested MIME types are listed, but you can enter any custom text-based content type.
+                Choose a preset MIME type or switch to custom for a project-specific text format.
               </p>
             </div>
           </div>

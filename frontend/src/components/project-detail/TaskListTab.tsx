@@ -464,7 +464,7 @@ export function TaskListTab({
                         <button
                             onClick={() => setShowCloseSprintModal(true)}
                             disabled={!sprintToClose}
-                            className="flex items-center gap-2 px-4 py-2 bg-amber-500 hover:bg-amber-500/90 text-white rounded-lg text-sm font-medium transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
+                            className="flex items-center gap-2 px-4 py-2 bg-blue-500 hover:bg-blue-400 text-white rounded-lg text-sm font-medium transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
                             title={sprintToClose ? `Complete ${sprintToClose.name}` : 'No active sprint selected'}
                         >
                             <span className="material-symbols-outlined text-[18px]">flag</span>

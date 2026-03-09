@@ -2,6 +2,11 @@
 import { useEffect, useMemo, useState } from 'react';
 import type { Requirement } from '../../api/requirements';
 import { createProjectSprint, getSprintOverview, type SprintOverview, type SprintWithRoadmapFields } from '../../api/sprints';
+import {
+    getProjectProgressColor,
+    getProjectProgressTextColor,
+    normalizeProjectProgress,
+} from '../../utils/projectProgress';
 import { resolveTechStack } from '../../utils/resolveTechStack';
 import { logger } from '@/lib/logger';
 
@@ -104,7 +109,9 @@ export function SummaryTab({
         },
         [rawProject, metadata],
     );
-    const progressValue = typeof progress === 'number' ? progress : 0;
+    const progressValue = normalizeProjectProgress(progress);
+    const progressBarColor = getProjectProgressColor(progressValue);
+    const progressTextColor = getProjectProgressTextColor(progressValue);
 
     const [sprintOverview, setSprintOverview] = useState<SprintOverview | null>(null);
     const [overviewLoading, setOverviewLoading] = useState(false);
@@ -265,13 +272,20 @@ export function SummaryTab({
                             <div>
                                 <div className="flex justify-between items-center mb-2">
                                     <label className="text-xs font-medium text-muted-foreground uppercase tracking-wider">Overall Progress</label>
-                                    <span className="text-sm font-bold text-primary">{progressValue}%</span>
+                                    <span className={`text-sm font-bold ${progressTextColor}`}>{progressValue}%</span>
                                 </div>
-                                <div className="h-2 bg-muted rounded-full overflow-hidden">
-                                    <div
-                                        className="h-full bg-primary rounded-full transition-all duration-500"
-                                        style={{ width: `${progressValue}%` }}
-                                    />
+                                <div className="h-2 bg-muted dark:bg-muted/50 rounded-full overflow-hidden relative">
+                                    {progressValue > 0 ? (
+                                        <div
+                                            className={`h-full ${progressBarColor} rounded-full transition-all duration-500 ease-out`}
+                                            style={{
+                                                width: `${progressValue}%`,
+                                                minWidth: '2px',
+                                            }}
+                                        />
+                                    ) : (
+                                        <div className="h-full w-full border border-slate-300 dark:border-slate-600/50 rounded-full" />
+                                    )}
                                 </div>
                             </div>
                         </div>
