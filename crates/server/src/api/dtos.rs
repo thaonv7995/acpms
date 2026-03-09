@@ -1,7 +1,7 @@
 use acpms_db::models::{
-    AgentLog, GitLabConfiguration, MergeRequestDb, Project, ProjectSettings, ProjectType,
-    RepositoryContext, Requirement, ReviewComment, Sprint, Task, TaskAttempt, TaskContext,
-    TaskContextAttachment, TaskWithAttemptStatus, User,
+    AgentLog, GitLabConfiguration, MergeRequestDb, Project, ProjectDocument, ProjectSettings,
+    ProjectType, RepositoryContext, Requirement, ReviewComment, Sprint, Task, TaskAttempt,
+    TaskContext, TaskContextAttachment, TaskWithAttemptStatus, User,
 };
 use acpms_services::{ProjectComputedSummary, TaskContextWithAttachments, TaskWithLatestAttempt};
 use chrono::{DateTime, Utc};
@@ -308,6 +308,49 @@ impl From<TaskContextWithAttachments> for TaskContextDto {
             value.context,
             value.attachments.into_iter().map(TaskContextAttachmentDto::from).collect(),
         )
+    }
+}
+
+#[derive(Debug, Serialize, ToSchema)]
+pub struct ProjectDocumentDto {
+    pub id: Uuid,
+    pub project_id: Uuid,
+    pub title: String,
+    pub filename: String,
+    pub document_kind: String,
+    pub content_type: String,
+    pub storage_key: String,
+    pub checksum: Option<String>,
+    pub size_bytes: i64,
+    pub source: String,
+    pub version: i32,
+    pub ingestion_status: String,
+    pub index_error: Option<String>,
+    pub indexed_at: Option<DateTime<Utc>>,
+    pub created_at: DateTime<Utc>,
+    pub updated_at: DateTime<Utc>,
+}
+
+impl From<ProjectDocument> for ProjectDocumentDto {
+    fn from(document: ProjectDocument) -> Self {
+        Self {
+            id: document.id,
+            project_id: document.project_id,
+            title: document.title,
+            filename: document.filename,
+            document_kind: document.document_kind,
+            content_type: document.content_type,
+            storage_key: document.storage_key,
+            checksum: document.checksum,
+            size_bytes: document.size_bytes,
+            source: document.source,
+            version: document.version,
+            ingestion_status: document.ingestion_status,
+            index_error: document.index_error,
+            indexed_at: document.indexed_at,
+            created_at: document.created_at,
+            updated_at: document.updated_at,
+        }
     }
 }
 

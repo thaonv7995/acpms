@@ -4,6 +4,7 @@ pub mod events;
 pub mod gitlab;
 pub mod normalized_logs;
 pub mod project;
+pub mod project_document;
 pub mod project_assistant_instruction;
 pub mod project_assistant_session;
 pub mod project_assistant_tools;
@@ -91,6 +92,10 @@ pub use openclaw_gateway_events::{
     OpenClawGatewayEventService, OpenClawGatewayMetricsObserver, OpenClawWebhookDeliveryStats,
 };
 pub use project::ProjectService;
+pub use project_document::{
+    ProjectDocumentService, ProjectDocumentServiceError, UpdateProjectDocumentInput,
+    UpsertProjectDocumentInput,
+};
 pub use project_assistant_instruction::{
     apply_preferred_language_to_follow_up_input, build_instruction, build_start_instruction,
     normalize_preferred_agent_language, AssistantMessage, AttachmentContent, TaskSummary,

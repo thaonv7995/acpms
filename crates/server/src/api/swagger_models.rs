@@ -152,7 +152,7 @@ pub struct UpdateProjectRequestDoc {
 }
 
 // Tasks
-use super::{TaskAttemptDto, TaskContextAttachmentDto, TaskContextDto, TaskDto};
+use super::{ProjectDocumentDto, TaskAttemptDto, TaskContextAttachmentDto, TaskContextDto, TaskDto};
 define_response!(TaskResponse, TaskDto);
 define_response!(TaskListResponse, Vec<TaskDto>);
 define_response!(TaskAttemptResponse, TaskAttemptDto);
@@ -160,6 +160,8 @@ define_response!(TaskAttemptListResponse, Vec<TaskAttemptDto>);
 define_response!(TaskContextResponse, TaskContextDto);
 define_response!(TaskContextListResponse, Vec<TaskContextDto>);
 define_response!(TaskContextAttachmentResponse, TaskContextAttachmentDto);
+define_response!(ProjectDocumentResponse, ProjectDocumentDto);
+define_response!(ProjectDocumentListResponse, Vec<ProjectDocumentDto>);
 
 #[derive(ToSchema, serde::Deserialize, Validate)]
 pub struct CreateTaskRequestDoc {
@@ -271,6 +273,70 @@ pub struct CreateTaskContextAttachmentRequestDoc {
 
     pub size_bytes: Option<i64>,
     pub checksum: Option<String>,
+}
+
+#[derive(ToSchema, serde::Deserialize, Validate)]
+#[allow(dead_code)]
+pub struct CreateProjectDocumentRequestDoc {
+    #[validate(length(
+        min = 1,
+        max = 255,
+        message = "Title must be between 1 and 255 characters"
+    ))]
+    pub title: String,
+
+    #[validate(length(
+        min = 1,
+        max = 255,
+        message = "Filename must be between 1 and 255 characters"
+    ))]
+    pub filename: String,
+
+    #[validate(length(min = 1, max = 32, message = "Document kind is required"))]
+    pub document_kind: String,
+
+    #[validate(length(min = 1, max = 255, message = "Content type is required"))]
+    pub content_type: String,
+
+    #[validate(length(
+        min = 1,
+        max = 512,
+        message = "Storage key must be between 1 and 512 characters"
+    ))]
+    pub storage_key: String,
+
+    pub checksum: Option<String>,
+    pub size_bytes: i64,
+
+    #[validate(length(min = 1, max = 32, message = "Source is required"))]
+    pub source: String,
+}
+
+#[derive(ToSchema, serde::Deserialize, Validate)]
+#[allow(dead_code)]
+pub struct UpdateProjectDocumentRequestDoc {
+    #[validate(length(
+        min = 1,
+        max = 255,
+        message = "Title must be between 1 and 255 characters"
+    ))]
+    pub title: Option<String>,
+
+    #[validate(length(min = 1, max = 32, message = "Document kind is required"))]
+    pub document_kind: Option<String>,
+
+    #[validate(length(min = 1, max = 255, message = "Content type is required"))]
+    pub content_type: Option<String>,
+
+    #[validate(length(
+        min = 1,
+        max = 512,
+        message = "Storage key must be between 1 and 512 characters"
+    ))]
+    pub storage_key: Option<String>,
+
+    pub checksum: Option<Option<String>>,
+    pub size_bytes: Option<i64>,
 }
 
 // Task Attempts - Agent Logs

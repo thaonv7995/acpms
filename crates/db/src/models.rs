@@ -948,6 +948,43 @@ pub struct TaskContextAttachment {
     pub created_at: DateTime<Utc>,
 }
 
+#[derive(Debug, Clone, Serialize, Deserialize, FromRow, TS)]
+#[ts(export)]
+pub struct ProjectDocument {
+    pub id: Uuid,
+    pub project_id: Uuid,
+    pub title: String,
+    pub filename: String,
+    pub document_kind: String,
+    pub content_type: String,
+    pub storage_key: String,
+    pub checksum: Option<String>,
+    pub size_bytes: i64,
+    pub source: String,
+    pub version: i32,
+    pub ingestion_status: String,
+    pub index_error: Option<String>,
+    pub indexed_at: Option<DateTime<Utc>>,
+    pub created_by: Option<Uuid>,
+    pub updated_by: Option<Uuid>,
+    pub created_at: DateTime<Utc>,
+    pub updated_at: DateTime<Utc>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, FromRow, TS)]
+#[ts(export)]
+pub struct ProjectDocumentChunk {
+    pub id: Uuid,
+    pub document_id: Uuid,
+    pub project_id: Uuid,
+    pub chunk_index: i32,
+    pub content: String,
+    pub content_hash: String,
+    pub token_count: Option<i32>,
+    pub embedding: Vec<f32>,
+    pub created_at: DateTime<Utc>,
+}
+
 // Task with computed attempt status fields for kanban view
 #[derive(Debug, Clone, Serialize, Deserialize, FromRow, TS)]
 #[ts(export)]

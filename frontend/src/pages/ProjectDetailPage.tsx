@@ -25,6 +25,7 @@ import {
   SummaryTab,
   TaskListTab,
   RequirementsTab,
+  DocumentsTab,
   ArchitectureTab,
   DeploymentsTab,
   SettingsTab,
@@ -70,6 +71,7 @@ const tabs: { id: ProjectTab; label: string; icon: string }[] = [
   { id: 'summary', label: 'Summary', icon: 'info' },
   { id: 'kanban', label: 'Tasks', icon: 'checklist' },
   { id: 'requirements', label: 'Requirements', icon: 'description' },
+  { id: 'documents', label: 'Documents', icon: 'library_books' },
   { id: 'architecture', label: 'Architecture', icon: 'hub' },
   { id: 'deployments', label: 'Deployments', icon: 'rocket_launch' },
   { id: 'settings', label: 'Settings', icon: 'settings' },
@@ -579,6 +581,9 @@ export function ProjectDetailPage() {
                     refetch();
                   }}
                 />
+              )}
+              {activeTab === 'documents' && (
+                <DocumentsTab projectId={project.id} />
               )}
               {activeTab === 'architecture' && (
                 <ArchitectureTab projectId={project.id} />

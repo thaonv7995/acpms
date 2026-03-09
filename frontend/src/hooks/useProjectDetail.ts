@@ -20,6 +20,7 @@ export type ProjectTab =
     | 'summary'
     | 'kanban'
     | 'requirements'
+    | 'documents'
     | 'architecture'
     | 'deployments'
     | 'settings';

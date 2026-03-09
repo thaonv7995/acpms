@@ -5,6 +5,7 @@ pub mod auth;
 pub mod health;
 pub mod openclaw;
 pub mod project_assistant;
+pub mod project_documents;
 pub mod projects;
 pub mod streams;
 pub mod task_attempts;
@@ -156,6 +157,25 @@ pub(crate) fn build_business_api_routes() -> Router<AppState> {
         .route(
             "/projects/:id/assistant/attachments/upload-url",
             post(project_assistant::get_assistant_attachment_upload_url),
+        )
+        .route(
+            "/projects/:project_id/documents",
+            get(project_documents::list_project_documents)
+                .post(project_documents::create_or_upsert_project_document),
+        )
+        .route(
+            "/projects/:project_id/documents/upload-url",
+            post(project_documents::get_project_document_upload_url),
+        )
+        .route(
+            "/projects/:project_id/documents/download-url",
+            post(project_documents::get_project_document_download_url),
+        )
+        .route(
+            "/projects/:project_id/documents/:document_id",
+            get(project_documents::get_project_document)
+                .patch(project_documents::update_project_document)
+                .delete(project_documents::delete_project_document),
         )
         .route(
             "/projects/:id/assistant/sessions",

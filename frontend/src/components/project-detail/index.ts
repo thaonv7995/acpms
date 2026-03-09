@@ -3,6 +3,7 @@ export { SummaryTab } from './SummaryTab';
 export { KanbanTab } from './KanbanTab';
 export { TaskListTab } from './TaskListTab';
 export { RequirementsTab } from './RequirementsTab';
+export { DocumentsTab } from './DocumentsTab';
 export { ArchitectureTab } from './ArchitectureTab';
 export { DeploymentsTab } from './DeploymentsTab';
 export { SettingsTab } from './SettingsTab';
