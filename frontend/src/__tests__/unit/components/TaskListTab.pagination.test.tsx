@@ -1,4 +1,4 @@
-import { render, waitFor } from '@testing-library/react';
+import { fireEvent, render, screen, waitFor } from '@testing-library/react';
 import { MemoryRouter } from 'react-router-dom';
 import { describe, expect, it, vi } from 'vitest';
 import { TaskListTab } from '@/components/project-detail/TaskListTab';
@@ -82,5 +82,34 @@ describe('TaskListTab pagination visibility', () => {
     await waitFor(() => {
       expect(onPaginationVisibilityChange).toHaveBeenLastCalledWith(false);
     });
+  });
+
+  it('renders edit and delete actions and calls their handlers', () => {
+    const onEditTask = vi.fn();
+    const onDeleteTask = vi.fn();
+
+    render(
+      <MemoryRouter>
+        <TaskListTab
+          tasks={[makeTask(1)]}
+          requirements={[]}
+          projectId="project-1"
+          sprints={[]}
+          selectedSprintId={null}
+          onSelectSprint={vi.fn()}
+          onRefreshProject={vi.fn()}
+          onTaskClick={vi.fn()}
+          onViewLogs={vi.fn()}
+          onEditTask={onEditTask}
+          onDeleteTask={onDeleteTask}
+        />
+      </MemoryRouter>
+    );
+
+    fireEvent.click(screen.getByLabelText('Edit Task 1'));
+    fireEvent.click(screen.getByLabelText('Delete Task 1'));
+
+    expect(onEditTask).toHaveBeenCalledWith('task-1');
+    expect(onDeleteTask).toHaveBeenCalledWith('task-1');
   });
 });

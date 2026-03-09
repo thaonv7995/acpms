@@ -134,6 +134,7 @@ export function TaskMetadataSidebar({
                     {canEditTask && onEditTask && (
                         <button
                             onClick={onEditTask}
+                            aria-label="Edit Task"
                             className="w-full py-2 px-3 text-sm text-muted-foreground hover:bg-muted rounded-lg transition-colors text-left flex items-center gap-2"
                         >
                             <span className="material-symbols-outlined text-[16px]">edit</span>
@@ -143,6 +144,7 @@ export function TaskMetadataSidebar({
                     {onDeleteTask && (
                         <button
                             onClick={onDeleteTask}
+                            aria-label="Delete Task"
                             className="w-full py-2 px-3 text-sm text-red-600 dark:text-red-400 hover:bg-red-50 dark:hover:bg-red-500/20 rounded-lg transition-colors text-left flex items-center gap-2"
                         >
                             <span className="material-symbols-outlined text-[16px]">delete</span>
