@@ -22,6 +22,8 @@ use std::collections::HashSet;
 use std::path::PathBuf;
 use uuid::Uuid;
 
+#[allow(unused_imports)]
+use crate::api::AgentLogResponse;
 use crate::api::{AgentLogDto, ApiResponse, RetryInfoDto, RetryResponseDto, TaskAttemptDto};
 use crate::error::{ApiError, ApiResult};
 use crate::middleware::{AuthUser, Permission, RbacChecker};
@@ -1790,7 +1792,7 @@ pub struct UpdateLogRequest {
     ),
     request_body = UpdateLogRequest,
     responses(
-        (status = 200, description = "Log updated successfully", body = ApiResponse<AgentLogDto>),
+        (status = 200, description = "Log updated successfully", body = AgentLogResponse),
         (status = 404, description = "Attempt or log not found"),
         (status = 400, description = "Log is not editable (only user/stdin logs)")
     )

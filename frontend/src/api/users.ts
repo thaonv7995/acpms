@@ -15,6 +15,7 @@ import {
 } from '../mappers/userMapper';
 import type { User, UserStats, UserRole, UserStatus } from '../types/user';
 import { logger } from '@/lib/logger';
+import { filterHiddenServiceAccounts } from '@/lib/hiddenServiceAccounts';
 
 // Re-export types for backward compatibility
 export type { User, UserStats, UserRole, UserStatus };
@@ -25,7 +26,7 @@ export type { User, UserStats, UserRole, UserStatus };
 export async function getUserStats(): Promise<UserStats> {
   try {
     const backendUsers = await apiGet<BackendUser[]>('/users');
-    const frontendUsers = backendUsers.map(mapBackendUser);
+    const frontendUsers = filterHiddenServiceAccounts(backendUsers).map(mapBackendUser);
     return calculateUserStats(frontendUsers);
   } catch (error) {
     logger.error('Failed to fetch user stats:', error);
@@ -40,7 +41,7 @@ export async function getUserStats(): Promise<UserStats> {
 export async function getUsers(filters?: UserFilters): Promise<User[]> {
   try {
     const backendUsers = await apiGet<BackendUser[]>('/users');
-    const frontendUsers = backendUsers.map(mapBackendUser);
+    const frontendUsers = filterHiddenServiceAccounts(backendUsers).map(mapBackendUser);
     return applyUserFilters(frontendUsers, filters);
   } catch (error) {
     logger.error('Failed to fetch users:', error);

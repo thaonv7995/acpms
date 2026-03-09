@@ -1,4 +1,6 @@
+use serde::Deserialize;
 use serde_json::{Map, Value};
+use std::collections::BTreeSet;
 use utoipa::OpenApi;
 
 use crate::{api, routes};
@@ -101,8 +103,20 @@ use crate::{api, routes};
             api::UpdateProjectRequestDoc,
             acpms_db::models::ProjectSettings,
             acpms_db::models::ProjectSettingsResponse,
+            acpms_db::models::RepositoryProvider,
+            acpms_db::models::RepositoryAccessMode,
+            acpms_db::models::RepositoryVerificationStatus,
+            acpms_db::models::RepositoryContext,
             routes::projects::ImportProjectRequest,
             routes::projects::ImportProjectResponse,
+            routes::projects::RecheckRepositoryAccessResponse,
+            routes::projects::LinkExistingForkRequest,
+            routes::projects::LinkExistingForkResponse,
+            routes::projects::CreateForkResponse,
+            routes::projects::ImportProjectPreflightRequest,
+            routes::projects::ImportProjectPreflightResponse,
+            routes::projects::ImportProjectCreateForkRequest,
+            routes::projects::ImportProjectCreateForkResponse,
             api::TaskDto,
             api::TaskResponse,
             api::TaskListResponse,
@@ -131,6 +145,15 @@ use crate::{api, routes};
             api::RequirementListResponse,
             api::CreateRequirementRequestDoc,
             api::UpdateRequirementRequestDoc,
+            routes::requirement_breakdowns::RequirementBreakdownSessionDto,
+            routes::requirement_breakdowns::ConfirmRequirementBreakdownResponse,
+            routes::requirement_breakdowns::ConfirmManualRequirementBreakdownResponse,
+            routes::requirement_breakdowns::StartRequirementTaskSequenceRequest,
+            routes::requirement_breakdowns::StartRequirementTaskSequenceResponse,
+            routes::requirement_breakdowns::BreakdownSprintAssignmentMode,
+            routes::requirement_breakdowns::ConfirmRequirementBreakdownRequest,
+            routes::requirement_breakdowns::ManualBreakdownTaskDraftRequest,
+            routes::requirement_breakdowns::ConfirmManualRequirementBreakdownRequest,
             api::DashboardResponse,
             api::DashboardDataDoc,
             api::DashboardStatsDoc,
@@ -147,12 +170,16 @@ use crate::{api, routes};
             api::TaskAttemptResponse,
             api::TaskAttemptListResponse,
             api::AgentLogDto,
+            api::AgentLogResponse,
             api::AgentLogListResponse,
             api::CreateTaskAttemptRequestDoc,
             api::SendInputRequestDoc,
             routes::task_attempts::CancelAttemptRequest,
             routes::task_attempts::ResumeAttemptRequest,
+            routes::task_attempts::UpdateLogRequest,
             routes::execution_processes::ExecutionProcessDto,
+            routes::execution_processes::ResetExecutionProcessRequest,
+            routes::execution_processes::ResetExecutionProcessResponse,
             api::GitLabConfigurationDto,
             api::MergeRequestDto,
             api::MergeRequestOverviewDto,
@@ -201,8 +228,55 @@ use crate::{api, routes};
 )]
 pub struct ApiDoc;
 
+#[derive(Debug, Clone, Default, Deserialize)]
+pub struct OpenClawOpenApiQuery {
+    pub path: Option<String>,
+    pub operation_id: Option<String>,
+    pub tag: Option<String>,
+    pub method: Option<String>,
+}
+
+impl OpenClawOpenApiQuery {
+    fn has_filters(&self) -> bool {
+        self.path.is_some()
+            || self.operation_id.is_some()
+            || self.tag.is_some()
+            || self.method.is_some()
+    }
+}
+
 fn openclaw_bearer_security() -> Value {
     serde_json::json!([{ "bearer_auth": [] }])
+}
+
+fn openclaw_search_examples() -> Value {
+    serde_json::json!([
+        "/api/openclaw/openapi.json?operation_id=list_tasks",
+        "/api/openclaw/openapi.json?path=/api/openclaw/v1/tasks/{id}&method=get",
+        "/api/openclaw/openapi.json?tag=Tasks&method=post"
+    ])
+}
+
+fn openclaw_search_metadata(filters: &OpenClawOpenApiQuery, matches: &[Value]) -> Value {
+    let matched_path_count = matches
+        .iter()
+        .filter_map(|entry| entry.get("path").and_then(Value::as_str))
+        .collect::<BTreeSet<_>>()
+        .len();
+
+    serde_json::json!({
+        "supported_filters": ["path", "operation_id", "tag", "method"],
+        "examples": openclaw_search_examples(),
+        "filters_applied": {
+            "path": filters.path.clone(),
+            "operation_id": filters.operation_id.clone(),
+            "tag": filters.tag.clone(),
+            "method": filters.method.clone()
+        },
+        "matched_path_count": matched_path_count,
+        "matched_operation_count": matches.len(),
+        "matches": matches
+    })
 }
 
 fn openclaw_ws_operation(summary: &str, description: &str, parameters: Vec<Value>) -> Value {
@@ -229,6 +303,217 @@ fn openclaw_ws_operation(summary: &str, description: &str, parameters: Vec<Value
             }
         }
     })
+}
+
+fn openclaw_operation_keys() -> &'static [&'static str] {
+    &[
+        "get", "post", "put", "patch", "delete", "options", "head", "trace",
+    ]
+}
+
+fn ensure_openclaw_path_security(item: &mut Value) {
+    let Some(item) = item.as_object_mut() else {
+        return;
+    };
+
+    for key in openclaw_operation_keys() {
+        let Some(operation) = item.get_mut(*key).and_then(Value::as_object_mut) else {
+            continue;
+        };
+        operation
+            .entry("security".to_string())
+            .or_insert_with(openclaw_bearer_security);
+    }
+}
+
+fn matches_filter(candidate: &str, query: &Option<String>) -> bool {
+    match query
+        .as_deref()
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+    {
+        Some(filter) => candidate
+            .to_ascii_lowercase()
+            .contains(&filter.to_ascii_lowercase()),
+        None => true,
+    }
+}
+
+fn operation_matches(
+    path: &str,
+    method: &str,
+    operation: &Map<String, Value>,
+    filters: &OpenClawOpenApiQuery,
+) -> bool {
+    if !matches_filter(path, &filters.path) {
+        return false;
+    }
+
+    if !matches_filter(method, &filters.method) {
+        return false;
+    }
+
+    if let Some(operation_id_filter) = filters
+        .operation_id
+        .as_deref()
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+    {
+        let operation_id = operation
+            .get("operationId")
+            .and_then(Value::as_str)
+            .unwrap_or_default();
+        if !operation_id
+            .to_ascii_lowercase()
+            .contains(&operation_id_filter.to_ascii_lowercase())
+        {
+            return false;
+        }
+    }
+
+    if let Some(tag_filter) = filters
+        .tag
+        .as_deref()
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+    {
+        let tag_filter = tag_filter.to_ascii_lowercase();
+        let has_matching_tag = operation
+            .get("tags")
+            .and_then(Value::as_array)
+            .map(|tags| {
+                tags.iter()
+                    .filter_map(Value::as_str)
+                    .any(|tag| tag.to_ascii_lowercase().contains(&tag_filter))
+            })
+            .unwrap_or(false);
+        if !has_matching_tag {
+            return false;
+        }
+    }
+
+    true
+}
+
+fn collect_schema_refs(value: &Value, needed: &mut BTreeSet<String>) {
+    match value {
+        Value::Object(map) => {
+            if let Some(reference) = map.get("$ref").and_then(Value::as_str) {
+                if let Some(name) = reference.strip_prefix("#/components/schemas/") {
+                    needed.insert(name.to_string());
+                }
+            }
+            for child in map.values() {
+                collect_schema_refs(child, needed);
+            }
+        }
+        Value::Array(items) => {
+            for item in items {
+                collect_schema_refs(item, needed);
+            }
+        }
+        _ => {}
+    }
+}
+
+fn prune_unreferenced_schemas(document: &mut Value) {
+    let mut needed = BTreeSet::new();
+    if let Some(paths) = document.get("paths") {
+        collect_schema_refs(paths, &mut needed);
+    }
+
+    loop {
+        let current: Vec<String> = needed.iter().cloned().collect();
+        let mut changed = false;
+
+        for schema_name in current {
+            let Some(schema) = document.pointer(&format!("/components/schemas/{schema_name}"))
+            else {
+                continue;
+            };
+            let before = needed.len();
+            collect_schema_refs(schema, &mut needed);
+            changed |= needed.len() != before;
+        }
+
+        if !changed {
+            break;
+        }
+    }
+
+    if let Some(schemas) = document
+        .pointer_mut("/components/schemas")
+        .and_then(Value::as_object_mut)
+    {
+        schemas.retain(|name, _| needed.contains(name));
+    }
+}
+
+fn retain_used_tags(document: &mut Value, used_tags: &BTreeSet<String>) {
+    let Some(tags) = document.get_mut("tags").and_then(Value::as_array_mut) else {
+        return;
+    };
+
+    tags.retain(|tag| {
+        tag.get("name")
+            .and_then(Value::as_str)
+            .map(|name| used_tags.contains(name))
+            .unwrap_or(false)
+    });
+}
+
+fn filter_paths(document: &mut Value, filters: &OpenClawOpenApiQuery) -> Vec<Value> {
+    let Some(paths) = document.get_mut("paths").and_then(Value::as_object_mut) else {
+        return Vec::new();
+    };
+
+    let original_paths = std::mem::take(paths);
+    let mut filtered_paths = Map::new();
+    let mut matches = Vec::new();
+    let mut used_tags = BTreeSet::new();
+
+    for (path, item) in original_paths {
+        let Some(item_obj) = item.as_object() else {
+            continue;
+        };
+
+        let mut filtered_item = Map::new();
+        let mut has_operation = false;
+
+        for (key, value) in item_obj {
+            if openclaw_operation_keys().contains(&key.as_str()) {
+                let Some(operation) = value.as_object() else {
+                    continue;
+                };
+                if operation_matches(&path, key, operation, filters) {
+                    has_operation = true;
+                    filtered_item.insert(key.clone(), value.clone());
+                    if let Some(tags) = operation.get("tags").and_then(Value::as_array) {
+                        for tag in tags.iter().filter_map(Value::as_str) {
+                            used_tags.insert(tag.to_string());
+                        }
+                    }
+                    matches.push(serde_json::json!({
+                        "path": path,
+                        "method": key.to_ascii_uppercase(),
+                        "operation_id": operation.get("operationId").and_then(Value::as_str),
+                        "summary": operation.get("summary").and_then(Value::as_str),
+                        "tags": operation.get("tags").cloned().unwrap_or(Value::Array(Vec::new()))
+                    }));
+                }
+            } else if key == "parameters" {
+                filtered_item.insert(key.clone(), value.clone());
+            }
+        }
+
+        if has_operation {
+            filtered_paths.insert(path, Value::Object(filtered_item));
+        }
+    }
+
+    *paths = filtered_paths;
+    retain_used_tags(document, &used_tags);
+    matches
 }
 
 pub fn build_openclaw_openapi_json() -> Value {
@@ -260,13 +545,73 @@ pub fn build_openclaw_openapi_json() -> Value {
     };
 
     let mut rewritten = Map::new();
-    for (path, item) in std::mem::take(paths) {
+    for (path, mut item) in std::mem::take(paths) {
         if path.starts_with("/api/v1/") || path == "/api/v1" {
+            ensure_openclaw_path_security(&mut item);
             let new_path = path.replacen("/api/v1", "/api/openclaw/v1", 1);
             rewritten.insert(new_path, item);
         }
     }
 
+    rewritten.insert(
+        "/api/openclaw/openapi.json".to_string(),
+        serde_json::json!({
+            "get": {
+                "tags": ["OpenClaw"],
+                "summary": "Load or search the OpenClaw OpenAPI contract",
+                "description": "Returns the authenticated OpenAPI contract for OpenClaw. Use the optional filters to narrow the response to one endpoint or a small subset of operations.",
+                "security": openclaw_bearer_security(),
+                "parameters": [
+                    {
+                        "name": "path",
+                        "in": "query",
+                        "required": false,
+                        "schema": { "type": "string" },
+                        "description": "Case-insensitive path substring filter. Combine with `method` to isolate a single endpoint."
+                    },
+                    {
+                        "name": "operation_id",
+                        "in": "query",
+                        "required": false,
+                        "schema": { "type": "string" },
+                        "description": "Case-insensitive filter for the OpenAPI `operationId`."
+                    },
+                    {
+                        "name": "tag",
+                        "in": "query",
+                        "required": false,
+                        "schema": { "type": "string" },
+                        "description": "Case-insensitive filter for endpoint tags such as `Tasks` or `Projects`."
+                    },
+                    {
+                        "name": "method",
+                        "in": "query",
+                        "required": false,
+                        "schema": {
+                            "type": "string",
+                            "enum": ["get", "post", "put", "patch", "delete", "options", "head", "trace"]
+                        },
+                        "description": "Optional HTTP method filter, case-insensitive."
+                    }
+                ],
+                "responses": {
+                    "200": {
+                        "description": "OpenClaw OpenAPI contract (full or filtered)",
+                        "content": {
+                            "application/json": {
+                                "schema": {
+                                    "type": "object"
+                                }
+                            }
+                        }
+                    },
+                    "401": {
+                        "description": "Missing or invalid OpenClaw bearer token"
+                    }
+                }
+            }
+        }),
+    );
     rewritten.insert(
         "/api/openclaw/guide-for-openclaw".to_string(),
         serde_json::json!({
@@ -599,7 +944,135 @@ pub fn build_openclaw_openapi_json() -> Value {
             "title".to_string(),
             Value::String("ACPMS OpenClaw Gateway API".to_string()),
         );
+        info.insert(
+            "description".to_string(),
+            Value::String(
+                "Authenticated ACPMS gateway contract for OpenClaw. All `/api/openclaw/*` routes require `Authorization: Bearer <OPENCLAW_API_KEY>`. To retrieve a smaller contract, call `/api/openclaw/openapi.json` with `path`, `operation_id`, `tag`, and optional `method` query filters."
+                    .to_string(),
+            ),
+        );
+    }
+
+    if let Some(root) = document.as_object_mut() {
+        root.insert(
+            "x-openclaw-search".to_string(),
+            openclaw_search_metadata(&OpenClawOpenApiQuery::default(), &[]),
+        );
     }
 
     document
+}
+
+pub fn build_filtered_openclaw_openapi_json(filters: &OpenClawOpenApiQuery) -> Value {
+    let mut document = build_openclaw_openapi_json();
+    let matches = if filters.has_filters() {
+        let matches = filter_paths(&mut document, filters);
+        prune_unreferenced_schemas(&mut document);
+        matches
+    } else {
+        Vec::new()
+    };
+
+    if let Some(root) = document.as_object_mut() {
+        root.insert(
+            "x-openclaw-search".to_string(),
+            openclaw_search_metadata(filters, &matches),
+        );
+    }
+
+    document
+}
+
+#[cfg(test)]
+mod tests {
+    use serde_json::Value;
+    use std::collections::BTreeSet;
+
+    use super::{
+        build_filtered_openclaw_openapi_json, build_openclaw_openapi_json, OpenClawOpenApiQuery,
+    };
+
+    fn collect_missing_schema_refs(
+        value: &Value,
+        document: &Value,
+        missing: &mut BTreeSet<String>,
+    ) {
+        match value {
+            Value::Object(map) => {
+                if let Some(reference) = map.get("$ref").and_then(Value::as_str) {
+                    if let Some(name) = reference.strip_prefix("#/components/schemas/") {
+                        if document
+                            .pointer(&format!("/components/schemas/{name}"))
+                            .is_none()
+                        {
+                            missing.insert(name.to_string());
+                        }
+                    }
+                }
+                for child in map.values() {
+                    collect_missing_schema_refs(child, document, missing);
+                }
+            }
+            Value::Array(items) => {
+                for item in items {
+                    collect_missing_schema_refs(item, document, missing);
+                }
+            }
+            _ => {}
+        }
+    }
+
+    #[test]
+    fn rewritten_v1_routes_require_bearer_security() {
+        let document = build_openclaw_openapi_json();
+        let security = document
+            .pointer("/paths/~1api~1openclaw~1v1~1tasks/get/security")
+            .and_then(|value| value.as_array())
+            .expect("security should be present on rewritten OpenClaw routes");
+
+        assert!(!security.is_empty());
+    }
+
+    #[test]
+    fn includes_searchable_openapi_endpoint() {
+        let document = build_openclaw_openapi_json();
+        assert!(document
+            .pointer("/paths/~1api~1openclaw~1openapi.json/get")
+            .is_some());
+    }
+
+    #[test]
+    fn generated_contract_has_no_dangling_schema_refs() {
+        let document = build_openclaw_openapi_json();
+        let mut missing = BTreeSet::new();
+        collect_missing_schema_refs(&document, &document, &mut missing);
+        assert!(missing.is_empty(), "missing schema refs: {missing:?}");
+    }
+
+    #[test]
+    fn filter_can_reduce_contract_to_single_operation() {
+        let document = build_filtered_openclaw_openapi_json(&OpenClawOpenApiQuery {
+            operation_id: Some("list_tasks".to_string()),
+            ..OpenClawOpenApiQuery::default()
+        });
+
+        let tasks_get = document
+            .pointer("/paths/~1api~1openclaw~1v1~1tasks/get")
+            .expect("filtered document should keep the matching operation");
+        assert_eq!(
+            tasks_get
+                .get("operationId")
+                .and_then(|value| value.as_str()),
+            Some("list_tasks")
+        );
+        assert!(document
+            .pointer("/paths/~1api~1openclaw~1v1~1projects")
+            .is_none());
+        assert!(document
+            .pointer("/components/schemas/TaskListResponse")
+            .is_some());
+        assert!(document
+            .pointer("/components/schemas/ProjectResponse")
+            .is_none());
+    }
 }

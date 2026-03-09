@@ -212,6 +212,7 @@ pub struct UpdateTaskRequestDoc {
 
 // Task Attempts - Agent Logs
 use super::AgentLogDto;
+define_response!(AgentLogResponse, AgentLogDto);
 define_response!(AgentLogListResponse, Vec<AgentLogDto>);
 
 #[derive(ToSchema, serde::Deserialize, Validate)]

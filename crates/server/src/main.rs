@@ -773,10 +773,8 @@ async fn handle_attempt_success_deployment(
                     "app_downloads".to_string(),
                     serde_json::Value::Array(Vec::new()),
                 );
-                attempt_metadata_patch.insert(
-                    "app_download_url".to_string(),
-                    serde_json::Value::Null,
-                );
+                attempt_metadata_patch
+                    .insert("app_download_url".to_string(), serde_json::Value::Null);
                 attempt_metadata_patch.insert(
                     "app_downloads".to_string(),
                     serde_json::Value::Array(Vec::new()),
@@ -834,8 +832,12 @@ async fn handle_attempt_success_deployment(
         update_task_metadata_patch(db, task.id, serde_json::Value::Object(metadata_patch)).await?;
     }
     if !attempt_metadata_patch.is_empty() {
-        update_attempt_metadata_patch(db, attempt_id, serde_json::Value::Object(attempt_metadata_patch))
-            .await?;
+        update_attempt_metadata_patch(
+            db,
+            attempt_id,
+            serde_json::Value::Object(attempt_metadata_patch),
+        )
+        .await?;
     }
 
     Ok(())
@@ -1239,7 +1241,8 @@ mod tests {
             serde_json::json!({ "os": "windows", "artifact_key": "builds/app.exe" }),
         ];
 
-        let filtered = finalize_app_downloads(acpms_db::models::ProjectType::Desktop, app_downloads);
+        let filtered =
+            finalize_app_downloads(acpms_db::models::ProjectType::Desktop, app_downloads);
 
         assert_eq!(filtered.len(), 2);
         assert_eq!(
@@ -1259,7 +1262,8 @@ mod tests {
             serde_json::json!({ "os": "browser", "artifact_key": "builds/web.zip" }),
         ];
 
-        let filtered = finalize_app_downloads(acpms_db::models::ProjectType::Desktop, app_downloads);
+        let filtered =
+            finalize_app_downloads(acpms_db::models::ProjectType::Desktop, app_downloads);
 
         assert_eq!(filtered.len(), 2);
     }

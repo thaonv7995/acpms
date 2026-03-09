@@ -18,6 +18,7 @@ import {
     type BackendUser,
 } from '../mappers/userMapper';
 import type { User, UserStats, UserStatus, SystemRole } from '../types/user';
+import { filterHiddenServiceAccounts } from '@/lib/hiddenServiceAccounts';
 
 interface UseUsersResult {
     users: User[];
@@ -74,7 +75,7 @@ export function useUsers(): UseUsersResult {
         const userData = userListResponse?.data;
         if (!userData) return [];
         const currentUserId = getCurrentUser()?.id;
-        return userData.map((dto): User => {
+        return filterHiddenServiceAccounts(userData).map((dto): User => {
             const mapped = mapUserDtoToUser(dto);
             if (currentUserId && mapped.id === currentUserId) {
                 return {

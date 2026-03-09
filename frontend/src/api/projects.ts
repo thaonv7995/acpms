@@ -9,6 +9,7 @@ import type {
   ProjectWithRepositoryContext,
   RecheckRepositoryAccessResponse,
 } from '../types/repository';
+import { filterHiddenServiceAccounts } from '@/lib/hiddenServiceAccounts';
 
 export interface ProjectMember {
   id: string;
@@ -44,7 +45,8 @@ export async function getProject(id: string): Promise<ProjectWithRepositoryConte
 }
 
 export async function getProjectMembers(projectId: string): Promise<ProjectMember[]> {
-  return apiGet<ProjectMember[]>(`${API_PREFIX}/projects/${projectId}/members`);
+  const members = await apiGet<ProjectMember[]>(`${API_PREFIX}/projects/${projectId}/members`);
+  return filterHiddenServiceAccounts(members);
 }
 
 export interface InviteableUser {
@@ -55,7 +57,8 @@ export interface InviteableUser {
 }
 
 export async function getInviteableUsers(projectId: string): Promise<InviteableUser[]> {
-  return apiGet<InviteableUser[]>(`${API_PREFIX}/projects/${projectId}/inviteable-users`);
+  const users = await apiGet<InviteableUser[]>(`${API_PREFIX}/projects/${projectId}/inviteable-users`);
+  return filterHiddenServiceAccounts(users);
 }
 
 export async function addProjectMember(

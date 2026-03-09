@@ -2,7 +2,10 @@ use acpms_db::{models::*, PgPool};
 use acpms_executors::ExecutorOrchestrator;
 use acpms_github::GitHubClient;
 use acpms_gitlab::GitLabClient;
-use acpms_services::{ProjectService, RepositoryAccessService, SystemSettingsService, TaskService};
+use acpms_services::{
+    ProjectService, RepositoryAccessService, SystemSettingsService, TaskService,
+    OPENCLAW_SERVICE_USER_EMAIL,
+};
 use axum::extract::{Path, Query, State};
 use axum::http::StatusCode;
 use axum::Json;
@@ -383,10 +386,12 @@ pub async fn list_project_members(
         FROM project_members pm
         INNER JOIN users u ON u.id = pm.user_id
         WHERE pm.project_id = $1
+          AND LOWER(u.email) <> LOWER($2)
         ORDER BY u.name ASC
         "#,
     )
     .bind(project_id)
+    .bind(OPENCLAW_SERVICE_USER_EMAIL)
     .fetch_all(&pool)
     .await
     .map_err(|e| ApiError::Internal(e.to_string()))?;
@@ -440,7 +445,8 @@ pub async fn list_inviteable_users(
         r#"
         SELECT u.id, u.name, u.email, u.avatar_url
         FROM users u
-        WHERE NOT EXISTS (
+        WHERE LOWER(u.email) <> LOWER($2)
+          AND NOT EXISTS (
             SELECT 1 FROM project_members pm
             WHERE pm.project_id = $1 AND pm.user_id = u.id
         )
@@ -448,6 +454,7 @@ pub async fn list_inviteable_users(
         "#,
     )
     .bind(project_id)
+    .bind(OPENCLAW_SERVICE_USER_EMAIL)
     .fetch_all(&pool)
     .await
     .map_err(|e| ApiError::Internal(e.to_string()))?;

@@ -126,6 +126,11 @@ Your required first actions:
    - /api/openclaw/ws/*
 6. Follow the ACPMS operating rules returned by the Guide Endpoint.
 
+Bootstrap example (curl):
+curl -sS \\
+  -H "Authorization: Bearer ${OPENCLAW_API_KEY}" \\
+  "${guide_url}"
+
 Human reporting rules:
 - report important status, analyses, plans, started attempts, completed attempts, failed attempts, blocked work, and approval requests
 - do not expose secrets, API keys, or webhook secrets in user-facing output

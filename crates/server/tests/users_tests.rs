@@ -39,6 +39,63 @@ async fn test_list_users() {
 
 #[tokio::test]
 #[ignore = "requires test database"]
+async fn test_list_users_excludes_openclaw_service_account() {
+    let pool = setup_test_db().await;
+    let state = create_test_app_state(pool.clone()).await;
+    let router = create_router(state);
+
+    let (admin_id, _) = create_test_admin(&pool).await;
+    let admin_token = generate_test_token(admin_id);
+    let (visible_user_id, _) =
+        create_test_user(&pool, Some("visible@example.com"), None, None).await;
+    let hidden_user_id = uuid::Uuid::new_v4();
+
+    sqlx::query(
+        r#"
+        INSERT INTO users (id, email, name, password_hash, global_roles)
+        VALUES ($1, $2, $3, NULL, $4)
+        "#,
+    )
+    .bind(hidden_user_id)
+    .bind("openclaw-gateway@acpms.local")
+    .bind("OpenClaw Gateway")
+    .bind(vec![acpms_db::models::SystemRole::Admin])
+    .execute(&pool)
+    .await
+    .expect("create hidden service account");
+
+    let (status, body): (axum::http::StatusCode, String) = make_request_with_string_headers(
+        &router,
+        "GET",
+        "/api/v1/users",
+        None,
+        vec![auth_header_bearer(&admin_token)],
+    )
+    .await;
+
+    assert_eq!(status, 200, "Expected 200 OK, got {}: {}", status, body);
+
+    let response: serde_json::Value =
+        serde_json::from_str(&body).expect("Failed to parse response");
+    let users = response["data"].as_array().expect("users array");
+
+    assert!(users
+        .iter()
+        .any(|user| user["email"].as_str() == Some("visible@example.com")));
+    assert!(users
+        .iter()
+        .all(|user| user["email"].as_str() != Some("openclaw-gateway@acpms.local")));
+
+    let _ = sqlx::query("DELETE FROM users WHERE id = $1")
+        .bind(hidden_user_id)
+        .execute(&pool)
+        .await;
+    cleanup_test_data(&pool, visible_user_id, None).await;
+    cleanup_test_data(&pool, admin_id, None).await;
+}
+
+#[tokio::test]
+#[ignore = "requires test database"]
 async fn test_get_user() {
     let pool = setup_test_db().await;
     let state = create_test_app_state(pool.clone()).await;

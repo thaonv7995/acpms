@@ -11,6 +11,7 @@ use serde_json::{json, Value};
 use sqlx::FromRow;
 use std::time::Duration;
 use tokio::time::sleep;
+use utoipa::ToSchema;
 use uuid::Uuid;
 
 use crate::{
@@ -49,7 +50,7 @@ struct RequirementBreakdownSessionRow {
     cancelled_at: Option<DateTime<Utc>>,
 }
 
-#[derive(Debug, Serialize)]
+#[derive(Debug, Serialize, ToSchema)]
 pub struct RequirementBreakdownSessionDto {
     pub id: Uuid,
     pub project_id: Uuid,
@@ -94,24 +95,24 @@ impl From<RequirementBreakdownSessionRow> for RequirementBreakdownSessionDto {
     }
 }
 
-#[derive(Debug, Serialize)]
+#[derive(Debug, Serialize, ToSchema)]
 pub struct ConfirmRequirementBreakdownResponse {
     pub session: RequirementBreakdownSessionDto,
     pub tasks: Vec<TaskDto>,
 }
 
-#[derive(Debug, Serialize)]
+#[derive(Debug, Serialize, ToSchema)]
 pub struct ConfirmManualRequirementBreakdownResponse {
     pub tasks: Vec<TaskDto>,
 }
 
-#[derive(Debug, Deserialize, Default)]
+#[derive(Debug, Deserialize, Default, ToSchema)]
 pub struct StartRequirementTaskSequenceRequest {
     #[serde(default)]
     pub continue_on_failure: bool,
 }
 
-#[derive(Debug, Serialize)]
+#[derive(Debug, Serialize, ToSchema)]
 pub struct StartRequirementTaskSequenceResponse {
     pub run_id: Uuid,
     pub task_ids: Vec<Uuid>,
@@ -119,7 +120,7 @@ pub struct StartRequirementTaskSequenceResponse {
     pub continue_on_failure: bool,
 }
 
-#[derive(Debug, Deserialize)]
+#[derive(Debug, Deserialize, ToSchema)]
 #[serde(rename_all = "snake_case")]
 pub enum BreakdownSprintAssignmentMode {
     Active,
@@ -127,13 +128,13 @@ pub enum BreakdownSprintAssignmentMode {
     Backlog,
 }
 
-#[derive(Debug, Deserialize)]
+#[derive(Debug, Deserialize, ToSchema)]
 pub struct ConfirmRequirementBreakdownRequest {
     pub assignment_mode: BreakdownSprintAssignmentMode,
     pub sprint_id: Option<Uuid>,
 }
 
-#[derive(Debug, Deserialize)]
+#[derive(Debug, Deserialize, ToSchema)]
 pub struct ManualBreakdownTaskDraftRequest {
     pub title: String,
     pub description: Option<String>,
@@ -144,7 +145,7 @@ pub struct ManualBreakdownTaskDraftRequest {
     pub metadata: Option<Value>,
 }
 
-#[derive(Debug, Deserialize)]
+#[derive(Debug, Deserialize, ToSchema)]
 pub struct ConfirmManualRequirementBreakdownRequest {
     pub assignment_mode: BreakdownSprintAssignmentMode,
     pub sprint_id: Option<Uuid>,

@@ -24,7 +24,10 @@ use utoipa::ToSchema;
 use uuid::Uuid;
 
 use crate::{
-    api::{openapi_spec::build_openclaw_openapi_json, ApiErrorDetail, ApiResponse, ResponseCode},
+    api::{
+        openapi_spec::{build_filtered_openclaw_openapi_json, OpenClawOpenApiQuery},
+        ApiErrorDetail, ApiResponse, ResponseCode,
+    },
     error::ApiResult,
     middleware::AuthUser,
     AppState,
@@ -488,8 +491,11 @@ pub async fn guide_for_openclaw(
     )))
 }
 
-pub async fn openapi_json(_auth_user: AuthUser) -> Json<Value> {
-    Json(build_openclaw_openapi_json())
+pub async fn openapi_json(
+    _auth_user: AuthUser,
+    Query(query): Query<OpenClawOpenApiQuery>,
+) -> Json<Value> {
+    Json(build_filtered_openclaw_openapi_json(&query))
 }
 
 fn parse_resume_cursor(

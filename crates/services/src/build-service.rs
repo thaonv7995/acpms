@@ -451,16 +451,14 @@ impl BuildService {
             } else if ext_lc == "exe"
                 || ext_lc == "msi"
                 || name_lc.contains("win")
-                || (ext_lc == "zip"
-                    && (name_lc.contains("win") || name_lc.contains("windows")))
+                || (ext_lc == "zip" && (name_lc.contains("win") || name_lc.contains("windows")))
             {
                 Some("windows")
             } else if ext_lc == "appimage"
                 || ext_lc == "deb"
                 || ext_lc == "rpm"
                 || name_lc.contains("linux")
-                || (ext_lc == "zip"
-                    && (name_lc.contains("linux") || name_lc.contains("appimage")))
+                || (ext_lc == "zip" && (name_lc.contains("linux") || name_lc.contains("appimage")))
             {
                 Some("linux")
             } else {

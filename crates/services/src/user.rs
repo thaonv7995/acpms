@@ -2,6 +2,12 @@ use acpms_db::models::{SystemRole, User};
 use sqlx::PgPool;
 use uuid::Uuid;
 
+pub const OPENCLAW_SERVICE_USER_EMAIL: &str = "openclaw-gateway@acpms.local";
+
+pub fn is_hidden_user_email(email: &str) -> bool {
+    email.eq_ignore_ascii_case(OPENCLAW_SERVICE_USER_EMAIL)
+}
+
 #[derive(Clone)]
 pub struct UserService {
     pool: PgPool,
@@ -27,9 +33,11 @@ impl UserService {
                 created_at,
                 updated_at
             FROM users
+            WHERE LOWER(email) <> LOWER($1)
             ORDER BY name ASC
             "#,
         )
+        .bind(OPENCLAW_SERVICE_USER_EMAIL)
         .fetch_all(&self.pool)
         .await?;
 

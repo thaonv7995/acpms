@@ -499,6 +499,7 @@ impl DashboardService {
                     FROM project_members pm
                     JOIN users u ON u.id = pm.user_id
                     WHERE pm.project_id = ANY($1)
+                      AND LOWER(u.email) <> LOWER($2)
                 )
                 SELECT project_id, user_id, user_name, rank_in_project
                 FROM ranked_members
@@ -507,6 +508,7 @@ impl DashboardService {
                 "#,
             )
             .bind(&project_ids)
+            .bind(crate::user::OPENCLAW_SERVICE_USER_EMAIL)
             .fetch_all(&self.pool)
             .await?;
 
