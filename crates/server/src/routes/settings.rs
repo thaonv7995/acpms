@@ -3,6 +3,8 @@ use crate::routes::agent;
 use crate::{api::ApiResponse, error::ApiError, AppState};
 use acpms_db::models::{SystemSettingsResponse, UpdateSystemSettingsRequest};
 use acpms_deployment::cloudflare::CloudflareClient;
+use acpms_github::GitHubClient;
+use acpms_gitlab::GitLabClient;
 use acpms_services::{cloudflare_token_looks_masked_or_corrupted, CloudflareConfigOverrides};
 use axum::{
     extract::State,
@@ -17,6 +19,7 @@ use uuid::Uuid;
 pub fn create_routes() -> Router<AppState> {
     Router::new()
         .route("/settings", get(get_settings).put(update_settings))
+        .route("/settings/test-gitlab", get(test_source_control_connection))
         .route(
             "/settings/cloudflare/check",
             post(check_cloudflare_settings),
@@ -45,6 +48,12 @@ pub struct CloudflareConnectionCheckResponse {
     pub details: Vec<String>,
     pub checked_at: String,
     pub preview_url_example: Option<String>,
+}
+
+#[derive(Debug, Serialize)]
+pub struct ConnectionTestResult {
+    pub success: bool,
+    pub message: String,
 }
 
 /// Get current system settings (safe DTO)
@@ -110,6 +119,80 @@ pub async fn update_settings(
     Ok(Json(ApiResponse::success(
         settings,
         "Settings updated successfully",
+    )))
+}
+
+pub async fn test_source_control_connection(
+    auth_user: AuthUser,
+    State(state): State<AppState>,
+) -> Result<Json<ApiResponse<ConnectionTestResult>>, ApiError> {
+    RbacChecker::check_system_admin(auth_user.id, &state.db).await?;
+
+    let settings = state
+        .settings_service
+        .get()
+        .await
+        .map_err(|e| ApiError::Internal(e.to_string()))?;
+    let base_url = settings.gitlab_url.trim().to_string();
+    let pat = state
+        .settings_service
+        .get_gitlab_pat()
+        .await
+        .map_err(|e| ApiError::Internal(e.to_string()))?;
+
+    let pat = pat.and_then(|value| {
+        let trimmed = value.trim().to_string();
+        if trimmed.is_empty() {
+            None
+        } else {
+            Some(trimmed)
+        }
+    });
+
+    let result = if base_url.is_empty() || pat.is_none() {
+        ConnectionTestResult {
+            success: false,
+            message: "Source control URL or Personal Access Token is not configured.".to_string(),
+        }
+    } else if source_control_looks_like_github(&base_url) {
+        match GitHubClient::new(&base_url, pat.as_deref().unwrap_or_default()) {
+            Ok(client) => match client.get_authenticated_user().await {
+                Ok(user) => ConnectionTestResult {
+                    success: true,
+                    message: format!("Connected to GitHub as @{}.", user.login),
+                },
+                Err(error) => ConnectionTestResult {
+                    success: false,
+                    message: format!("Failed to connect to GitHub: {}", error),
+                },
+            },
+            Err(error) => ConnectionTestResult {
+                success: false,
+                message: format!("Failed to initialize GitHub client: {}", error),
+            },
+        }
+    } else {
+        match GitLabClient::new(&base_url, pat.as_deref().unwrap_or_default()) {
+            Ok(client) => match client.get_current_user().await {
+                Ok(user) => ConnectionTestResult {
+                    success: true,
+                    message: format!("Connected to GitLab as @{}.", user.username),
+                },
+                Err(error) => ConnectionTestResult {
+                    success: false,
+                    message: format!("Failed to connect to GitLab: {}", error),
+                },
+            },
+            Err(error) => ConnectionTestResult {
+                success: false,
+                message: format!("Failed to initialize GitLab client: {}", error),
+            },
+        }
+    };
+
+    Ok(Json(ApiResponse::success(
+        result,
+        "Source control check completed",
     )))
 }
 
@@ -343,4 +426,9 @@ pub async fn check_cloudflare_settings(
         },
         "Cloudflare check completed",
     )))
+}
+
+fn source_control_looks_like_github(url: &str) -> bool {
+    let normalized = url.trim().to_ascii_lowercase();
+    normalized.contains("github.com") || normalized.contains("api.github.com")
 }

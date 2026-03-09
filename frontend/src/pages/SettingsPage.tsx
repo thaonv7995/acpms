@@ -45,6 +45,12 @@ interface SettingsGuideContent {
     note?: string;
 }
 
+interface SourceControlCheckResult {
+    success: boolean;
+    message: string;
+    checkedAt: string;
+}
+
 const SETTINGS_GUIDES: Record<
     Exclude<SettingsGuideType, null>,
     SettingsGuideContent
@@ -291,7 +297,7 @@ function SettingsGuideButton({
 }
 
 export function SettingsPage() {
-    const { settings, loading: settingsLoading, saving, save } = useSettings();
+    const { settings, loading: settingsLoading, saving, save, testing, testGitLab } = useSettings();
     const { toasts, showToast, hideToast } = useToast();
 
     // GitLab State
@@ -299,6 +305,7 @@ export function SettingsPage() {
     const [gitlabToken, setGitlabToken] = useState('');
     const [showGitlabToken, setShowGitlabToken] = useState(false);
     const [isEditingGitlab, setIsEditingGitlab] = useState(false);
+    const [gitlabCheckResult, setGitlabCheckResult] = useState<SourceControlCheckResult | null>(null);
 
     // Cloudflare State
     // Cloudflare State
@@ -563,9 +570,33 @@ export function SettingsPage() {
                 }
             });
             setIsEditingGitlab(false);
+            setGitlabCheckResult(null);
             showToast('GitLab settings saved successfully', 'success');
         } catch {
             showToast('Failed to save GitLab settings', 'error');
+        }
+    };
+
+    const handleCheckGitLab = async () => {
+        try {
+            const result = await testGitLab();
+            setGitlabCheckResult({
+                success: result.success,
+                message: result.message,
+                checkedAt: new Date().toISOString(),
+            });
+            showToast(result.message, result.success ? 'success' : 'error');
+        } catch (error) {
+            const message =
+                error instanceof ApiError && error.message
+                    ? error.message
+                    : 'Failed to validate source control settings';
+            setGitlabCheckResult({
+                success: false,
+                message,
+                checkedAt: new Date().toISOString(),
+            });
+            showToast(message, 'error');
         }
     };
 
@@ -938,7 +969,20 @@ export function SettingsPage() {
                                                     </div>
                                                 )}
                                                 <button
-                                                    onClick={() => setIsEditingGitlab(true)}
+                                                    onClick={handleCheckGitLab}
+                                                    disabled={testing.gitlab || saving || !settings?.gitlab?.configured}
+                                                    className="p-2 text-muted-foreground hover:text-primary hover:bg-muted rounded-lg transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
+                                                    title="Validate source control connection"
+                                                >
+                                                    <span className={`material-symbols-outlined ${testing.gitlab ? 'animate-spin' : ''}`}>
+                                                        {testing.gitlab ? 'progress_activity' : 'check_circle'}
+                                                    </span>
+                                                </button>
+                                                <button
+                                                    onClick={() => {
+                                                        setIsEditingGitlab(true);
+                                                        setGitlabCheckResult(null);
+                                                    }}
                                                     className="p-2 text-muted-foreground hover:text-primary hover:bg-muted rounded-lg transition-colors"
                                                     title="Edit Configuration"
                                                 >
@@ -948,7 +992,12 @@ export function SettingsPage() {
                                         ) : (
                                             <div className="flex items-center gap-2">
                                                 <button
-                                                    onClick={() => setIsEditingGitlab(false)}
+                                                    onClick={() => {
+                                                        setIsEditingGitlab(false);
+                                                        setGitlabUrl(settings?.gitlab?.url || 'https://gitlab.com');
+                                                        setGitlabToken(settings?.gitlab?.token || '');
+                                                        setGitlabCheckResult(null);
+                                                    }}
                                                     className="px-3 py-1.5 text-xs font-bold text-muted-foreground hover:text-card-foreground transition-colors"
                                                 >
                                                     Cancel
@@ -988,7 +1037,10 @@ export function SettingsPage() {
                                                 type="text"
                                                 value={gitlabUrl}
                                                 disabled={!isEditingGitlab}
-                                                onChange={(e) => setGitlabUrl(e.target.value)}
+                                                onChange={(e) => {
+                                                    setGitlabUrl(e.target.value);
+                                                    setGitlabCheckResult(null);
+                                                }}
                                                 placeholder="https://gitlab.com or https://github.com"
                                             />
                                         </div>
@@ -1005,7 +1057,10 @@ export function SettingsPage() {
                                                 type={showGitlabToken && isEditingGitlab ? "text" : "password"}
                                                 value={gitlabToken}
                                                 disabled={!isEditingGitlab}
-                                                onChange={(e) => setGitlabToken(e.target.value)}
+                                                onChange={(e) => {
+                                                    setGitlabToken(e.target.value);
+                                                    setGitlabCheckResult(null);
+                                                }}
                                                 placeholder="glpat-... or ghp_..."
                                             />
                                             {isEditingGitlab && (
@@ -1019,6 +1074,62 @@ export function SettingsPage() {
                                         </div>
                                     </div>
                                 </div>
+
+                                {gitlabCheckResult && (
+                                    <div
+                                        className={`rounded-lg border px-4 py-3 ${
+                                            gitlabCheckResult.success
+                                                ? 'border-emerald-500/30 bg-emerald-500/10'
+                                                : 'border-rose-500/30 bg-rose-500/10'
+                                        }`}
+                                    >
+                                        <div className="flex items-start justify-between gap-3">
+                                            <div className="flex items-start gap-3">
+                                                <span
+                                                    className={`material-symbols-outlined ${
+                                                        gitlabCheckResult.success
+                                                            ? 'text-emerald-600 dark:text-emerald-400'
+                                                            : 'text-rose-600 dark:text-rose-400'
+                                                    }`}
+                                                >
+                                                    {gitlabCheckResult.success ? 'check_circle' : 'error'}
+                                                </span>
+                                                <div>
+                                                    <p
+                                                        className={`text-sm font-semibold ${
+                                                            gitlabCheckResult.success
+                                                                ? 'text-emerald-800 dark:text-emerald-200'
+                                                                : 'text-rose-800 dark:text-rose-200'
+                                                        }`}
+                                                    >
+                                                        {gitlabCheckResult.success ? 'Connection OK' : 'Connection Failed'}
+                                                    </p>
+                                                    <p
+                                                        className={`mt-1 text-sm ${
+                                                            gitlabCheckResult.success
+                                                                ? 'text-emerald-700 dark:text-emerald-100/90'
+                                                                : 'text-rose-700 dark:text-rose-100/90'
+                                                        }`}
+                                                    >
+                                                        {gitlabCheckResult.message}
+                                                    </p>
+                                                </div>
+                                            </div>
+                                            <span
+                                                className={`shrink-0 rounded-full px-2 py-1 text-xs font-bold uppercase ${
+                                                    gitlabCheckResult.success
+                                                        ? 'bg-emerald-500/15 text-emerald-700 dark:text-emerald-300'
+                                                        : 'bg-rose-500/15 text-rose-700 dark:text-rose-300'
+                                                }`}
+                                            >
+                                                Checked
+                                            </span>
+                                        </div>
+                                        <p className="mt-2 text-xs text-muted-foreground">
+                                            Checked {new Date(gitlabCheckResult.checkedAt).toLocaleString()}
+                                        </p>
+                                    </div>
+                                )}
                             </div>
                         </div>
                     </section>

@@ -10,6 +10,7 @@ import type { SprintDto } from '../../api/generated/models';
 import type { ProjectMember } from '../../api/projects';
 import { useProjectMembers } from '../../hooks/useProjectMembers';
 import { useProjectSettings } from '../../hooks/useProjectSettings';
+import { useSettings } from '../../hooks/useSettings';
 import { createTask, getTaskAttachmentUploadUrl } from '../../api/tasks';
 import { createTaskAttempt } from '../../api/taskAttempts';
 import type { TaskType } from '../../shared/types';
@@ -20,6 +21,7 @@ import {
     normalizeRepositoryContext,
 } from '../../utils/repositoryAccess';
 import { logger } from '@/lib/logger';
+import { SourceControlSetupRequiredDialog } from './SourceControlSetupRequiredDialog';
 
 type TaskTypeValue = Exclude<TaskType, 'init'>;
 type TaskPriorityValue = 'low' | 'medium' | 'high' | 'critical';
@@ -92,6 +94,7 @@ export function CreateTaskModal({
     const [isAiGenerating, setIsAiGenerating] = useState(false);
     const [isDragOver, setIsDragOver] = useState(false);
     const [submitError, setSubmitError] = useState<string | null>(null);
+    const [showSetupDialog, setShowSetupDialog] = useState(false);
 
     const [selectedProject, setSelectedProject] = useState(projectId || '');
     const effectiveProjectId = projectId || selectedProject;
@@ -104,6 +107,7 @@ export function CreateTaskModal({
         projectId: effectiveProjectId || '',
         enabled: isOpen && Boolean(effectiveProjectId),
     });
+    const { settings, loading: settingsLoading } = useSettings();
 
     const memberOptions = useMemo(
         () => members.map((member) => ({ id: member.id, name: member.name })),
@@ -136,6 +140,8 @@ export function CreateTaskModal({
     );
     const repositoryReadOnly = repositoryGuardEnabled && isRepositoryReadOnly(effectiveRepositoryContext);
     const repositorySummary = getRepositoryAccessSummary(effectiveRepositoryContext);
+    const sourceControlConfigured = Boolean(settings?.gitlab?.configured);
+    const sourceControlSetupRequired = !settingsLoading && !sourceControlConfigured;
 
     const uploadedAttachments: UploadedAttachment[] = useMemo(
         () =>
@@ -176,6 +182,7 @@ export function CreateTaskModal({
         setAutoDeployTouched(false);
         setAttachments([]);
         setSubmitError(null);
+        setShowSetupDialog(false);
     }, [isOpen, projectId]);
 
     useEffect(() => {
@@ -310,6 +317,10 @@ export function CreateTaskModal({
 
     const handleCreate = async () => {
         if (!isFormValid || hasUploadingAttachments) return;
+        if (sourceControlSetupRequired) {
+            setShowSetupDialog(true);
+            return;
+        }
         setIsCreating(true);
         setSubmitError(null);
 
@@ -549,6 +560,22 @@ export function CreateTaskModal({
                         </div>
                     )}
 
+                    {sourceControlSetupRequired && (
+                        <div className="rounded-lg border border-amber-200 bg-amber-50 p-4 dark:border-amber-500/30 dark:bg-amber-500/10">
+                            <div className="flex items-start gap-3">
+                                <span className="material-symbols-outlined text-amber-600 dark:text-amber-300">settings_alert</span>
+                                <div>
+                                    <p className="text-sm font-semibold text-amber-900 dark:text-amber-100">
+                                        Source control is not configured
+                                    </p>
+                                    <p className="text-sm text-amber-800 dark:text-amber-200 mt-1">
+                                        Configure GitLab or GitHub in System Settings before creating or starting agent tasks.
+                                    </p>
+                                </div>
+                            </div>
+                        </div>
+                    )}
+
                     <div className="rounded-lg border border-border bg-muted/50 p-4 space-y-3">
                         <h3 className="text-sm font-bold text-card-foreground">Execution Options</h3>
                         <div className="flex flex-nowrap gap-3 overflow-x-auto pb-1">
@@ -662,6 +689,11 @@ export function CreateTaskModal({
                     </button>
                 </div>
             </div>
+            <SourceControlSetupRequiredDialog
+                isOpen={showSetupDialog}
+                onClose={() => setShowSetupDialog(false)}
+                contextLabel="Creating a task"
+            />
         </div>
     );
 }

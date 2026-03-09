@@ -1,6 +1,7 @@
 // CreateAttemptDialog - Dialog for creating a new attempt for a task
 import { useState } from 'react';
 import { useCreateTaskAttempt } from '../../api/generated/task-attempts/task-attempts';
+import { useSettings } from '../../hooks/useSettings';
 import type { RepositoryContext } from '../../types/repository';
 import {
   getRepositoryAccessSummary,
@@ -8,6 +9,7 @@ import {
   normalizeRepositoryContext,
 } from '../../utils/repositoryAccess';
 import { logger } from '@/lib/logger';
+import { SourceControlSetupRequiredDialog } from './SourceControlSetupRequiredDialog';
 
 interface CreateAttemptDialogProps {
   isOpen: boolean;
@@ -28,13 +30,21 @@ export function CreateAttemptDialog({
   onSuccess,
 }: CreateAttemptDialogProps) {
   const createAttemptMutation = useCreateTaskAttempt();
+  const { settings, loading: settingsLoading } = useSettings();
   const [submitError, setSubmitError] = useState<string | null>(null);
+  const [showSetupDialog, setShowSetupDialog] = useState(false);
   const effectiveRepositoryContext = normalizeRepositoryContext(repositoryContext);
   const repositoryReadOnly = Boolean(repositoryContext) && isRepositoryReadOnly(effectiveRepositoryContext);
   const repositorySummary = getRepositoryAccessSummary(effectiveRepositoryContext);
+  const sourceControlConfigured = Boolean(settings?.gitlab?.configured);
+  const sourceControlSetupRequired = !settingsLoading && !sourceControlConfigured;
 
   const handleCreate = async () => {
     if (repositoryReadOnly) return;
+    if (sourceControlSetupRequired) {
+      setShowSetupDialog(true);
+      return;
+    }
 
     try {
       setSubmitError(null);
@@ -86,6 +96,17 @@ export function CreateAttemptDialog({
             </p>
           </div>
 
+          {sourceControlSetupRequired && (
+            <div className="mb-4 p-3 rounded-lg bg-amber-50 dark:bg-amber-900/20 border border-amber-200 dark:border-amber-800">
+              <p className="text-sm font-semibold text-amber-800 dark:text-amber-200">
+                Source control is not configured
+              </p>
+              <p className="text-xs text-amber-700 dark:text-amber-300 mt-1">
+                Configure GitLab or GitHub source control in System Settings before starting agent attempts.
+              </p>
+            </div>
+          )}
+
           {repositoryReadOnly && (
             <div className="mb-4 p-3 rounded-lg bg-amber-50 dark:bg-amber-900/20 border border-amber-200 dark:border-amber-800">
               <p className="text-sm font-semibold text-amber-800 dark:text-amber-200">
@@ -128,6 +149,11 @@ export function CreateAttemptDialog({
                   <span className="material-symbols-outlined text-[18px]">lock</span>
                   Start Blocked
                 </>
+              ) : sourceControlSetupRequired ? (
+                <>
+                  <span className="material-symbols-outlined text-[18px]">settings</span>
+                  Setup Required
+                </>
               ) : (
                 <>
                   <span className="material-symbols-outlined text-[18px]">play_arrow</span>
@@ -138,6 +164,11 @@ export function CreateAttemptDialog({
           </div>
         </div>
       </div>
+      <SourceControlSetupRequiredDialog
+        isOpen={showSetupDialog}
+        onClose={() => setShowSetupDialog(false)}
+        contextLabel="Starting a new attempt"
+      />
     </div>
   );
 }

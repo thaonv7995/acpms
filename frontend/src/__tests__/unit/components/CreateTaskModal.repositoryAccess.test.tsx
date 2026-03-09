@@ -1,10 +1,14 @@
 import { fireEvent, render, screen, waitFor } from '@testing-library/react';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
+import { MemoryRouter } from 'react-router-dom';
+import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
+import type { ReactElement } from 'react';
 import { CreateTaskModal } from '../../../components/modals/CreateTaskModal';
 import { useProjects } from '../../../hooks/useProjects';
 import { useSprints } from '../../../hooks/useSprints';
 import { useProjectMembers } from '../../../hooks/useProjectMembers';
 import { useProjectSettings } from '../../../hooks/useProjectSettings';
+import { useSettings } from '../../../hooks/useSettings';
 import { createTask } from '../../../api/tasks';
 import { createTaskAttempt } from '../../../api/taskAttempts';
 import { DEFAULT_PROJECT_SETTINGS } from '../../../api/projectSettings';
@@ -57,6 +61,10 @@ vi.mock('../../../hooks/useProjectSettings', () => ({
   useProjectSettings: vi.fn(),
 }));
 
+vi.mock('../../../hooks/useSettings', () => ({
+  useSettings: vi.fn(),
+}));
+
 vi.mock('../../../api/tasks', () => ({
   createTask: vi.fn(),
   getTaskAttachmentUploadUrl: vi.fn(),
@@ -65,6 +73,22 @@ vi.mock('../../../api/tasks', () => ({
 vi.mock('../../../api/taskAttempts', () => ({
   createTaskAttempt: vi.fn(),
 }));
+
+function renderCreateTaskModal(ui: ReactElement) {
+  const queryClient = new QueryClient({
+    defaultOptions: {
+      queries: {
+        retry: false,
+      },
+    },
+  });
+
+  return render(
+    <QueryClientProvider client={queryClient}>
+      <MemoryRouter>{ui}</MemoryRouter>
+    </QueryClientProvider>
+  );
+}
 
 describe('CreateTaskModal repository access guard', () => {
   beforeEach(() => {
@@ -131,6 +155,42 @@ describe('CreateTaskModal repository access guard', () => {
       resetToDefaults: vi.fn(),
     });
 
+    vi.mocked(useSettings).mockReturnValue({
+      settings: {
+        gitlab: {
+          url: 'https://gitlab.com',
+          token: '••••••••••••••••••••',
+          autoSync: true,
+          configured: true,
+        },
+        agent: {
+          provider: 'openai-codex',
+        },
+        cloudflare: {
+          accountId: '',
+          token: '',
+          zoneId: '',
+          baseDomain: '',
+          configured: false,
+        },
+        notifications: {
+          email: false,
+          slack: false,
+          slackWebhookUrl: '',
+        },
+        worktreesPath: './worktrees',
+        preferredAgentLanguage: 'en',
+      },
+      loading: false,
+      saving: false,
+      testing: { claude: false, gitlab: false },
+      error: null,
+      refetch: vi.fn(),
+      save: vi.fn(),
+      testClaude: vi.fn(),
+      testGitLab: vi.fn(),
+    });
+
     vi.mocked(createTask).mockResolvedValue({
       id: 'task-1',
       project_id: 'project-1',
@@ -149,7 +209,7 @@ describe('CreateTaskModal repository access guard', () => {
     const onClose = vi.fn();
     const onCreate = vi.fn();
 
-    render(
+    renderCreateTaskModal(
       <CreateTaskModal
         isOpen
         onClose={onClose}
@@ -210,5 +270,64 @@ describe('CreateTaskModal repository access guard', () => {
       })
     );
     expect(onClose).toHaveBeenCalledTimes(1);
+  });
+
+  it('shows setup-required dialog and blocks task creation when source control is not configured', async () => {
+    vi.mocked(useSettings).mockReturnValue({
+      settings: {
+        gitlab: {
+          url: 'https://gitlab.com',
+          token: '',
+          autoSync: true,
+          configured: false,
+        },
+        agent: {
+          provider: 'openai-codex',
+        },
+        cloudflare: {
+          accountId: '',
+          token: '',
+          zoneId: '',
+          baseDomain: '',
+          configured: false,
+        },
+        notifications: {
+          email: false,
+          slack: false,
+          slackWebhookUrl: '',
+        },
+        worktreesPath: './worktrees',
+        preferredAgentLanguage: 'en',
+      },
+      loading: false,
+      saving: false,
+      testing: { claude: false, gitlab: false },
+      error: null,
+      refetch: vi.fn(),
+      save: vi.fn(),
+      testClaude: vi.fn(),
+      testGitLab: vi.fn(),
+    });
+
+    renderCreateTaskModal(
+      <CreateTaskModal
+        isOpen
+        onClose={vi.fn()}
+        projectId="project-1"
+        projectName="ACPMS"
+        navigateToProjectOnCreate={false}
+      />
+    );
+
+    fireEvent.change(
+      screen.getByPlaceholderText('e.g. Implement refresh token rotation'),
+      { target: { value: 'Ship guarded task creation' } }
+    );
+
+    fireEvent.click(screen.getByRole('button', { name: /Create Task/i }));
+
+    expect(await screen.findByText('Source control setup required')).toBeTruthy();
+    expect(createTask).not.toHaveBeenCalled();
+    expect(createTaskAttempt).not.toHaveBeenCalled();
   });
 });

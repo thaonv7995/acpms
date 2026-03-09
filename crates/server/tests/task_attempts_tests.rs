@@ -71,6 +71,7 @@ async fn test_create_task_attempt() {
 
     let (user_id, _) = create_test_user(&pool, None, None, None).await;
     let token = generate_test_token(user_id);
+    configure_test_system_settings(&pool, "https://github.com", "test-pat").await;
     let project_id = create_test_project(&pool, user_id, None).await;
     seed_project_repository_context(
         &pool,
@@ -118,6 +119,7 @@ async fn test_create_task_attempt_rejects_analysis_only_project() {
 
     let (user_id, _) = create_test_user(&pool, None, None, None).await;
     let token = generate_test_token(user_id);
+    configure_test_system_settings(&pool, "https://github.com", "test-pat").await;
     let project_id = create_test_project(&pool, user_id, None).await;
     seed_project_repository_context(
         &pool,
@@ -153,6 +155,47 @@ async fn test_create_task_attempt_rejects_analysis_only_project() {
 
 #[tokio::test]
 #[ignore = "requires test database"]
+async fn test_create_task_attempt_rejects_when_source_control_not_configured() {
+    let pool = setup_test_db().await;
+    let state = create_test_app_state(pool.clone()).await;
+    let router = create_router(state);
+
+    let (user_id, _) = create_test_user(&pool, None, None, None).await;
+    let token = generate_test_token(user_id);
+    let project_id = create_test_project(&pool, user_id, None).await;
+    seed_project_repository_context(
+        &pool,
+        project_id,
+        Some("https://github.com/example/test-repo"),
+        direct_gitops_repository_context(),
+    )
+    .await;
+    let task_id = create_test_task(&pool, project_id, user_id, None).await;
+
+    let (status, body): (axum::http::StatusCode, String) = make_request_with_string_headers(
+        &router,
+        "POST",
+        &format!("/api/v1/tasks/{}/attempts", task_id),
+        Some("{}"),
+        vec![
+            ("content-type", "application/json".to_string()),
+            auth_header_bearer(&token),
+        ],
+    )
+    .await;
+
+    assert_eq!(
+        status, 409,
+        "Expected 409 Conflict when source control is missing, got {}: {}",
+        status, body
+    );
+    assert!(body.contains("Source control is not configured"));
+
+    cleanup_test_data(&pool, user_id, Some(project_id)).await;
+}
+
+#[tokio::test]
+#[ignore = "requires test database"]
 async fn test_create_task_attempt_allows_init_task_for_analysis_only_project() {
     let pool = setup_test_db().await;
     let state = create_test_app_state(pool.clone()).await;
@@ -160,6 +203,7 @@ async fn test_create_task_attempt_allows_init_task_for_analysis_only_project() {
 
     let (user_id, _) = create_test_user(&pool, None, None, None).await;
     let token = generate_test_token(user_id);
+    configure_test_system_settings(&pool, "https://github.com", "test-pat").await;
     let project_id = create_test_project(&pool, user_id, None).await;
     seed_project_repository_context(
         &pool,
@@ -675,6 +719,7 @@ async fn test_create_task_attempt_rejects_when_active_attempt_exists() {
 
     let (user_id, _) = create_test_user(&pool, None, None, None).await;
     let token = generate_test_token(user_id);
+    configure_test_system_settings(&pool, "https://github.com", "test-pat").await;
     let project_id = create_test_project(&pool, user_id, None).await;
     let task_id = create_test_task(&pool, project_id, user_id, None).await;
     let _existing_attempt_id = create_test_attempt(&pool, task_id, Some("queued")).await;

@@ -119,6 +119,58 @@ describe('SettingsPage agent auth UI', () => {
     });
   });
 
+  it('shows source-control check action and renders the latest connection result', async () => {
+    const testGitLab = vi.fn().mockResolvedValue({
+      success: true,
+      message: 'Connected to GitLab as @acpms-bot.',
+    });
+
+    vi.mocked(useSettings).mockReturnValue({
+      settings: {
+        ...baseSettings,
+        gitlab: {
+          ...baseSettings.gitlab,
+          configured: true,
+          token: '••••••••••••••••••••',
+        },
+      },
+      loading: false,
+      saving: false,
+      testing: { claude: false, gitlab: false },
+      error: null,
+      refetch: vi.fn(),
+      save: vi.fn().mockResolvedValue(undefined),
+      testClaude: vi.fn().mockResolvedValue({ success: true, message: 'ok' }),
+      testGitLab,
+    });
+
+    vi.mocked(getAgentProvidersStatus).mockResolvedValue(
+      makeProvidersStatus([
+        {
+          provider: 'openai-codex',
+          available: true,
+          reason: 'ok',
+          message: 'Codex CLI is available',
+        },
+      ])
+    );
+
+    render(<SettingsPage />);
+
+    await waitFor(() => {
+      expect(getAgentProvidersStatus).toHaveBeenCalled();
+    });
+
+    fireEvent.click(screen.getByTitle('Validate source control connection'));
+
+    await waitFor(() => {
+      expect(testGitLab).toHaveBeenCalled();
+    });
+
+    expect(await screen.findByText('Connection OK')).toBeTruthy();
+    expect(screen.getByText('Connected to GitLab as @acpms-bot.')).toBeTruthy();
+  });
+
   it('renders provider rows with Sign in/Re-auth mapped from availability', async () => {
     vi.mocked(getAgentProvidersStatus).mockResolvedValue(
       makeProvidersStatus([

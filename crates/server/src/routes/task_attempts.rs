@@ -93,6 +93,19 @@ fn task_allows_analysis_only_attempt(task: &Task) -> bool {
         || breakdown_kind_analysis
 }
 
+fn task_requires_source_control(task: &Task) -> bool {
+    !task_allows_analysis_only_attempt(task)
+}
+
+async fn source_control_is_configured(state: &AppState) -> Result<bool, ApiError> {
+    let settings = state
+        .settings_service
+        .get()
+        .await
+        .map_err(|e| ApiError::Internal(e.to_string()))?;
+    Ok(!settings.gitlab_url.trim().is_empty() && settings.gitlab_pat_encrypted.is_some())
+}
+
 fn repository_mode_blocks_coding_attempt(context: &RepositoryContext) -> bool {
     matches!(
         context.access_mode,
@@ -932,6 +945,13 @@ pub async fn create_task_attempt(
         "attempt_create",
     )
     .await;
+
+    if task_requires_source_control(&task) && !source_control_is_configured(&state).await? {
+        return Err(ApiError::Conflict(
+            "Source control is not configured in System Settings. Configure GitLab or GitHub URL and Personal Access Token before starting agent tasks."
+                .to_string(),
+        ));
+    }
 
     if task.task_type != TaskType::Init
         && repository_mode_blocks_coding_attempt(&project.repository_context)
@@ -1948,6 +1968,13 @@ pub async fn resume_attempt(
         "attempt_follow_up",
     )
     .await;
+
+    if task_requires_source_control(&task) && !source_control_is_configured(&state).await? {
+        return Err(ApiError::Conflict(
+            "Source control is not configured in System Settings. Configure GitLab or GitHub URL and Personal Access Token before continuing agent tasks."
+                .to_string(),
+        ));
+    }
 
     let settings = project_service
         .get_settings(task.project_id)
