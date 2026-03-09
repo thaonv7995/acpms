@@ -33,6 +33,7 @@ pub struct GitHubRepository {
     pub full_name: String,
     pub private: bool,
     pub html_url: String,
+    pub clone_url: String,
     pub default_branch: String,
     pub owner: GitHubRepositoryOwner,
     #[serde(default)]

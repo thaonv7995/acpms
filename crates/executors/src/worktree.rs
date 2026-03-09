@@ -216,12 +216,12 @@ impl WorktreeManager {
             let current_remote = String::from_utf8_lossy(&current_remote_output.stdout)
                 .trim()
                 .to_string();
-            if !repo_url_matches(&current_remote, remote_url) {
+            if !remote_url_matches_configured_value(&current_remote, &auth_url) {
                 tracing::info!(
                     "Repository remote changed at {:?}: retargeting origin from {} to {}",
                     repo_path,
                     current_remote,
-                    remote_url
+                    auth_url
                 );
                 let set_origin_output = Command::new("git")
                     .current_dir(repo_path)
@@ -646,7 +646,7 @@ impl WorktreeManager {
             let current_remote = String::from_utf8_lossy(&get_output.stdout)
                 .trim()
                 .to_string();
-            if repo_url_matches(&current_remote, expected_url) {
+            if remote_url_matches_configured_value(&current_remote, configured_url) {
                 return Ok(());
             }
 
@@ -894,7 +894,7 @@ impl WorktreeManager {
     }
 
     async fn run_push_worktree_command(&self, worktree_path: &Path) -> Result<Output> {
-        Command::new("git")
+        git_command_non_interactive()
             .current_dir(worktree_path)
             .arg("push")
             .arg("--no-verify")
@@ -1161,6 +1161,10 @@ pub(crate) fn repo_url_matches(lhs: &str, rhs: &str) -> bool {
     }
 }
 
+fn remote_url_matches_configured_value(current_remote: &str, configured_url: &str) -> bool {
+    current_remote.trim() == configured_url.trim()
+}
+
 fn parse_tracking_branch(default_branch: &str, fallback_remote: &str) -> (String, String) {
     let trimmed = default_branch.trim();
     if trimmed.is_empty() || trimmed == "HEAD" {
@@ -1274,8 +1278,8 @@ fn parse_repo_identity(raw: &str) -> Option<(String, String)> {
 mod tests {
     use super::{
         format_repository_clone_log, format_repository_sync_log, inject_pat_into_url,
-        is_recoverable_push_failure, parse_tracking_branch, repo_url_matches,
-        summarize_repository_source, WorktreeManager,
+        is_recoverable_push_failure, parse_tracking_branch, remote_url_matches_configured_value,
+        repo_url_matches, summarize_repository_source, WorktreeManager,
     };
     use std::path::Path;
     use std::sync::Arc;
@@ -1345,6 +1349,30 @@ mod tests {
         assert!(repo_url_matches(
             "https://gitlab.example.com/group/repo.git",
             "git@gitlab.example.com:group/repo.git"
+        ));
+    }
+
+    #[test]
+    fn remote_url_exact_match_requires_retarget_when_pat_is_missing_from_current_remote() {
+        assert!(!remote_url_matches_configured_value(
+            "https://gitlab.example.com/group/repo.git",
+            "https://oauth2:glpat-123@gitlab.example.com/group/repo.git"
+        ));
+    }
+
+    #[test]
+    fn remote_url_exact_match_requires_retarget_when_pat_rotates() {
+        assert!(!remote_url_matches_configured_value(
+            "https://oauth2:old@gitlab.example.com/group/repo.git",
+            "https://oauth2:new@gitlab.example.com/group/repo.git"
+        ));
+    }
+
+    #[test]
+    fn remote_url_exact_match_accepts_same_configured_remote() {
+        assert!(remote_url_matches_configured_value(
+            "https://oauth2:glpat-123@gitlab.example.com/group/repo.git",
+            "https://oauth2:glpat-123@gitlab.example.com/group/repo.git"
         ));
     }
 

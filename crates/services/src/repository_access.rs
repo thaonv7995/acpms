@@ -11,6 +11,22 @@ use url::Url;
 const GITLAB_DEVELOPER_ACCESS_LEVEL: u64 = 30;
 const GITLAB_MAINTAINER_ACCESS_LEVEL: u64 = 40;
 
+fn github_repository_clone_url(repository: &acpms_github::GitHubRepository) -> String {
+    if repository.clone_url.trim().is_empty() {
+        repository.html_url.clone()
+    } else {
+        repository.clone_url.clone()
+    }
+}
+
+fn gitlab_project_clone_url(project: &acpms_gitlab::GitLabProject) -> String {
+    if project.http_url_to_repo.trim().is_empty() {
+        project.web_url.clone()
+    } else {
+        project.http_url_to_repo.clone()
+    }
+}
+
 #[derive(Clone)]
 pub struct RepositoryAccessService {
     settings_service: SystemSettingsService,
@@ -157,7 +173,8 @@ impl RepositoryAccessService {
             .await
             .context("Failed to fetch GitHub repository metadata")?;
 
-        let permissions = repository.permissions.unwrap_or_default();
+        let clone_url = github_repository_clone_url(&repository);
+        let permissions = repository.permissions.clone().unwrap_or_default();
         let can_push = permissions.push || permissions.maintain || permissions.admin;
         let can_open_change_request = can_push;
         let can_merge = permissions.push || permissions.maintain || permissions.admin;
@@ -168,7 +185,7 @@ impl RepositoryAccessService {
         } else {
             RepositoryAccessMode::AnalysisOnly
         };
-        let writable_repository_url = can_push.then(|| repository.html_url.clone());
+        let writable_repository_url = can_push.then(|| clone_url.clone());
 
         Ok(RepositoryContext {
             provider: RepositoryProvider::Github,
@@ -181,9 +198,9 @@ impl RepositoryAccessService {
             can_merge,
             can_manage_webhooks,
             can_fork,
-            upstream_repository_url: Some(repository.html_url.clone()),
+            upstream_repository_url: Some(clone_url.clone()),
             writable_repository_url: writable_repository_url.clone(),
-            effective_clone_url: writable_repository_url.or_else(|| Some(repository.html_url)),
+            effective_clone_url: writable_repository_url.or_else(|| Some(clone_url)),
             default_branch: Some(repository.default_branch),
             upstream_project_id: Some(repository.id as i64),
             writable_project_id: can_push.then_some(repository.id as i64),
@@ -232,7 +249,7 @@ impl RepositoryAccessService {
             .context("Failed to resolve authenticated GitHub user")?;
 
         match client.create_fork(&owner, &repo).await {
-            Ok(fork) => Ok(fork.html_url),
+            Ok(fork) => Ok(github_repository_clone_url(&fork)),
             Err(error) => {
                 let error_text = error.to_string();
                 if error_text.contains("422") || error_text.contains("already exists") {
@@ -240,7 +257,7 @@ impl RepositoryAccessService {
                         "Fork already exists, but the existing GitHub fork could not be loaded",
                     )?;
                     if existing_fork.fork {
-                        Ok(existing_fork.html_url)
+                        Ok(github_repository_clone_url(&existing_fork))
                     } else {
                         Err(error)
                     }
@@ -306,7 +323,8 @@ impl RepositoryAccessService {
         } else {
             RepositoryAccessMode::AnalysisOnly
         };
-        let writable_repository_url = can_push.then(|| project.web_url.clone());
+        let clone_url = gitlab_project_clone_url(&project);
+        let writable_repository_url = can_push.then(|| clone_url.clone());
 
         Ok(RepositoryContext {
             provider: RepositoryProvider::Gitlab,
@@ -319,9 +337,9 @@ impl RepositoryAccessService {
             can_merge,
             can_manage_webhooks,
             can_fork,
-            upstream_repository_url: Some(project.web_url.clone()),
+            upstream_repository_url: Some(clone_url.clone()),
             writable_repository_url: writable_repository_url.clone(),
-            effective_clone_url: writable_repository_url.or_else(|| Some(project.web_url)),
+            effective_clone_url: writable_repository_url.or_else(|| Some(clone_url)),
             default_branch: project.default_branch,
             upstream_project_id: Some(project.id as i64),
             writable_project_id: can_push.then_some(project.id as i64),
@@ -365,7 +383,7 @@ impl RepositoryAccessService {
             .context("Failed to resolve authenticated GitLab user")?;
 
         match client.create_fork(project.id).await {
-            Ok(fork) => Ok(fork.web_url),
+            Ok(fork) => Ok(gitlab_project_clone_url(&fork)),
             Err(error) => {
                 let error_text = error.to_string();
                 if error_text.contains("409") || error_text.contains("already exists") {
@@ -373,7 +391,7 @@ impl RepositoryAccessService {
                     let existing_fork = client.get_project_by_path(&existing_path).await.context(
                         "Fork already exists, but the existing GitLab fork could not be loaded",
                     )?;
-                    Ok(existing_fork.web_url)
+                    Ok(gitlab_project_clone_url(&existing_fork))
                 } else {
                     Err(error)
                 }

@@ -3247,7 +3247,11 @@ mod tests {
     #[test]
     fn detect_skill_file_extracts_skill_id_and_origin() {
         let temp_dir = tempfile::tempdir().unwrap();
-        let skill_dir = temp_dir.path().join(".acpms").join("skills").join("openai-docs");
+        let skill_dir = temp_dir
+            .path()
+            .join(".acpms")
+            .join("skills")
+            .join("openai-docs");
         std::fs::create_dir_all(&skill_dir).unwrap();
         let path = skill_dir.join("SKILL.md");
         std::fs::write(

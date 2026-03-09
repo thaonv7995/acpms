@@ -4444,30 +4444,34 @@ impl ExecutorOrchestrator {
                                 "Failed to decrypt project PAT, falling back to system PAT: {}",
                                 e
                             );
-                            self.get_system_pat_for_repo(repo_url)
+                            self.get_system_pat_for_repo(&repo_url)
                                 .await
                                 .unwrap_or_default()
                         }
                     },
                     _ => self
-                        .get_system_pat_for_repo(repo_url)
+                        .get_system_pat_for_repo(&repo_url)
                         .await
                         .unwrap_or_default(),
                 };
 
                 // Check if repo exists to log appropriate message
                 if repo_path.join(".git").exists() {
-                    self.log(attempt_id, "system", &format_repository_sync_log(repo_url))
+                    self.log(attempt_id, "system", &format_repository_sync_log(&repo_url))
                         .await?;
                 } else {
-                    self.log(attempt_id, "system", &format_repository_clone_log(repo_url))
-                        .await?;
+                    self.log(
+                        attempt_id,
+                        "system",
+                        &format_repository_clone_log(&repo_url),
+                    )
+                    .await?;
                 }
 
                 self.worktree_manager
                     .ensure_cloned_with_upstream(
                         repo_path,
-                        repo_url,
+                        &repo_url,
                         repository_upstream_url(info).as_deref(),
                         &pat,
                     )
@@ -4998,8 +5002,23 @@ impl ExecutorOrchestrator {
                 "Assistant repo already exists at {:?}, using local code",
                 worktree_path
             );
-        } else if let Some(ref repo_url) = project.repository_url {
-            if !repo_url.trim().is_empty() {
+        } else {
+            let repo_url = project
+                .repository_context
+                .writable_repository_url
+                .as_deref()
+                .filter(|value| !value.trim().is_empty())
+                .or(project
+                    .repository_context
+                    .effective_clone_url
+                    .as_deref()
+                    .filter(|value| !value.trim().is_empty()))
+                .or(project
+                    .repository_url
+                    .as_deref()
+                    .filter(|value| !value.trim().is_empty()));
+
+            if let Some(repo_url) = repo_url {
                 let pat = self.get_system_pat_for_repo(repo_url).await;
                 let pat = pat.as_deref().unwrap_or("");
                 self.worktree_manager
@@ -5020,10 +5039,6 @@ impl ExecutorOrchestrator {
                     .await
                     .context("Failed to create assistant worktree")?;
             }
-        } else {
-            tokio::fs::create_dir_all(&worktree_path)
-                .await
-                .context("Failed to create assistant worktree")?;
         }
 
         let agent_settings = self.load_agent_settings_for_project(project_id).await?;
@@ -7322,10 +7337,14 @@ impl ProjectInfo {
     }
 }
 
-fn repository_origin_url(info: &ProjectInfo) -> Option<&str> {
-    info.repository_url
-        .as_deref()
-        .filter(|value| !value.trim().is_empty())
+fn repository_origin_url(info: &ProjectInfo) -> Option<String> {
+    let context = info.repository_context();
+    context
+        .writable_repository_url
+        .or(context.effective_clone_url)
+        .or_else(|| info.repository_url.clone())
+        .map(|value| value.trim().to_string())
+        .filter(|value| !value.is_empty())
 }
 
 fn repository_upstream_url(info: &ProjectInfo) -> Option<String> {
@@ -7336,6 +7355,7 @@ fn repository_upstream_url(info: &ProjectInfo) -> Option<String> {
         .filter(|value| !value.trim().is_empty())
         .filter(|upstream| {
             origin
+                .as_deref()
                 .map(|origin| !repo_url_matches(upstream, origin))
                 .unwrap_or(true)
         })

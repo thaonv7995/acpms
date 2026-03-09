@@ -198,7 +198,9 @@ impl SkillKnowledgeHandle {
 }
 
 fn sibling_vendor_skills_dir(skills_dir: &std::path::Path) -> Option<PathBuf> {
-    skills_dir.parent().map(|parent| parent.join("vendor-skills"))
+    skills_dir
+        .parent()
+        .map(|parent| parent.join("vendor-skills"))
 }
 
 fn build_global_skill_roots(

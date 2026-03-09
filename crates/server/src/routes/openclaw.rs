@@ -497,7 +497,11 @@ pub async fn guide_for_openclaw(
     _auth_user: AuthUser,
     payload: Option<Json<OpenClawGuideRequest>>,
 ) -> ApiResult<Json<ApiResponse<OpenClawGuideResponse>>> {
-    build_openclaw_guide_response(&state, &headers, payload.map(|value| value.0).unwrap_or_default())
+    build_openclaw_guide_response(
+        &state,
+        &headers,
+        payload.map(|value| value.0).unwrap_or_default(),
+    )
 }
 
 pub async fn guide_for_openclaw_get(

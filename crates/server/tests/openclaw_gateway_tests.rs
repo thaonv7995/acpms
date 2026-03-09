@@ -308,7 +308,9 @@ async fn openclaw_can_list_tasks_without_project_id_as_system_admin() {
     let json: Value = serde_json::from_str(&body).expect("valid json");
     let tasks = json["data"].as_array().expect("tasks array");
     assert!(
-        tasks.iter().any(|task| task["id"].as_str() == Some(&task_id.to_string())),
+        tasks
+            .iter()
+            .any(|task| task["id"].as_str() == Some(&task_id.to_string())),
         "expected task {task_id} to be visible in gateway response: {body}"
     );
 
