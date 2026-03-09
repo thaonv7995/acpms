@@ -1,4 +1,5 @@
 import type { ProjectLifecycleStatus, ProjectSummary } from '../types/repository';
+import { normalizeProjectProgress } from './projectProgress';
 
 type ProjectStatusColor = 'yellow' | 'blue' | 'emerald' | 'green' | 'slate' | 'red';
 
@@ -56,7 +57,7 @@ export function getProjectStatusPresentation(
     status: normalizedStatus,
     statusLabel: fallbackPresentation.label,
     statusColor: fallbackPresentation.color,
-    progress: Math.max(0, Math.min(100, Math.round(progressValue))),
+    progress: normalizeProjectProgress(progressValue),
     agentCount: Math.max(0, Math.round(agentCount)),
   };
 }

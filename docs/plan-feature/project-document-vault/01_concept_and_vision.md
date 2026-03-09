@@ -39,44 +39,51 @@ To solve this, the **Agentic-Coding** system will divide its context into three 
   - When indexing documents into the DB, each vector (chunk) must store metadata: `project_id`.
   - When an Agent initializes a Session for a Project, it will have a Tool to query the RAG with the condition: `WHERE project_id = '{current_project_id}'`.
 - **UI/UX**: 
-  - The Project Dashboard interface adds a **"Knowledge Vault"** tab.
+  - The Project Dashboard interface adds a **"Documents"** tab backed by the Project Vault.
   - Allows the project administrator (Super Admin / Tech Lead) to manage, add, and edit this document repository.
 
 ### 3.2. Task Context
-- **Nature**: Static context attached directly to each specific Task on the Kanban board.
-- **UI Integration**: When a User views Task details on the web app, in addition to the Description, the system provides a **"Context Files"** section to attach files or write Markdown directly.
-- **Backend Integration (Rust)**: Inject the content of these `Task Contexts` directly into the Agent's System Prompt or User Prompt as soon as the Session is Spawned. No need for random RAG queries, ensuring the Agent does not miss the context.
+  - **Implementation Strategy:**
+    - Context metadata added via a dedicated CRUD API for `task_contexts`.
+    - Information is stored in newly separated `task_contexts` and `task_context_attachments` tables (decoupled from the overloaded JSONB `metadata` field)
+    - File uploads use a presigned URL strategy (`POST /api/v1/tasks/{id}/context-attachments/upload-url`) mimicking the current flow in `tasks.rs`. The frontend uploads directly to Storage, then saves the resulting `storage_key` to `task_context_attachments`.
+    - **API Server** (`crates/server/src/routes/task_attempts.rs`) dynamically builds the `=== TASK CONTEXT ===` block *before* creating the AgentJob. It uses a hand-off flow (`storage_service.get_log_bytes(&key)`) to resolve and extract text for text-based attachments directly into the instruction string. For large or unsupported files, it provides a presigned download URL instead.
+  - **UI Integration**: When a User views Task details on the web app, in addition to the Description, the system provides a **"Context Files"** section to attach files or write Markdown directly.
+- **Backend Integration (Rust)**: Inject the content of these `Task Contexts` directly into the instruction string when the Session is Spawned. No need for random RAG queries, ensuring the Agent does not miss the context.
 
 ## 4. Backend & Frontend Integration (Agentic-Coding)
 
 - **Backend (Rust)**: 
-  - Add tables `project_documents` (stores metadata & raw files) and `project_document_chunks` (stores `f32` vectors via `sqlite-vec`).
-  - Add the `Task Context` structure (can be stored directly in the `metadata` JSON field in the existing `tasks` table or create a new table `task_contexts`).
-  - Update the spawning module (e.g., `crates/core/src/agents/spawner.rs`) to append Task Context and provide the RAG schema for Tool Calls.
-- **Frontend (Next.js / React)**:
-  - Add the `Vault` tab to the Project View screen.
+  - **Storage:**
+    - Raw files or objects stored via the current S3/Storage layer (presigned URLs used).
+    - Data stored in the `project_documents` table including: `id, project_id, title, filename, content_type, storage_key, checksum, size_bytes, source, version, ingestion_status, index_error, indexed_at, created_by, updated_by, created_at, updated_at`.
+    - **No large text fields directly on the DB for raw file content.** The system must rely on the storage endpoints to fetch the content prior to chunking/embedding.
+  - Add tables `project_documents` (stores metadata & files) and `project_document_chunks` (stores `f32` vectors via `sqlite-vec`).
+  - Add the `Task Context` structure in separate tables `task_contexts` and `task_context_attachments`.
+  - Update the agent execution module (e.g., `crates/server/src/routes/task_attempts.rs` and `acpms_executors`) to append Task Context and handle file resolution.
+- **Frontend (React)**:
+  - Add the `Documents` tab to the Project View screen.
   - Update the Task creation/editing Modal to display an additional `Task Context` section.
+  - Build UI components to resolve and display the Context status before the executor runs on `TaskDetailPage`.
 
 ## 5. Anti-Noise & Context Optimization
 
 Expanding the context (using the Vault) comes with a massive risk: **Context Noise** and **Context Window Limits**. If the entire project documentation is injected into the Prompt, the AI will become "confused", response times will slow down, and a large number of Tokens will be wasted. Agentic-Coding completely resolves this risk through 3 mechanisms:
 
-### 5.1. Chunking & Retrieval (RAG) instead of Full Reading
-- Documents in the Vault are **never** fully injected into the System Prompt.
-- Upon upload, documents are automatically chunked semantically and stored as Vectors.
-- When the Agent needs to learn about a feature, it is only allowed to retrieve the **Top K** (e.g., 3-5) most semantically similar text segments (Cosine Similarity), limiting the read text to the bare minimum required.
+### 5.1. Vector Chunk Replacement
+When an Agent queries the Vault, the system employs vector search using `fastembed` and `sqlite-vec`. To limit context windows and noise, only the Top-K chunks closest to the query are retrieved.
 
 ### 5.2. Document Versioning & Stale Data Prevention
-- If multiple documents cover the same topic or a document is updated, the system **prioritizes the latest version**.
-- When a User uploads a document with the same `title` or `filename`, the system performs an "Upsert" (Overwrite existing).
-- The Embedding Pipeline will automatically delete all old Vector Chunks of the previous version before indexing the new ones, ensuring the Agent never reads conflicting or outdated business logic.
+To prevent hallucinations from stale or duplicate data, the system prioritizes the newest document versions.
+- **Upsert Logic:** When a document is uploaded via API or UI with an existing `title` or `filename`, the system performs an "Upsert". It overwrites the existing document's metadata/content and updates the `updated_at` field.
+- **Chunk Cleanup (Critical):** During the RAG chunking and embedding pipeline (Phase 3), if a document is updated, the system MUST `DELETE` all existing vector chunks associated with that `document_id` in the `project_document_chunks` table BEFORE inserting the new chunks. This guarantees old, conflicting information is entirely removed from the vector space.
 
-### 5.2. Transitioning from "Static Documents" to "Active Tools" (Tool-based Retrieval)
+### 5.3. Transitioning from "Static Documents" to "Active Tools" (Tool-based Retrieval)
 - **Task Context**: Injected directly into the initial **System Prompt** or **User Prompt**, as this is a specific "Command" the Agent must follow immediately (e.g., 1 UI design file, 1 error log).
-- **Project Vault (Project Knowledge)**: Provided to the Agent as a **Tool** (e.g., `search_project_vault_tool`). The Agent actively decides when to invoke this tool based on logical reasoning, rather than being forced to read everything beforehand.
-  - Ex: The Agent receives the task "Create Login API". It will deduce: *"I need to know how the user table is designed"*, and proactively call `search_project_vault_tool(query="database schema for user table")`.
+- **Project Vault (Project Knowledge)**: Provided to the Agent through a vault-search capability exposed by the executor/runtime integration layer. The Agent actively decides when to invoke this capability based on logical reasoning, rather than being forced to read everything beforehand.
+  - Ex: The Agent receives the task "Create Login API". It will deduce: *"I need to know how the user table is designed"*, and proactively query the Project Vault for `database schema for user table`.
 
-### 5.3. Granular Meta-data Filtering
+### 5.4. Granular Meta-data Filtering
 - The Vector DB does not just perform Semantic Search, but also utilizes filtering conditions.
 - **`WHERE project_id = {current}`**: Ensures the Agent never mistakenly reads documents from another project.
 - **`WHERE doc_type IN (Frontend, Backend)`**: Customizable (Future enhancement). If this Agent is tagged as a "Frontend Engineer", it could automatically exclude complex System Architecture Backend documents to keep its focus clear.

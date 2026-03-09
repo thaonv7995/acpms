@@ -2,6 +2,7 @@
 import { useState } from 'react';
 import { useNavigate } from 'react-router-dom';
 import type { ProjectListItem } from '../../types/project';
+import { getProjectProgressColor, normalizeProjectProgress } from '../../utils/projectProgress';
 
 interface ProjectCardProps {
   project: ProjectListItem;
@@ -18,13 +19,13 @@ interface ProjectCardProps {
 //   primary: { bg: 'bg-primary/10', text: 'text-primary' },
 // };
 
-const statusColorClasses: Record<ProjectListItem['statusColor'], { dot: string; text: string; progress: string }> = {
-  yellow: { dot: 'bg-yellow-500 animate-pulse', text: 'text-yellow-500', progress: 'bg-yellow-500' },
-  blue: { dot: 'bg-blue-400', text: 'text-blue-400', progress: 'bg-primary' },
-  emerald: { dot: 'bg-emerald-400', text: 'text-emerald-400', progress: 'bg-emerald-500' },
-  green: { dot: 'bg-green-400', text: 'text-green-400', progress: 'bg-green-500' },
-  red: { dot: 'bg-red-500 animate-pulse', text: 'text-red-500', progress: 'bg-red-500' },
-  slate: { dot: 'bg-slate-400', text: 'text-slate-400', progress: 'bg-slate-500' },
+const statusColorClasses: Record<ProjectListItem['statusColor'], { dot: string; text: string }> = {
+  yellow: { dot: 'bg-yellow-500 animate-pulse', text: 'text-yellow-500' },
+  blue: { dot: 'bg-blue-400', text: 'text-blue-400' },
+  emerald: { dot: 'bg-emerald-400', text: 'text-emerald-400' },
+  green: { dot: 'bg-green-400', text: 'text-green-400' },
+  red: { dot: 'bg-red-500 animate-pulse', text: 'text-red-500' },
+  slate: { dot: 'bg-slate-400', text: 'text-slate-400' },
 };
 
 // Material Symbols icon mapping for tech stacks (lowercase key)
@@ -77,6 +78,8 @@ export function ProjectCard({ project, onEdit, onSettings }: ProjectCardProps) {
   const navigate = useNavigate();
   const [showMenu, setShowMenu] = useState(false);
   const statusColors = statusColorClasses[project.statusColor];
+  const progressValue = normalizeProjectProgress(project.progress);
+  const progressBarColor = getProjectProgressColor(progressValue);
 
   const handleClick = () => {
     navigate(`/projects/${project.id}`);
@@ -184,10 +187,20 @@ export function ProjectCard({ project, onEdit, onSettings }: ProjectCardProps) {
           <span className={`size-2 rounded-full ${statusColors.dot}`}></span>
           {project.statusLabel}
         </span>
-        <span className="text-xs font-medium text-muted-foreground">{project.progress}%</span>
+        <span className="text-xs font-medium text-muted-foreground">{progressValue}%</span>
       </div>
-      <div className="w-full bg-muted dark:bg-muted/50 rounded-full h-1.5 mb-4 overflow-hidden">
-        <div className={`${statusColors.progress} h-1.5 rounded-full`} style={{ width: `${project.progress}%` }}></div>
+      <div className="w-full h-1.5 bg-muted dark:bg-muted/50 rounded-full mb-4 overflow-hidden relative">
+        {progressValue > 0 ? (
+          <div
+            className={`h-full ${progressBarColor} rounded-full transition-all duration-300 ease-out`}
+            style={{
+              width: `${progressValue}%`,
+              minWidth: '2px',
+            }}
+          ></div>
+        ) : (
+          <div className="h-full w-full border border-slate-300 dark:border-slate-600/50 rounded-full"></div>
+        )}
       </div>
 
       {/* Footer */}

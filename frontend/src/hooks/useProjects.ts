@@ -171,7 +171,8 @@ export function useProjects(options?: { limit?: number }): UseProjectsResult {
             hasActiveClientFilters,
         ],
         queryFn: () => getProjects(queryParams),
-        staleTime: 5 * 60 * 1000,
+        staleTime: 30 * 1000,
+        refetchInterval: 60 * 1000,
     });
 
     const body = (response as any) ?? {};

@@ -2,6 +2,7 @@
 import { useNavigate } from 'react-router-dom';
 import { Link } from 'react-router-dom';
 import type { DashboardProjectDoc } from '../../api/generated/models/dashboardProjectDoc';
+import { getProjectProgressColor, normalizeProjectProgress } from '../../utils/projectProgress';
 
 interface ProjectsTableProps {
     projects: DashboardProjectDoc[];
@@ -46,23 +47,6 @@ const statusStyles: Record<string, { bg: string; text: string; label: string }> 
     },
 };
 
-// progressColors removed - now using getProgressColor function instead
-
-// Get progress color based on progress value
-const getProgressColor = (progress: number): string => {
-    if (progress === 0) {
-        return 'bg-muted-foreground/40'; // Gray for 0%
-    } else if (progress === 100) {
-        return 'bg-green-500'; // Green for 100%
-    } else if (progress < 30) {
-        return 'bg-red-500'; // Red for low progress
-    } else if (progress < 70) {
-        return 'bg-yellow-500'; // Yellow for medium progress
-    } else {
-        return 'bg-blue-500'; // Blue for high progress
-    }
-};
-
 export function ProjectsTable({ projects, onViewAll }: ProjectsTableProps) {
     const navigate = useNavigate();
 
@@ -103,8 +87,8 @@ export function ProjectsTable({ projects, onViewAll }: ProjectsTableProps) {
                     <tbody className="text-sm">
                         {projects.map((project) => {
                             const status = statusStyles[project.status] ?? statusStyles.planning;
-                            const progressValue = Math.max(0, Math.min(100, project.progress || 0));
-                            const progressBarColor = getProgressColor(progressValue);
+                            const progressValue = normalizeProjectProgress(project.progress);
+                            const progressBarColor = getProjectProgressColor(progressValue);
 
                             return (
                                 <tr
@@ -133,7 +117,7 @@ export function ProjectsTable({ projects, onViewAll }: ProjectsTableProps) {
                                                         }}
                                                     ></div>
                                                 ) : (
-                                                    <div className="h-full w-full border border-muted-foreground/30 rounded-full"></div>
+                                                    <div className="h-full w-full border border-slate-300 dark:border-slate-600/50 rounded-full"></div>
                                                 )}
                                             </div>
                                             <span className="text-xs font-medium text-muted-foreground whitespace-nowrap min-w-[2.5rem] text-right">
