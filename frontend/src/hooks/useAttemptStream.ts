@@ -1,6 +1,6 @@
 // Hook for SSE streaming of attempt logs (like vibe-kanban)
 import { useEffect, useState, useRef, useCallback } from 'react';
-import { API_PREFIX, apiGet, getAccessToken, getWsBaseUrl } from '../api/client';
+import { API_PREFIX, apiGet, getAccessToken, getApiBaseUrl, getWsBaseUrl } from '../api/client';
 import { normalizeAgentLogs, type AgentLogWire } from '../api/taskAttempts';
 import { applyLogPatches } from '@/utils/stream-patch';
 
@@ -60,7 +60,7 @@ export type AttemptStreamConnectionState =
   | 'stale'
   | 'offline';
 
-const API_URL = import.meta.env.VITE_API_URL || 'http://localhost:3000';
+const API_URL = getApiBaseUrl();
 const STALE_THRESHOLD_MS = 15_000;
 const STALE_CHECK_INTERVAL_MS = 2_000;
 const RECONNECT_SHORT_DELAY_MS = 2_000;

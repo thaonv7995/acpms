@@ -31,7 +31,7 @@ help:
 # --- Setup ---
 setup:
 	@[ -f .env ] || (cp .env.example .env && echo "Created .env - edit DATABASE_URL (use localhost when running from host)")
-	@[ -f frontend/.env.local ] || (echo "VITE_API_URL=http://localhost:3000" > frontend/.env.local && echo "Created frontend/.env.local")
+	@[ -f frontend/.env.development.local ] || (echo "VITE_API_URL=http://localhost:3000" > frontend/.env.development.local && echo "Created frontend/.env.development.local")
 	@cd frontend && npm install
 	@echo "Setup done. Run: make infra-up && make migrate && make dev"
 
@@ -60,7 +60,7 @@ build-backend:
 	@echo "Backend: target/release/acpms-server"
 
 build-frontend:
-	@cd frontend && npm ci --omit=dev && npm run build
+	@cd frontend && npm ci --omit=dev && VITE_API_URL= VITE_WS_URL= npm run build
 	@echo "Frontend: frontend/dist/"
 
 # --- Test ---

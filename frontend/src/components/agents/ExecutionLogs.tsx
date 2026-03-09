@@ -1,6 +1,6 @@
 import { useEffect, useRef, useState } from 'react';
 import { AgentLog, getAttemptLogs } from '../../api/taskAttempts';
-import { getAccessToken } from '../../api/client';
+import { getAccessToken, getWsBaseUrl } from '../../api/client';
 import { ApprovalModal } from '../modals/ApprovalModal';
 import type { ToolApproval } from '../../api/approvals';
 import { parseStructuredLog, formatStructuredLog } from '../../utils/parseStructuredLog';
@@ -26,7 +26,7 @@ export function ExecutionLogs({ attemptId }: ExecutionLogsProps) {
     loadLogs();
 
     // Connect WebSocket (note: WebSocket routes are under /ws, not /api/v1)
-    const wsBase = import.meta.env.VITE_WS_URL || 'ws://localhost:3000';
+    const wsBase = getWsBaseUrl();
     const wsUrl = `${wsBase}/ws/attempts/${attemptId}/logs`;
     const token = getAccessToken();
 

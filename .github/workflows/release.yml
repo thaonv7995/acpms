@@ -29,6 +29,9 @@ jobs:
       - name: Build frontend
         run: npm run build
         working-directory: frontend
+        env:
+          VITE_API_URL: ""
+          VITE_WS_URL: ""
 
       - name: Create frontend archive
         run: tar -czvf acpms-frontend-dist.tar.gz -C frontend/dist .

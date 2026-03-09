@@ -1,9 +1,10 @@
 // Hook for fetching diffs via REST API with React Query
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
 import { useMemo } from 'react';
+import { getApiBaseUrl } from '../api/client';
 import type { FileDiff, DiffSummary, DiffResponse, BranchStatus } from '../types/diff';
 
-const API_BASE = import.meta.env.VITE_API_URL || 'http://localhost:3000';
+const API_BASE = getApiBaseUrl();
 
 // API functions
 async function fetchDiffs(attemptId: string): Promise<DiffResponse> {

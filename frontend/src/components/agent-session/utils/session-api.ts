@@ -3,9 +3,10 @@
  */
 
 import type { AgentLogEntry, AgentSessionState } from '../types';
+import { getApiBaseUrl } from '@/api/client';
 import { transformLogs, type BackendLog } from './log-transformer';
 
-const API_BASE = import.meta.env.VITE_API_URL || 'http://localhost:3000';
+const API_BASE = getApiBaseUrl();
 
 function getAuthHeaders(): HeadersInit {
   const token = localStorage.getItem('acpms_token');

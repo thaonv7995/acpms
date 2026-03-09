@@ -189,6 +189,13 @@ print_success_report() {
   local url="http://127.0.0.1:${ACPMS_PORT}"
   local email="${ACPMS_ADMIN_EMAIL:-${ADMIN_EMAIL:-see above}}"
   local has_pass="${ACPMS_ADMIN_PASSWORD:+yes}"
+  local openclaw_base_endpoint="" openclaw_prompt_cmd=""
+
+  if [ "${OPENCLAW_GATEWAY_ENABLED:-false}" = "true" ]; then
+    render_openclaw_bootstrap_prompt
+    openclaw_base_endpoint="$(resolve_s3_public_base)/api/openclaw/v1"
+    openclaw_prompt_cmd="cat \"$OPENCLAW_PROMPT_FILE\""
+  fi
 
   echo "${C_GREEN}╔══════════════════════════════════════════════════════════════════════════════╗${C_RESET}"
   echo "${C_GREEN}║${C_RESET}  ${C_BOLD}Installation complete!${C_RESET}                                                      ${C_GREEN}║${C_RESET}"
@@ -206,6 +213,12 @@ print_success_report() {
   echo "${C_GREEN}║${C_RESET}  • Settings → Agent CLI Provider: authenticate one provider                ${C_GREEN}║${C_RESET}"
   echo "${C_GREEN}║${C_RESET}  • Settings → GitLab: configure OAuth if using GitLab                      ${C_GREEN}║${C_RESET}"
   echo "${C_GREEN}║${C_RESET}                                                                            ${C_GREEN}║${C_RESET}"
+  if [ "${OPENCLAW_GATEWAY_ENABLED:-false}" = "true" ]; then
+    echo "${C_GREEN}║${C_RESET}  ${C_BOLD}OpenClaw Gateway${C_RESET}                                                           ${C_GREEN}║${C_RESET}"
+    printf "${C_GREEN}║${C_RESET}  ${C_CYAN}%-15s${C_RESET}  %-55s  ${C_GREEN}║${C_RESET}\n" "Base endpoint" "$openclaw_base_endpoint"
+    printf "${C_GREEN}║${C_RESET}  ${C_CYAN}%-15s${C_RESET}  %-55s  ${C_GREEN}║${C_RESET}\n" "View prompt" "$openclaw_prompt_cmd"
+    echo "${C_GREEN}║${C_RESET}                                                                            ${C_GREEN}║${C_RESET}"
+  fi
   echo "${C_GREEN}╠══════════════════════════════════════════════════════════════════════════════╣${C_RESET}"
   [ "$OS" = "linux" ] && command -v systemctl >/dev/null 2>&1 && \
   echo "${C_GREEN}║${C_RESET}  ${C_DIM}Status:    systemctl status acpms-server${C_RESET}                                    ${C_GREEN}║${C_RESET}"
@@ -213,42 +226,6 @@ print_success_report() {
   echo "${C_GREEN}║${C_RESET}  ${C_DIM}           install.sh | bash -s -- --uninstall${C_RESET}                               ${C_GREEN}║${C_RESET}"
   echo "${C_GREEN}╚══════════════════════════════════════════════════════════════════════════════╝${C_RESET}"
   echo
-
-  if [ "${OPENCLAW_GATEWAY_ENABLED:-false}" = "true" ]; then
-    render_openclaw_bootstrap_prompt
-    local public_base base_endpoint openapi_url guide_url events_url webhook_url_label
-    public_base="$(resolve_s3_public_base)"
-    base_endpoint="${public_base}/api/openclaw/v1"
-    openapi_url="${public_base}/api/openclaw/openapi.json"
-    guide_url="${public_base}/api/openclaw/guide-for-openclaw"
-    events_url="${public_base}/api/openclaw/v1/events/stream"
-    webhook_url_label="${OPENCLAW_WEBHOOK_URL:-not configured}"
-    cat << EOF
-================================================================================
- OPENCLAW GATEWAY CONFIGURATION
-================================================================================
- Base Endpoint URL : ${base_endpoint}
- OpenAPI (Swagger) : ${openapi_url}
- Guide Endpoint    : ${guide_url}
- Global Event SSE  : ${events_url}
- API Key (Bearer)  : ${OPENCLAW_API_KEY}
- Webhook URL       : ${webhook_url_label}
- Webhook Secret    : ${OPENCLAW_WEBHOOK_SECRET} (optional)
- Prompt File       : ${OPENCLAW_PROMPT_FILE}
-================================================================================
-
-================================================================================
- OPENCLAW READY-TO-SEND PROMPT
-================================================================================
- Copy everything below and send it to OpenClaw:
-
-EOF
-    printf '%s\n' "$OPENCLAW_READY_PROMPT"
-    cat << 'EOF'
-================================================================================
-EOF
-    echo
-  fi
 }
 
 # Ask for consent (skip when ACPMS_NONINTERACTIVE=1). Usage: ask_yes "Prompt [Y/n]" "y"  or  ask_yes "Remove? [y/N]" "n"

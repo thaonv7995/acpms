@@ -9,6 +9,10 @@ const API_BASE_URL =
 // API prefix for legacy manual APIs (Orval-generated code already includes this)
 export const API_PREFIX = '/api/v1';
 
+export function getApiBaseUrl(): string {
+  return API_BASE_URL;
+}
+
 /** WebSocket base URL: same-origin in production (ws(s)://current host:port), else VITE_WS_URL or ws://localhost:3000 */
 export function getWsBaseUrl(): string {
   if (import.meta.env.VITE_WS_URL) return import.meta.env.VITE_WS_URL;

@@ -1,13 +1,11 @@
 import { useCallback, useMemo } from 'react';
-import { API_PREFIX } from '@/api/client';
+import { API_PREFIX, getWsBaseUrl } from '@/api/client';
 import type { AgentAuthSession } from '@/api/settings';
 import {
     isWsCollectionStreamEnabled,
     useWsCollectionStream,
     type WsCollectionParsedMessage,
 } from './useWsCollectionStream';
-
-const WS_URL = import.meta.env.VITE_WS_URL || 'ws://localhost:3000';
 
 type AgentAuthSessionWsMessage =
     | {
@@ -72,7 +70,7 @@ export function useAgentAuthSessionStream(
 
     const wsUrl = useMemo(() => {
         if (!sessionId) return null;
-        return `${WS_URL}${API_PREFIX}/agent/auth/sessions/${encodeURIComponent(sessionId)}/ws`;
+        return `${getWsBaseUrl()}${API_PREFIX}/agent/auth/sessions/${encodeURIComponent(sessionId)}/ws`;
     }, [sessionId]);
 
     const parseMessage = useCallback(

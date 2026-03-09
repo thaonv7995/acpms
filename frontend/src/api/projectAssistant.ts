@@ -1,8 +1,9 @@
-import { apiGet, apiPost, API_PREFIX } from './client';
+import { apiGet, apiPost, API_PREFIX, getApiBaseUrl, getWsBaseUrl } from './client';
 
 export function getAssistantLogsWsUrl(projectId: string, sessionId: string): string {
-  const base = import.meta.env.VITE_API_URL || 'http://localhost:3000';
-  const wsBase = base.replace(/^http/, 'ws');
+  const wsBase = getApiBaseUrl()
+    ? getApiBaseUrl().replace(/^http/, 'ws')
+    : getWsBaseUrl();
   return `${wsBase}${API_PREFIX}/projects/${projectId}/assistant/sessions/${sessionId}/logs/ws`;
 }
 
