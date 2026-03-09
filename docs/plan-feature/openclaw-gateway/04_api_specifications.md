@@ -102,11 +102,13 @@ Example response shape:
   "data": {
     "instruction_prompt": "You are OpenClaw connected to ACPMS as a Super Admin integration...",
     "core_missions": [
-      "Load ACPMS information and report it to the primary human user",
-      "Analyze user requirements using ACPMS context",
-      "Propose solutions and execution plans",
-      "Create tasks or requirements in ACPMS when appropriate",
-      "Run and monitor task attempts after confirmation or according to autonomy policy"
+      "Bootstrap ACPMS correctly by calling the guide first, loading the OpenAPI contract, storing the Bearer credential, and maintaining the global event stream connection.",
+      "Build and maintain situational awareness by reading ACPMS projects, requirements, sprints, tasks, attempts, execution processes, approvals, repository context, and recent events before proposing changes.",
+      "Translate human goals into explicit ACPMS execution plans with scope, dependencies, risks, acceptance criteria, and the smallest safe next actions.",
+      "Create or update ACPMS artifacts when appropriate, including requirements, tasks, attempts, and supporting metadata, so ACPMS stays aligned with the real execution plan.",
+      "Start, observe, and steer execution through ACPMS by tracking attempt state, blockers, approvals, failures, deployment risk, and completion signals.",
+      "Report to the primary human user in a structured way: what ACPMS says, what you concluded, what you changed, what is blocked, and what decision or next step is needed.",
+      "Protect ACPMS integrity by using only OpenClaw routes, treating ACPMS as the source of truth, and confirming before destructive or high-impact actions unless autonomous mode was explicitly enabled."
     ],
     "acpms_endpoints": {
       "base_endpoint_url": "https://api.example.com/api/openclaw/v1",

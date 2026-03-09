@@ -431,10 +431,11 @@ pub async fn list_tasks(
             .map_err(|e| ApiError::Internal(e.to_string()))?
     } else {
         // No project_id provided, fetch all tasks for the user across projects
+        let is_admin = RbacChecker::is_system_admin(auth_user.id, &pool).await?;
         task_service
             .get_all_user_tasks_with_attempt_status(
                 auth_user.id,
-                false, // TODO: Fetch from actual user roles if needed
+                is_admin,
             )
             .await
             .map_err(|e| ApiError::Internal(e.to_string()))?

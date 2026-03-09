@@ -14,9 +14,9 @@ use axum::{
 use chrono::Utc;
 use futures::StreamExt;
 use helpers::{
-    create_router, create_test_admin, create_test_app_state, create_test_attempt,
-    create_test_project, create_test_router, create_test_task, create_test_user,
-    make_request_with_string_headers, setup_test_db,
+    cleanup_test_data, create_router, create_test_admin, create_test_app_state,
+    create_test_attempt, create_test_project, create_test_router, create_test_task,
+    create_test_user, make_request_with_string_headers, setup_test_db,
 };
 use serde_json::Value;
 use sqlx::PgPool;
@@ -247,6 +247,43 @@ async fn openclaw_can_access_mirrored_projects_and_openapi() {
         .get("/api/openclaw/ws/agent/auth/sessions/{id}")
         .is_some());
     assert!(json["paths"].get("/api/v1/projects").is_none());
+}
+
+#[tokio::test]
+async fn openclaw_can_list_tasks_without_project_id_as_system_admin() {
+    let _guard = env_lock().lock().unwrap_or_else(|error| error.into_inner());
+    configure_openclaw_env();
+    if !test_database_ready().await {
+        eprintln!("skipping openclaw gateway test because DATABASE_URL is not reachable");
+        return;
+    }
+
+    let pool = setup_test_db().await;
+    let (user_id, _) = create_test_user(&pool, None, None, None).await;
+    let project_id = create_test_project(&pool, user_id, Some("OpenClaw Task Visibility")).await;
+    let task_id = create_test_task(&pool, project_id, user_id, Some("OpenClaw Visible Task")).await;
+
+    let state = create_test_app_state(pool.clone()).await;
+    let router = create_router(state);
+
+    let (status, body) = make_request_with_string_headers(
+        &router,
+        "GET",
+        "/api/openclaw/v1/tasks",
+        None,
+        vec![("authorization", "Bearer oc_test_phase1_key".to_string())],
+    )
+    .await;
+
+    assert_eq!(status, StatusCode::OK, "{body}");
+    let json: Value = serde_json::from_str(&body).expect("valid json");
+    let tasks = json["data"].as_array().expect("tasks array");
+    assert!(
+        tasks.iter().any(|task| task["id"].as_str() == Some(&task_id.to_string())),
+        "expected task {task_id} to be visible in gateway response: {body}"
+    );
+
+    cleanup_test_data(&pool, user_id, Some(project_id)).await;
 }
 
 #[tokio::test]

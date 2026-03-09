@@ -195,6 +195,16 @@ print_success_report() {
   local email="${ACPMS_ADMIN_EMAIL:-${ADMIN_EMAIL:-see above}}"
   local has_pass="${ACPMS_ADMIN_PASSWORD:+yes}"
   local openclaw_base_endpoint="" openclaw_prompt_cmd=""
+  local box_inner_width=88
+  local title_width=$((box_inner_width - 2))
+  local label_width=15
+  local value_width=$((box_inner_width - label_width - 6))
+  local password_width=32
+  local password_note_width=$((box_inner_width - label_width - password_width - 7))
+  local box_rule
+
+  box_rule="$(printf '%*s' "$box_inner_width" '')"
+  box_rule="${box_rule// /═}"
 
   if [ "${OPENCLAW_GATEWAY_ENABLED:-false}" = "true" ]; then
     render_openclaw_bootstrap_prompt
@@ -202,34 +212,37 @@ print_success_report() {
     openclaw_prompt_cmd="cat \"$OPENCLAW_PROMPT_FILE\""
   fi
 
-  echo "${C_GREEN}╔══════════════════════════════════════════════════════════════════════════════╗${C_RESET}"
-  echo "${C_GREEN}║${C_RESET}  ${C_BOLD}Installation complete!${C_RESET}                                                      ${C_GREEN}║${C_RESET}"
-  echo "${C_GREEN}╠══════════════════════════════════════════════════════════════════════════════╣${C_RESET}"
-  echo "${C_GREEN}║${C_RESET}                                                                            ${C_GREEN}║${C_RESET}"
-  printf "${C_GREEN}║${C_RESET}  ${C_CYAN}%-15s${C_RESET}  ${C_BOLD}%-55s${C_RESET}  ${C_GREEN}║${C_RESET}\n" "Access URL" "$url"
-  printf "${C_GREEN}║${C_RESET}  ${C_CYAN}%-15s${C_RESET}  %-55s  ${C_GREEN}║${C_RESET}\n" "Admin email" "$email"
-  [ -n "$has_pass" ] && printf "${C_GREEN}║${C_RESET}  ${C_CYAN}%-15s${C_RESET}  ${C_YELLOW}%-27s${C_RESET} ${C_DIM}%-27s${C_RESET} ${C_GREEN}║${C_RESET}\n" "Admin password" "${ACPMS_ADMIN_PASSWORD}" "(save it; not shown again)"
-  printf "${C_GREEN}║${C_RESET}  ${C_CYAN}%-15s${C_RESET}  %-55s  ${C_GREEN}║${C_RESET}\n" "Config" "$ENV_FILE"
-  printf "${C_GREEN}║${C_RESET}  ${C_CYAN}%-15s${C_RESET}  %-55s  ${C_GREEN}║${C_RESET}\n" "Logs" "$BASE_DIR/acpms.log"
-  echo "${C_GREEN}║${C_RESET}                                                                            ${C_GREEN}║${C_RESET}"
-  echo "${C_GREEN}╠══════════════════════════════════════════════════════════════════════════════╣${C_RESET}"
-  echo "${C_GREEN}║${C_RESET}  ${C_BOLD}Next steps${C_RESET}                                                                  ${C_GREEN}║${C_RESET}"
-  echo "${C_GREEN}║${C_RESET}  • Open the URL above and log in with the admin account                    ${C_GREEN}║${C_RESET}"
-  echo "${C_GREEN}║${C_RESET}  • Settings → Agent CLI Provider: authenticate one provider                ${C_GREEN}║${C_RESET}"
-  echo "${C_GREEN}║${C_RESET}  • Settings → GitLab: configure OAuth if using GitLab                      ${C_GREEN}║${C_RESET}"
-  echo "${C_GREEN}║${C_RESET}                                                                            ${C_GREEN}║${C_RESET}"
+  printf "${C_GREEN}╔%s╗${C_RESET}\n" "$box_rule"
+  printf "${C_GREEN}║${C_RESET}  ${C_BOLD}%-${title_width}s${C_RESET}${C_GREEN}║${C_RESET}\n" "Installation complete!"
+  printf "${C_GREEN}╠%s╣${C_RESET}\n" "$box_rule"
+  printf "${C_GREEN}║${C_RESET}%-${box_inner_width}s${C_GREEN}║${C_RESET}\n" ""
+  printf "${C_GREEN}║${C_RESET}  ${C_CYAN}%-${label_width}s${C_RESET}  ${C_BOLD}%-${value_width}s${C_RESET}  ${C_GREEN}║${C_RESET}\n" "Access URL" "$url"
+  printf "${C_GREEN}║${C_RESET}  ${C_CYAN}%-${label_width}s${C_RESET}  %-${value_width}s  ${C_GREEN}║${C_RESET}\n" "Admin email" "$email"
+  [ -n "$has_pass" ] && printf "${C_GREEN}║${C_RESET}  ${C_CYAN}%-${label_width}s${C_RESET}  ${C_YELLOW}%-${password_width}s${C_RESET} ${C_DIM}%-${password_note_width}s${C_RESET}  ${C_GREEN}║${C_RESET}\n" "Admin password" "${ACPMS_ADMIN_PASSWORD}" "(save it; not shown again)"
+  printf "${C_GREEN}║${C_RESET}  ${C_CYAN}%-${label_width}s${C_RESET}  %-${value_width}s  ${C_GREEN}║${C_RESET}\n" "Config" "$ENV_FILE"
+  printf "${C_GREEN}║${C_RESET}  ${C_CYAN}%-${label_width}s${C_RESET}  %-${value_width}s  ${C_GREEN}║${C_RESET}\n" "Logs" "$BASE_DIR/acpms.log"
+  printf "${C_GREEN}║${C_RESET}%-${box_inner_width}s${C_GREEN}║${C_RESET}\n" ""
+  printf "${C_GREEN}╠%s╣${C_RESET}\n" "$box_rule"
+  printf "${C_GREEN}║${C_RESET}  ${C_BOLD}%-${title_width}s${C_RESET}${C_GREEN}║${C_RESET}\n" "Next steps"
+  printf "${C_GREEN}║${C_RESET}  %-${title_width}s${C_GREEN}║${C_RESET}\n" "• Open the URL above and log in with the admin account"
+  printf "${C_GREEN}║${C_RESET}  %-${title_width}s${C_GREEN}║${C_RESET}\n" "• Settings → Agent CLI Provider: authenticate one provider"
+  printf "${C_GREEN}║${C_RESET}  %-${title_width}s${C_GREEN}║${C_RESET}\n" "• Settings → GitLab: configure OAuth if using GitLab"
   if [ "${OPENCLAW_GATEWAY_ENABLED:-false}" = "true" ]; then
-    echo "${C_GREEN}║${C_RESET}  ${C_BOLD}OpenClaw Gateway${C_RESET}                                                           ${C_GREEN}║${C_RESET}"
-    printf "${C_GREEN}║${C_RESET}  ${C_CYAN}%-15s${C_RESET}  %-55s  ${C_GREEN}║${C_RESET}\n" "Base endpoint" "$openclaw_base_endpoint"
-    printf "${C_GREEN}║${C_RESET}  ${C_CYAN}%-15s${C_RESET}  %-55s  ${C_GREEN}║${C_RESET}\n" "View prompt" "$openclaw_prompt_cmd"
-    echo "${C_GREEN}║${C_RESET}                                                                            ${C_GREEN}║${C_RESET}"
+    printf "${C_GREEN}║${C_RESET}  %-${title_width}s${C_GREEN}║${C_RESET}\n" "• OpenClaw: Copy the prompt from the file below and send it to OpenClaw"
   fi
-  echo "${C_GREEN}╠══════════════════════════════════════════════════════════════════════════════╣${C_RESET}"
+  printf "${C_GREEN}║${C_RESET}%-${box_inner_width}s${C_GREEN}║${C_RESET}\n" ""
+  if [ "${OPENCLAW_GATEWAY_ENABLED:-false}" = "true" ]; then
+    printf "${C_GREEN}║${C_RESET}  ${C_BOLD}%-${title_width}s${C_RESET}${C_GREEN}║${C_RESET}\n" "OpenClaw Gateway"
+    printf "${C_GREEN}║${C_RESET}  ${C_CYAN}%-${label_width}s${C_RESET}  %-${value_width}s  ${C_GREEN}║${C_RESET}\n" "Base endpoint" "$openclaw_base_endpoint"
+    printf "${C_GREEN}║${C_RESET}  ${C_CYAN}%-${label_width}s${C_RESET}  %-${value_width}s  ${C_GREEN}║${C_RESET}\n" "View prompt" "$openclaw_prompt_cmd"
+    printf "${C_GREEN}║${C_RESET}%-${box_inner_width}s${C_GREEN}║${C_RESET}\n" ""
+  fi
+  printf "${C_GREEN}╠%s╣${C_RESET}\n" "$box_rule"
   [ "$OS" = "linux" ] && command -v systemctl >/dev/null 2>&1 && \
-  echo "${C_GREEN}║${C_RESET}  ${C_DIM}Status:    systemctl status acpms-server${C_RESET}                                    ${C_GREEN}║${C_RESET}"
-  echo "${C_GREEN}║${C_RESET}  ${C_DIM}Uninstall: curl -fsSL https://raw.githubusercontent.com/${REPO}/main/${C_RESET}  ${C_GREEN}║${C_RESET}"
-  echo "${C_GREEN}║${C_RESET}  ${C_DIM}           install.sh | bash -s -- --uninstall${C_RESET}                               ${C_GREEN}║${C_RESET}"
-  echo "${C_GREEN}╚══════════════════════════════════════════════════════════════════════════════╝${C_RESET}"
+  printf "${C_GREEN}║${C_RESET}  ${C_DIM}%-${title_width}s${C_RESET}${C_GREEN}║${C_RESET}\n" "Status:    systemctl status acpms-server"
+  printf "${C_GREEN}║${C_RESET}  ${C_DIM}%-${title_width}s${C_RESET}${C_GREEN}║${C_RESET}\n" "Uninstall: curl -fsSL https://raw.githubusercontent.com/${REPO}/main/"
+  printf "${C_GREEN}║${C_RESET}  ${C_DIM}%-${title_width}s${C_RESET}${C_GREEN}║${C_RESET}\n" "           install.sh | bash -s -- --uninstall"
+  printf "${C_GREEN}╚%s╝${C_RESET}\n" "$box_rule"
   echo
 }
 

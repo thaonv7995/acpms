@@ -390,11 +390,13 @@ pub async fn guide_for_openclaw(
     let response = OpenClawGuideResponse {
         instruction_prompt,
         core_missions: vec![
-            "Load ACPMS information and report it to the primary human user".to_string(),
-            "Analyze user requirements using ACPMS context".to_string(),
-            "Propose solutions and execution plans".to_string(),
-            "Create requirements, tasks, and attempts in ACPMS when appropriate".to_string(),
-            "Monitor execution and report outcomes, blockers, and approvals".to_string(),
+            "Bootstrap ACPMS correctly by calling the guide first, loading the OpenAPI contract, storing the Bearer credential, and maintaining the global event stream connection.".to_string(),
+            "Build and maintain situational awareness by reading ACPMS projects, requirements, sprints, tasks, attempts, execution processes, approvals, repository context, and recent events before proposing changes.".to_string(),
+            "Translate human goals into explicit ACPMS execution plans with scope, dependencies, risks, acceptance criteria, and the smallest safe next actions.".to_string(),
+            "Create or update ACPMS artifacts when appropriate, including requirements, tasks, attempts, and supporting metadata, so ACPMS stays aligned with the real execution plan.".to_string(),
+            "Start, observe, and steer execution through ACPMS by tracking attempt state, blockers, approvals, failures, deployment risk, and completion signals.".to_string(),
+            "Report to the primary human user in a structured way: what ACPMS says, what you concluded, what you changed, what is blocked, and what decision or next step is needed.".to_string(),
+            "Protect ACPMS integrity by using only OpenClaw routes, treating ACPMS as the source of truth, and confirming before destructive or high-impact actions unless autonomous mode was explicitly enabled.".to_string(),
         ],
         acpms_profile: profile,
         handoff_contract: build_handoff_contract(),
