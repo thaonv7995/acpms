@@ -9,6 +9,7 @@ import {
   type ProjectDocumentKind,
   updateProjectDocument,
 } from '../../api/projectDocuments';
+import { ConfirmModal } from '../modals';
 import { logger } from '@/lib/logger';
 
 interface DocumentsTabProps {
@@ -34,14 +35,61 @@ const DOCUMENT_KIND_LABELS: Record<ProjectDocumentKind, string> = {
   other: 'Other',
 };
 
-const CONTENT_TYPE_OPTIONS = [
-  'text/markdown',
-  'text/plain',
-  'application/json',
-  'text/yaml',
-  'application/yaml',
-  'application/x-yaml',
+const CONTENT_TYPE_SUGGESTIONS = [
+  { value: 'text/markdown', label: 'Markdown' },
+  { value: 'text/plain', label: 'Plain text' },
+  { value: 'application/json', label: 'JSON' },
+  { value: 'application/vnd.api+json', label: 'JSON API / +json' },
+  { value: 'application/yaml', label: 'YAML' },
+  { value: 'application/x-yaml', label: 'YAML (x-yaml)' },
+  { value: 'text/html', label: 'HTML' },
+  { value: 'application/xml', label: 'XML' },
+  { value: 'text/csv', label: 'CSV' },
+  { value: 'text/css', label: 'CSS' },
+  { value: 'text/javascript', label: 'JavaScript' },
+  { value: 'application/typescript', label: 'TypeScript' },
+  { value: 'text/jsx', label: 'JSX' },
+  { value: 'text/tsx', label: 'TSX' },
+  { value: 'application/graphql', label: 'GraphQL' },
+  { value: 'application/toml', label: 'TOML' },
+  { value: 'text/sql', label: 'SQL' },
+  { value: 'text/x-shellscript', label: 'Shell script' },
+  { value: 'text/x-python', label: 'Python' },
+  { value: 'text/x-rust', label: 'Rust' },
 ] as const;
+
+const IMPORT_FILE_ACCEPT = [
+  '.md',
+  '.markdown',
+  '.txt',
+  '.json',
+  '.yaml',
+  '.yml',
+  '.html',
+  '.htm',
+  '.xml',
+  '.csv',
+  '.css',
+  '.js',
+  '.mjs',
+  '.cjs',
+  '.ts',
+  '.tsx',
+  '.jsx',
+  '.graphql',
+  '.gql',
+  '.toml',
+  '.sql',
+  '.sh',
+  '.bash',
+  '.zsh',
+  '.py',
+  '.rs',
+  '.env',
+  '.ini',
+  '.cfg',
+  '.conf',
+].join(',');
 
 function createEmptyDraft(): DocumentDraft {
   return {
@@ -61,6 +109,36 @@ function guessContentType(filename: string, fallback?: string): string {
   if (normalized.endsWith('.json')) return 'application/json';
   if (normalized.endsWith('.yaml')) return 'application/yaml';
   if (normalized.endsWith('.yml')) return 'application/x-yaml';
+  if (normalized.endsWith('.html') || normalized.endsWith('.htm')) return 'text/html';
+  if (normalized.endsWith('.xml')) return 'application/xml';
+  if (normalized.endsWith('.csv')) return 'text/csv';
+  if (normalized.endsWith('.css')) return 'text/css';
+  if (normalized.endsWith('.js') || normalized.endsWith('.mjs') || normalized.endsWith('.cjs')) {
+    return 'text/javascript';
+  }
+  if (normalized.endsWith('.ts')) return 'application/typescript';
+  if (normalized.endsWith('.tsx')) return 'text/tsx';
+  if (normalized.endsWith('.jsx')) return 'text/jsx';
+  if (normalized.endsWith('.graphql') || normalized.endsWith('.gql')) return 'application/graphql';
+  if (normalized.endsWith('.toml')) return 'application/toml';
+  if (normalized.endsWith('.sql')) return 'text/sql';
+  if (
+    normalized.endsWith('.sh') ||
+    normalized.endsWith('.bash') ||
+    normalized.endsWith('.zsh')
+  ) {
+    return 'text/x-shellscript';
+  }
+  if (normalized.endsWith('.py')) return 'text/x-python';
+  if (normalized.endsWith('.rs')) return 'text/x-rust';
+  if (
+    normalized.endsWith('.env') ||
+    normalized.endsWith('.ini') ||
+    normalized.endsWith('.cfg') ||
+    normalized.endsWith('.conf')
+  ) {
+    return 'text/plain';
+  }
   if (fallback && fallback.trim()) return fallback;
   return 'text/markdown';
 }
@@ -105,6 +183,10 @@ export function DocumentsTab({ projectId }: DocumentsTabProps) {
   const [saving, setSaving] = useState(false);
   const [deleting, setDeleting] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const [pendingDeleteDocument, setPendingDeleteDocument] = useState<{
+    id: string;
+    title: string;
+  } | null>(null);
   const importInputRef = useRef<HTMLInputElement | null>(null);
 
   const selectedDocument = useMemo(
@@ -292,18 +374,33 @@ export function DocumentsTab({ projectId }: DocumentsTabProps) {
     }
   };
 
-  const handleDelete = async () => {
+  const handleRequestDelete = () => {
     if (!draft.documentId || deleting) return;
-    if (!window.confirm(`Delete "${draft.title}"? This cannot be undone.`)) return;
+
+    setPendingDeleteDocument({
+      id: draft.documentId,
+      title: draft.title.trim() || draft.filename.trim() || 'this document',
+    });
+  };
+
+  const handleCloseDeleteModal = () => {
+    if (deleting) return;
+    setPendingDeleteDocument(null);
+  };
+
+  const handleConfirmDelete = async () => {
+    const documentToDelete = pendingDeleteDocument;
+    if (!documentToDelete || deleting) return;
 
     setDeleting(true);
     setError(null);
 
     try {
-      await deleteProjectDocument(projectId, draft.documentId);
-      const deletedId = draft.documentId;
+      await deleteProjectDocument(projectId, documentToDelete.id);
+      const deletedId = documentToDelete.id;
       setDraft(createEmptyDraft());
       setSelectedDocumentId(null);
+      setPendingDeleteDocument(null);
       await loadDocuments(
         selectedDocumentId === deletedId ? null : selectedDocumentId
       );
@@ -409,7 +506,7 @@ export function DocumentsTab({ projectId }: DocumentsTabProps) {
             <input
               ref={importInputRef}
               type="file"
-              accept=".md,.markdown,.txt,.json,.yaml,.yml"
+              accept={IMPORT_FILE_ACCEPT}
               className="hidden"
               onChange={(event) => {
                 void handleImportFile(event);
@@ -426,7 +523,7 @@ export function DocumentsTab({ projectId }: DocumentsTabProps) {
               <button
                 type="button"
                 onClick={() => {
-                  void handleDelete();
+                  handleRequestDelete();
                 }}
                 className="px-2.5 py-1.5 text-xs font-medium rounded-md border border-red-500/40 text-red-500 hover:bg-red-500/10 transition-colors"
                 disabled={deleting}
@@ -525,19 +622,26 @@ export function DocumentsTab({ projectId }: DocumentsTabProps) {
               <label className="block text-xs font-bold text-muted-foreground uppercase mb-1.5">
                 Content type
               </label>
-              <select
+              <input
+                list="project-document-content-types"
                 value={draft.contentType}
                 onChange={(event) =>
                   setDraft((prev) => ({ ...prev, contentType: event.target.value }))
                 }
                 className="w-full bg-muted border border-border rounded-lg px-3 py-2.5 text-sm text-card-foreground focus:ring-primary focus:border-primary"
-              >
-                {CONTENT_TYPE_OPTIONS.map((contentType) => (
-                  <option key={contentType} value={contentType}>
-                    {contentType}
+                placeholder="text/markdown"
+                spellCheck={false}
+              />
+              <datalist id="project-document-content-types">
+                {CONTENT_TYPE_SUGGESTIONS.map(({ value, label }) => (
+                  <option key={value} value={value}>
+                    {label}
                   </option>
                 ))}
-              </select>
+              </datalist>
+              <p className="text-[11px] text-muted-foreground mt-1">
+                Suggested MIME types are listed, but you can enter any custom text-based content type.
+              </p>
             </div>
           </div>
 
@@ -584,6 +688,17 @@ export function DocumentsTab({ projectId }: DocumentsTabProps) {
           </div>
         </div>
       </div>
+
+      <ConfirmModal
+        isOpen={!!pendingDeleteDocument}
+        onClose={handleCloseDeleteModal}
+        onConfirm={handleConfirmDelete}
+        title="Delete Document"
+        message={`Delete "${pendingDeleteDocument?.title ?? ''}"? This action cannot be undone.`}
+        confirmText="Delete Document"
+        confirmVariant="danger"
+        isLoading={deleting}
+      />
     </div>
   );
 }

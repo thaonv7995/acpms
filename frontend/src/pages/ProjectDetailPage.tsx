@@ -27,7 +27,6 @@ import {
   RequirementsTab,
   DocumentsTab,
   ArchitectureTab,
-  DeploymentsTab,
   SettingsTab,
   SprintSelector,
 } from '../components/project-detail';
@@ -73,7 +72,6 @@ const tabs: { id: ProjectTab; label: string; icon: string }[] = [
   { id: 'requirements', label: 'Requirements', icon: 'description' },
   { id: 'documents', label: 'Documents', icon: 'library_books' },
   { id: 'architecture', label: 'Architecture', icon: 'hub' },
-  { id: 'deployments', label: 'Deployments', icon: 'rocket_launch' },
   { id: 'settings', label: 'Settings', icon: 'settings' },
 ];
 
@@ -99,14 +97,6 @@ export function ProjectDetailPage() {
 
   const { members } = useProjectMembers(id ?? undefined);
   const currentUser = getCurrentUser();
-  const canViewDeployments = useMemo(() => {
-    if (isSystemAdmin(currentUser)) return true;
-    if (!currentUser || !members.length) return false;
-    const myMember = members.find((m) => m.id === currentUser.id);
-    if (!myMember) return false;
-    const roles = myMember.roles.map((r) => r.toLowerCase());
-    return roles.includes('owner') || roles.includes('admin') || roles.includes('developer');
-  }, [currentUser, members]);
   const canManageProject = useMemo(() => {
     if (isSystemAdmin(currentUser)) return true;
     if (!currentUser || !members.length) return false;
@@ -116,16 +106,11 @@ export function ProjectDetailPage() {
     return roles.includes('owner') || roles.includes('admin');
   }, [currentUser, members]);
 
-  const visibleTabs = useMemo(
-    () => (canViewDeployments ? tabs : tabs.filter((t) => t.id !== 'deployments')),
-    [canViewDeployments]
-  );
-
   useEffect(() => {
-    if (activeTab === 'deployments' && !canViewDeployments) {
+    if (activeTab === 'deployments') {
       setActiveTab('summary');
     }
-  }, [activeTab, canViewDeployments, setActiveTab]);
+  }, [activeTab, setActiveTab]);
 
   const [showCreateTaskModal, setShowCreateTaskModal] = useState(false);
   const [showRequirementForm, setShowRequirementForm] = useState(false);
@@ -492,15 +477,14 @@ export function ProjectDetailPage() {
           {/* Tabs */}
           <div className="border-b border-border">
             <nav className="flex gap-0 -mb-px overflow-x-auto no-scrollbar">
-              {visibleTabs.map((tab) => (
+              {tabs.map((tab) => (
                 <button
                   key={tab.id}
-                  onClick={() => tab.id !== 'deployments' && setActiveTab(tab.id)}
-                  className={`flex items-center gap-2 px-5 py-3 text-sm font-medium border-b-2 transition-colors whitespace-nowrap ${tab.id === 'deployments' ? 'opacity-50 cursor-not-allowed' : ''} ${activeTab === tab.id
+                  onClick={() => setActiveTab(tab.id)}
+                  className={`flex items-center gap-2 px-5 py-3 text-sm font-medium border-b-2 transition-colors whitespace-nowrap ${activeTab === tab.id
                     ? 'border-primary text-primary'
                     : 'border-transparent text-muted-foreground hover:text-card-foreground hover:border-border/80'
                     }`}
-                  title={tab.id === 'deployments' ? 'Coming soon' : undefined}
                 >
                   <span className="material-symbols-outlined text-[18px]">{tab.icon}</span>
                   {tab.label}
@@ -587,9 +571,6 @@ export function ProjectDetailPage() {
               )}
               {activeTab === 'architecture' && (
                 <ArchitectureTab projectId={project.id} />
-              )}
-              {activeTab === 'deployments' && (
-                <DeploymentsTab projectId={project.id} />
               )}
               {activeTab === 'settings' && (
                 <SettingsTab

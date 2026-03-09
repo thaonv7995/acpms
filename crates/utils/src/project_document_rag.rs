@@ -8,13 +8,17 @@ pub const PROJECT_DOCUMENT_CHUNK_OVERLAP_CHARS: usize = 180;
 pub const PROJECT_DOCUMENT_MAX_CHUNKS: usize = 128;
 pub const PROJECT_DOCUMENT_RUNTIME_TOP_K_LIMIT: usize = 8;
 
-const INDEXABLE_PROJECT_DOCUMENT_CONTENT_TYPES: &[&str] = &[
-    "text/markdown",
-    "text/plain",
+const INDEXABLE_PROJECT_DOCUMENT_APPLICATION_CONTENT_TYPES: &[&str] = &[
     "application/json",
-    "text/yaml",
     "application/yaml",
     "application/x-yaml",
+    "application/xml",
+    "application/toml",
+    "application/javascript",
+    "application/x-javascript",
+    "application/typescript",
+    "application/graphql",
+    "application/sql",
 ];
 
 #[derive(Debug, Clone, PartialEq)]
@@ -28,7 +32,9 @@ pub struct ProjectDocumentChunkDraft {
 
 pub fn is_indexable_project_document_content_type(content_type: &str) -> bool {
     let normalized = normalize_content_type(content_type);
-    INDEXABLE_PROJECT_DOCUMENT_CONTENT_TYPES.contains(&normalized.as_str())
+    normalized.starts_with("text/")
+        || is_json_like_content_type(&normalized)
+        || INDEXABLE_PROJECT_DOCUMENT_APPLICATION_CONTENT_TYPES.contains(&normalized.as_str())
 }
 
 pub fn normalize_project_document_text(content_type: &str, bytes: &[u8]) -> Result<String> {
@@ -42,8 +48,9 @@ pub fn normalize_project_document_text(content_type: &str, bytes: &[u8]) -> Resu
     let text =
         String::from_utf8(bytes.to_vec()).map_err(|_| anyhow!("Document is not valid UTF-8"))?;
     let normalized = text.replace("\r\n", "\n").replace('\r', "\n");
-    let normalized = match normalize_content_type(content_type).as_str() {
-        "application/json" => serde_json::from_str::<serde_json::Value>(&normalized)
+    let normalized_content_type = normalize_content_type(content_type);
+    let normalized = match normalized_content_type.as_str() {
+        value if is_json_like_content_type(value) => serde_json::from_str::<serde_json::Value>(&normalized)
             .ok()
             .and_then(|value| serde_json::to_string_pretty(&value).ok())
             .unwrap_or(normalized),
@@ -274,6 +281,10 @@ fn normalize_content_type(content_type: &str) -> String {
         .to_ascii_lowercase()
 }
 
+fn is_json_like_content_type(content_type: &str) -> bool {
+    content_type == "application/json" || content_type.ends_with("+json")
+}
+
 fn normalize_vector(values: &mut [f32]) {
     let norm = values.iter().map(|value| value * value).sum::<f32>().sqrt();
     if norm <= f32::EPSILON {
@@ -299,6 +310,10 @@ mod tests {
         assert!(is_indexable_project_document_content_type(
             "text/markdown; charset=utf-8"
         ));
+        assert!(is_indexable_project_document_content_type("text/html"));
+        assert!(is_indexable_project_document_content_type(
+            "application/vnd.api+json"
+        ));
         assert!(!is_indexable_project_document_content_type(
             "application/pdf"
         ));
@@ -310,6 +325,17 @@ mod tests {
             .expect("json should normalize");
 
         assert!(text.contains("\"b\": {"));
+    }
+
+    #[test]
+    fn json_suffix_content_type_is_pretty_printed_for_indexing() {
+        let text = normalize_project_document_text(
+            "application/vnd.api+json",
+            br#"{"data":{"id":"doc-1"}}"#,
+        )
+        .expect("json suffix content type should normalize");
+
+        assert!(text.contains("\"data\": {"));
     }
 
     #[test]
