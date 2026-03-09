@@ -644,9 +644,11 @@ fn parse_path_with_namespace(repo_url: &str) -> Option<String> {
 #[cfg(test)]
 mod tests {
     use super::{
-        build_authenticated_repo_url, parse_owner_repo, parse_path_with_namespace,
-        parse_repo_host_and_path,
+        build_authenticated_repo_url, github_repository_clone_url, gitlab_project_clone_url,
+        parse_owner_repo, parse_path_with_namespace, parse_repo_host_and_path,
     };
+    use acpms_github::{GitHubRepository, GitHubRepositoryOwner};
+    use acpms_gitlab::GitLabProject;
 
     #[test]
     fn parse_owner_repo_handles_git_suffix() {
@@ -689,6 +691,52 @@ mod tests {
         assert_eq!(
             url,
             "https://x-access-token:ghp_123@github.com/openai/codex.git"
+        );
+    }
+
+    #[test]
+    fn github_repository_clone_url_prefers_clone_url() {
+        let repository = GitHubRepository {
+            id: 1,
+            name: "codex".to_string(),
+            full_name: "openai/codex".to_string(),
+            private: false,
+            html_url: "https://github.com/openai/codex".to_string(),
+            clone_url: "https://github.com/openai/codex.git".to_string(),
+            default_branch: "main".to_string(),
+            owner: GitHubRepositoryOwner {
+                id: 1,
+                login: "openai".to_string(),
+            },
+            permissions: None,
+            allow_forking: Some(true),
+            fork: false,
+        };
+
+        assert_eq!(
+            github_repository_clone_url(&repository),
+            "https://github.com/openai/codex.git"
+        );
+    }
+
+    #[test]
+    fn gitlab_project_clone_url_prefers_http_clone_url() {
+        let project = GitLabProject {
+            id: 1,
+            name: "repo".to_string(),
+            path: "repo".to_string(),
+            path_with_namespace: "group/repo".to_string(),
+            web_url: "https://gitlab.example.com/group/repo".to_string(),
+            default_branch: Some("main".to_string()),
+            ssh_url_to_repo: "git@gitlab.example.com:group/repo.git".to_string(),
+            http_url_to_repo: "https://gitlab.example.com/group/repo.git".to_string(),
+            permissions: None,
+            forking_access_level: Some("enabled".to_string()),
+        };
+
+        assert_eq!(
+            gitlab_project_clone_url(&project),
+            "https://gitlab.example.com/group/repo.git"
         );
     }
 }

@@ -1,4 +1,6 @@
 use anyhow::{Context, Result};
+use base64::{engine::general_purpose::STANDARD as BASE64, Engine as _};
+use std::collections::HashSet;
 use std::path::{Path, PathBuf};
 use std::process::Output;
 use std::process::Stdio;
@@ -105,14 +107,18 @@ impl WorktreeManager {
         upstream_url: Option<&str>,
         pat: &str,
     ) -> Result<()> {
+        let clean_remote_url = normalize_remote_url(remote_url);
+        let clean_upstream_url = upstream_url.map(normalize_remote_url);
+
         if repo_path.join(".git").exists() {
+            self.reconcile_remote_url(repo_path, "origin", Some(&clean_remote_url))
+                .await?;
+            self.reconcile_remote_url(repo_path, "upstream", clean_upstream_url.as_deref())
+                .await?;
             return Ok(());
         }
 
         // Not cloned yet — do the initial clone.
-        let auth_url = inject_pat_into_url(remote_url, pat);
-        let upstream_auth_url = upstream_url.map(|url| inject_pat_into_url(url, pat));
-
         tracing::info!(
             "Repository not found at {:?}, cloning from {}",
             repo_path,
@@ -123,9 +129,12 @@ impl WorktreeManager {
             tokio::fs::create_dir_all(parent).await?;
         }
 
-        let output = git_command_non_interactive()
+        let mut clone_command = git_command_non_interactive();
+        configure_git_auth(&mut clone_command, remote_url, &[], pat);
+
+        let output = clone_command
             .arg("clone")
-            .arg(&auth_url)
+            .arg(&clean_remote_url)
             .arg(repo_path)
             .stdout(Stdio::piped())
             .stderr(Stdio::piped())
@@ -146,8 +155,9 @@ impl WorktreeManager {
         self.ensure_remote_url(
             repo_path,
             "upstream",
-            upstream_url,
-            upstream_auth_url.as_deref(),
+            clean_upstream_url.as_deref(),
+            remote_url,
+            pat,
         )
         .await?;
 
@@ -162,10 +172,15 @@ impl WorktreeManager {
         upstream_url: Option<&str>,
         pat: &str,
     ) -> Result<()> {
-        let auth_url = inject_pat_into_url(remote_url, pat);
-        let upstream_auth_url = upstream_url.map(|url| inject_pat_into_url(url, pat));
+        let clean_remote_url = normalize_remote_url(remote_url);
+        let clean_upstream_url = upstream_url.map(normalize_remote_url);
 
         if repo_path.join(".git").exists() {
+            self.reconcile_remote_url(repo_path, "origin", Some(&clean_remote_url))
+                .await?;
+            self.reconcile_remote_url(repo_path, "upstream", clean_upstream_url.as_deref())
+                .await?;
+
             // Repository exists — check if a recent sync already happened.
             // If FETCH_HEAD was updated within the last 60 seconds we can skip the
             // expensive `git fetch --all` + `git pull` round-trip entirely, which
@@ -196,64 +211,19 @@ impl WorktreeManager {
                 repo_path
             );
 
-            // Guard against path collision: existing repo must match expected remote.
-            let current_remote_output = Command::new("git")
-                .current_dir(repo_path)
-                .arg("remote")
-                .arg("get-url")
-                .arg("origin")
-                .stdout(Stdio::piped())
-                .stderr(Stdio::piped())
-                .output()
-                .await
-                .context("Failed to read current git remote URL")?;
-
-            if !current_remote_output.status.success() {
-                let stderr = String::from_utf8_lossy(&current_remote_output.stderr);
-                anyhow::bail!("git remote get-url origin failed: {}", stderr.trim());
-            }
-
-            let current_remote = String::from_utf8_lossy(&current_remote_output.stdout)
-                .trim()
-                .to_string();
-            if !remote_url_matches_configured_value(&current_remote, &auth_url) {
-                tracing::info!(
-                    "Repository remote changed at {:?}: retargeting origin from {} to {}",
-                    repo_path,
-                    current_remote,
-                    auth_url
-                );
-                let set_origin_output = Command::new("git")
-                    .current_dir(repo_path)
-                    .args(["remote", "set-url", "origin", &auth_url])
-                    .stdout(Stdio::piped())
-                    .stderr(Stdio::piped())
-                    .output()
-                    .await
-                    .context("Failed to retarget git origin URL")?;
-
-                if !set_origin_output.status.success() {
-                    let stderr = String::from_utf8_lossy(&set_origin_output.stderr);
-                    anyhow::bail!("git remote set-url origin failed: {}", stderr.trim());
-                }
-            }
-
             self.ensure_remote_url(
                 repo_path,
                 "upstream",
-                upstream_url,
-                upstream_auth_url.as_deref(),
+                clean_upstream_url.as_deref(),
+                remote_url,
+                pat,
             )
             .await?;
 
-            // Fetch all remotes
-            let fetch_output = git_command_non_interactive()
-                .current_dir(repo_path)
-                .arg("fetch")
-                .arg("--all")
-                .stdout(Stdio::piped())
-                .stderr(Stdio::piped())
-                .output()
+            // Fetch origin explicitly with per-command auth. Upstream is fetched by
+            // ensure_remote_url above when configured.
+            let fetch_output = self
+                .fetch_remote(repo_path, "origin", remote_url, &[], pat)
                 .await
                 .context("Failed to execute git fetch")?;
 
@@ -289,7 +259,14 @@ impl WorktreeManager {
             }
 
             // Pull latest changes
-            let pull_output = git_command_non_interactive()
+            let pull_source_url = if pull_remote == "upstream" {
+                clean_upstream_url.as_deref().unwrap_or(&clean_remote_url)
+            } else {
+                &clean_remote_url
+            };
+            let mut pull_command = git_command_non_interactive();
+            configure_git_auth(&mut pull_command, remote_url, &[pull_source_url], pat);
+            let pull_output = pull_command
                 .current_dir(repo_path)
                 .arg("pull")
                 .arg(&pull_remote)
@@ -325,9 +302,11 @@ impl WorktreeManager {
             tokio::fs::create_dir_all(parent).await?;
         }
 
-        let output = git_command_non_interactive()
+        let mut clone_command = git_command_non_interactive();
+        configure_git_auth(&mut clone_command, remote_url, &[], pat);
+        let output = clone_command
             .arg("clone")
-            .arg(&auth_url)
+            .arg(&clean_remote_url)
             .arg(repo_path)
             .stdout(Stdio::piped())
             .stderr(Stdio::piped())
@@ -348,8 +327,9 @@ impl WorktreeManager {
         self.ensure_remote_url(
             repo_path,
             "upstream",
-            upstream_url,
-            upstream_auth_url.as_deref(),
+            clean_upstream_url.as_deref(),
+            remote_url,
+            pat,
         )
         .await?;
 
@@ -626,12 +606,44 @@ impl WorktreeManager {
         repo_path: &Path,
         remote_name: &str,
         expected_url: Option<&str>,
-        configured_url: Option<&str>,
+        primary_remote_url: &str,
+        pat: &str,
     ) -> Result<()> {
         let Some(expected_url) = expected_url else {
             return Ok(());
         };
-        let configured_url = configured_url.unwrap_or(expected_url);
+
+        self.reconcile_remote_url(repo_path, remote_name, Some(expected_url))
+            .await?;
+
+        let fetch_output = self
+            .fetch_remote(
+                repo_path,
+                remote_name,
+                primary_remote_url,
+                &[expected_url],
+                pat,
+            )
+            .await
+            .with_context(|| format!("Failed to fetch git remote {}", remote_name))?;
+
+        if !fetch_output.status.success() {
+            let stderr = String::from_utf8_lossy(&fetch_output.stderr);
+            anyhow::bail!("git fetch {} failed: {}", remote_name, stderr.trim());
+        }
+
+        Ok(())
+    }
+
+    async fn reconcile_remote_url(
+        &self,
+        repo_path: &Path,
+        remote_name: &str,
+        expected_url: Option<&str>,
+    ) -> Result<()> {
+        let Some(expected_url) = expected_url else {
+            return Ok(());
+        };
 
         let get_output = Command::new("git")
             .current_dir(repo_path)
@@ -646,13 +658,21 @@ impl WorktreeManager {
             let current_remote = String::from_utf8_lossy(&get_output.stdout)
                 .trim()
                 .to_string();
-            if remote_url_matches_configured_value(&current_remote, configured_url) {
+            if remote_url_matches_configured_value(&current_remote, expected_url) {
                 return Ok(());
             }
 
+            tracing::info!(
+                "Retargeting git remote {} at {:?} from {} to {}",
+                remote_name,
+                repo_path,
+                current_remote,
+                expected_url
+            );
+
             let set_output = Command::new("git")
                 .current_dir(repo_path)
-                .args(["remote", "set-url", remote_name, configured_url])
+                .args(["remote", "set-url", remote_name, expected_url])
                 .stdout(Stdio::piped())
                 .stderr(Stdio::piped())
                 .output()
@@ -670,7 +690,7 @@ impl WorktreeManager {
         } else {
             let add_output = Command::new("git")
                 .current_dir(repo_path)
-                .args(["remote", "add", remote_name, configured_url])
+                .args(["remote", "add", remote_name, expected_url])
                 .stdout(Stdio::piped())
                 .stderr(Stdio::piped())
                 .output()
@@ -683,21 +703,28 @@ impl WorktreeManager {
             }
         }
 
-        let fetch_output = git_command_non_interactive()
+        Ok(())
+    }
+
+    async fn fetch_remote(
+        &self,
+        repo_path: &Path,
+        remote_name: &str,
+        primary_remote_url: &str,
+        additional_urls: &[&str],
+        pat: &str,
+    ) -> Result<Output> {
+        let mut fetch_command = git_command_non_interactive();
+        configure_git_auth(&mut fetch_command, primary_remote_url, additional_urls, pat);
+        fetch_command
             .current_dir(repo_path)
-            .args(["fetch", remote_name])
+            .arg("fetch")
+            .arg(remote_name)
             .stdout(Stdio::piped())
             .stderr(Stdio::piped())
             .output()
             .await
-            .with_context(|| format!("Failed to fetch git remote {}", remote_name))?;
-
-        if !fetch_output.status.success() {
-            let stderr = String::from_utf8_lossy(&fetch_output.stderr);
-            anyhow::bail!("git fetch {} failed: {}", remote_name, stderr.trim());
-        }
-
-        Ok(())
+            .with_context(|| format!("Failed to fetch git remote {}", remote_name))
     }
 
     /// Cleans up a worktree and its associated branch
@@ -848,9 +875,14 @@ impl WorktreeManager {
         Ok(true)
     }
 
-    pub async fn push_worktree(&self, worktree_path: &Path) -> Result<()> {
+    pub async fn push_worktree(
+        &self,
+        worktree_path: &Path,
+        remote_url: &str,
+        pat: &str,
+    ) -> Result<()> {
         let mut output = self
-            .run_push_worktree_command(worktree_path)
+            .run_push_worktree_command(worktree_path, remote_url, pat)
             .await
             .context("Failed to execute git push")?;
 
@@ -861,7 +893,9 @@ impl WorktreeManager {
                     .current_branch_name(worktree_path)
                     .await
                     .unwrap_or_else(|_| "HEAD".to_string());
-                let _ = git_command_non_interactive()
+                let mut fetch_command = git_command_non_interactive();
+                configure_git_auth(&mut fetch_command, remote_url, &[], pat);
+                let _ = fetch_command
                     .current_dir(worktree_path)
                     .arg("fetch")
                     .arg("origin")
@@ -872,7 +906,7 @@ impl WorktreeManager {
                     .await;
 
                 output = self
-                    .run_push_worktree_command(worktree_path)
+                    .run_push_worktree_command(worktree_path, remote_url, pat)
                     .await
                     .context("Failed to retry git push")?;
 
@@ -893,8 +927,15 @@ impl WorktreeManager {
         Ok(())
     }
 
-    async fn run_push_worktree_command(&self, worktree_path: &Path) -> Result<Output> {
-        git_command_non_interactive()
+    async fn run_push_worktree_command(
+        &self,
+        worktree_path: &Path,
+        remote_url: &str,
+        pat: &str,
+    ) -> Result<Output> {
+        let mut push_command = git_command_non_interactive();
+        configure_git_auth(&mut push_command, remote_url, &[], pat);
+        push_command
             .current_dir(worktree_path)
             .arg("push")
             .arg("--no-verify")
@@ -1165,6 +1206,91 @@ fn remote_url_matches_configured_value(current_remote: &str, configured_url: &st
     current_remote.trim() == configured_url.trim()
 }
 
+fn normalize_remote_url(url: &str) -> String {
+    let trimmed = url.trim();
+    if trimmed.is_empty() {
+        return String::new();
+    }
+
+    normalized_http_remote_url(trimmed).unwrap_or_else(|| trimmed.to_string())
+}
+
+fn normalized_http_remote_url(url: &str) -> Option<String> {
+    let trimmed = url.trim();
+    let (host, path) = parse_repo_identity(trimmed)?;
+    let scheme = if trimmed.starts_with("http://") {
+        "http://"
+    } else {
+        "https://"
+    };
+    Some(format!("{scheme}{host}/{path}.git"))
+}
+
+fn auth_username_for_url(url: &str) -> &'static str {
+    parse_repo_identity(url)
+        .map(|(host, _)| {
+            if host.contains("github") {
+                "x-access-token"
+            } else {
+                "oauth2"
+            }
+        })
+        .unwrap_or("oauth2")
+}
+
+fn auth_header_for_url(url: &str, pat: &str) -> Option<String> {
+    if pat.trim().is_empty() {
+        return None;
+    }
+
+    let credentials = format!("{}:{}", auth_username_for_url(url), pat);
+    Some(format!(
+        "AUTHORIZATION: Basic {}",
+        BASE64.encode(credentials)
+    ))
+}
+
+fn git_auth_configs(primary_url: &str, urls: &[&str], pat: &str) -> Vec<String> {
+    if pat.trim().is_empty() {
+        return Vec::new();
+    }
+
+    let primary_host = parse_repo_identity(primary_url).map(|(host, _)| host);
+    let mut seen = HashSet::new();
+    let mut configs = Vec::new();
+
+    for url in std::iter::once(primary_url).chain(urls.iter().copied()) {
+        let Some(normalized_url) = normalized_http_remote_url(url) else {
+            continue;
+        };
+        let Some((host, _)) = parse_repo_identity(url) else {
+            continue;
+        };
+
+        if let Some(expected_host) = primary_host.as_deref() {
+            if !host.eq_ignore_ascii_case(expected_host) {
+                continue;
+            }
+        }
+
+        if !seen.insert(normalized_url.clone()) {
+            continue;
+        }
+
+        if let Some(header) = auth_header_for_url(url, pat) {
+            configs.push(format!("http.{}.extraheader={}", normalized_url, header));
+        }
+    }
+
+    configs
+}
+
+fn configure_git_auth(command: &mut Command, primary_url: &str, urls: &[&str], pat: &str) {
+    for config in git_auth_configs(primary_url, urls, pat) {
+        command.arg("-c").arg(config);
+    }
+}
+
 fn parse_tracking_branch(default_branch: &str, fallback_remote: &str) -> (String, String) {
     let trimmed = default_branch.trim();
     if trimmed.is_empty() || trimmed == "HEAD" {
@@ -1191,41 +1317,9 @@ fn git_command_non_interactive() -> Command {
     cmd.env("GIT_ASKPASS", "echo");
     cmd.env("SSH_ASKPASS", "echo");
     cmd.env("GIT_SSH_COMMAND", "ssh -oBatchMode=yes");
+    cmd.arg("-c").arg("credential.helper=");
+    cmd.arg("-c").arg("credential.interactive=never");
     cmd
-}
-
-fn inject_pat_into_url(url: &str, pat: &str) -> String {
-    if pat.is_empty() {
-        return url.to_string();
-    }
-
-    // Accept both HTTPS and SSH-style URLs; when SSH is provided we convert to HTTPS
-    // so token auth can still work in headless production environments.
-    let normalized = if url.starts_with("https://") || url.starts_with("http://") {
-        url.trim().to_string()
-    } else if let Some((host, path)) = parse_repo_identity(url) {
-        format!("https://{}/{}.git", host, path)
-    } else {
-        return url.to_string();
-    };
-
-    let username = parse_repo_identity(&normalized)
-        .map(|(host, _)| {
-            if host.contains("github") {
-                "x-access-token"
-            } else {
-                "oauth2"
-            }
-        })
-        .unwrap_or("oauth2");
-
-    if let Some(rest) = normalized.strip_prefix("https://") {
-        format!("https://{}:{}@{}", username, pat, rest)
-    } else if let Some(rest) = normalized.strip_prefix("http://") {
-        format!("http://{}:{}@{}", username, pat, rest)
-    } else {
-        normalized
-    }
 }
 
 fn is_recoverable_push_failure(stderr: &str) -> bool {
@@ -1277,9 +1371,10 @@ fn parse_repo_identity(raw: &str) -> Option<(String, String)> {
 #[cfg(test)]
 mod tests {
     use super::{
-        format_repository_clone_log, format_repository_sync_log, inject_pat_into_url,
-        is_recoverable_push_failure, parse_tracking_branch, remote_url_matches_configured_value,
-        repo_url_matches, summarize_repository_source, WorktreeManager,
+        auth_header_for_url, format_repository_clone_log, format_repository_sync_log,
+        git_auth_configs, is_recoverable_push_failure, normalize_remote_url, parse_tracking_branch,
+        remote_url_matches_configured_value, repo_url_matches, summarize_repository_source,
+        WorktreeManager,
     };
     use std::path::Path;
     use std::sync::Arc;
@@ -1303,45 +1398,84 @@ mod tests {
     }
 
     #[test]
-    fn inject_pat_into_https_gitlab_url() {
-        let url = inject_pat_into_url("https://gitlab.example.com/group/repo.git", "glpat-123");
-        assert_eq!(
-            url,
-            "https://oauth2:glpat-123@gitlab.example.com/group/repo.git"
-        );
+    fn normalize_remote_url_converts_https_web_url_to_git_clone_url() {
+        let url = normalize_remote_url("https://gitlab.example.com/group/repo");
+        assert_eq!(url, "https://gitlab.example.com/group/repo.git");
     }
 
     #[test]
-    fn inject_pat_into_ssh_gitlab_url() {
-        let url = inject_pat_into_url("git@gitlab.example.com:group/repo.git", "glpat-123");
-        assert_eq!(
-            url,
-            "https://oauth2:glpat-123@gitlab.example.com/group/repo.git"
-        );
+    fn normalize_remote_url_converts_ssh_gitlab_url_to_https_clone_url() {
+        let url = normalize_remote_url("git@gitlab.example.com:group/repo.git");
+        assert_eq!(url, "https://gitlab.example.com/group/repo.git");
     }
 
     #[test]
-    fn inject_pat_into_https_github_url() {
-        let url = inject_pat_into_url("https://github.com/openai/codex.git", "ghp_123");
-        assert_eq!(
-            url,
-            "https://x-access-token:ghp_123@github.com/openai/codex.git"
-        );
+    fn normalize_remote_url_strips_embedded_credentials() {
+        let url = normalize_remote_url("https://oauth2:glpat-123@gitlab.example.com/group/repo");
+        assert_eq!(url, "https://gitlab.example.com/group/repo.git");
     }
 
     #[test]
-    fn inject_pat_into_ssh_github_url() {
-        let url = inject_pat_into_url("git@github.com:openai/codex.git", "ghp_123");
-        assert_eq!(
-            url,
-            "https://x-access-token:ghp_123@github.com/openai/codex.git"
-        );
+    fn auth_header_uses_gitlab_oauth_username() {
+        let header = auth_header_for_url("https://gitlab.example.com/group/repo.git", "glpat-123")
+            .expect("gitlab header");
+        assert!(header.starts_with("AUTHORIZATION: Basic "));
+        assert!(header.contains("b2F1dGgyOmdscGF0LTEyMw=="));
     }
 
     #[test]
-    fn inject_pat_keeps_original_when_empty() {
-        let raw = "git@gitlab.example.com:group/repo.git";
-        assert_eq!(inject_pat_into_url(raw, ""), raw);
+    fn auth_header_uses_github_token_username() {
+        let header = auth_header_for_url("https://github.com/openai/codex.git", "ghp_123")
+            .expect("github header");
+        assert!(header.starts_with("AUTHORIZATION: Basic "));
+        assert!(header.contains("eC1hY2Nlc3MtdG9rZW46Z2hwXzEyMw=="));
+    }
+
+    #[test]
+    fn git_auth_configs_cover_origin_and_upstream_on_same_host() {
+        let configs = git_auth_configs(
+            "https://gitlab.example.com/group/fork.git",
+            &["https://gitlab.example.com/group/upstream.git"],
+            "glpat-123",
+        );
+
+        assert_eq!(configs.len(), 2);
+        assert!(configs
+            .iter()
+            .any(|value| value.contains("group/fork.git.extraheader")));
+        assert!(configs
+            .iter()
+            .any(|value| value.contains("group/upstream.git.extraheader")));
+    }
+
+    #[test]
+    fn git_auth_configs_skip_cross_host_upstream() {
+        let configs = git_auth_configs(
+            "https://gitlab.example.com/group/fork.git",
+            &["https://github.com/openai/codex.git"],
+            "glpat-123",
+        );
+
+        assert_eq!(configs.len(), 1);
+        assert!(configs[0].contains("gitlab.example.com/group/fork.git.extraheader"));
+        assert!(!configs[0].contains("github.com/openai/codex.git"));
+    }
+
+    #[test]
+    fn git_auth_configs_empty_when_pat_missing() {
+        let configs = git_auth_configs(
+            "https://gitlab.example.com/group/fork.git",
+            &["https://gitlab.example.com/group/upstream.git"],
+            "",
+        );
+
+        assert!(configs.is_empty());
+    }
+
+    #[test]
+    fn normalize_remote_url_supports_github_https_clone_url() {
+        let url = normalize_remote_url("https://github.com/openai/codex.git");
+        assert_eq!(url, "https://github.com/openai/codex.git");
     }
 
     #[test]
@@ -1353,26 +1487,18 @@ mod tests {
     }
 
     #[test]
-    fn remote_url_exact_match_requires_retarget_when_pat_is_missing_from_current_remote() {
-        assert!(!remote_url_matches_configured_value(
-            "https://gitlab.example.com/group/repo.git",
-            "https://oauth2:glpat-123@gitlab.example.com/group/repo.git"
-        ));
-    }
-
-    #[test]
-    fn remote_url_exact_match_requires_retarget_when_pat_rotates() {
-        assert!(!remote_url_matches_configured_value(
-            "https://oauth2:old@gitlab.example.com/group/repo.git",
-            "https://oauth2:new@gitlab.example.com/group/repo.git"
-        ));
-    }
-
-    #[test]
-    fn remote_url_exact_match_accepts_same_configured_remote() {
+    fn remote_url_exact_match_accepts_same_clean_remote() {
         assert!(remote_url_matches_configured_value(
+            "https://gitlab.example.com/group/repo.git",
+            "https://gitlab.example.com/group/repo.git"
+        ));
+    }
+
+    #[test]
+    fn remote_url_exact_match_requires_retarget_when_current_remote_has_embedded_pat() {
+        assert!(!remote_url_matches_configured_value(
             "https://oauth2:glpat-123@gitlab.example.com/group/repo.git",
-            "https://oauth2:glpat-123@gitlab.example.com/group/repo.git"
+            "https://gitlab.example.com/group/repo.git"
         ));
     }
 

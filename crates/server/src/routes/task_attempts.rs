@@ -3745,8 +3745,7 @@ pub async fn approve_attempt(
 
         state
             .orchestrator
-            .worktree_manager()
-            .push_worktree(&worktree_path)
+            .push_attempt_worktree_public(attempt_id, &worktree_path)
             .await
             .map_err(|e| ApiError::Internal(format!("Failed to push approved changes: {}", e)))?;
     }

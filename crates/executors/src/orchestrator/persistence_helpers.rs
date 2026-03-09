@@ -1048,6 +1048,21 @@ impl ExecutorOrchestrator {
         self.handle_gitops_merge(attempt_id).await
     }
 
+    /// Public wrapper for pushing an attempt branch with the same repository auth
+    /// resolution used by orchestrator execution paths.
+    pub async fn push_attempt_worktree_public(
+        &self,
+        attempt_id: Uuid,
+        worktree_path: &std::path::Path,
+    ) -> Result<()> {
+        let (repo_url, pat) = self
+            .resolve_repository_origin_and_pat(attempt_id, None)
+            .await?;
+        self.worktree_manager
+            .push_worktree(worktree_path, &repo_url, &pat)
+            .await
+    }
+
     /// Public method to cleanup worktree after approve/reject
     /// Called from routes after review is complete
     pub async fn cleanup_worktree_public(&self, attempt_id: Uuid) -> Result<()> {

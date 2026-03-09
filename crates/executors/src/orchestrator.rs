@@ -4435,25 +4435,9 @@ impl ExecutorOrchestrator {
 
         if let Some(info) = &project_info {
             if let Some(repo_url) = repository_origin_url(info) {
-                // Use project PAT if available (must decrypt), otherwise fallback to system PAT (GitLab or GitHub)
-                let pat = match info.pat_encrypted.as_deref() {
-                    Some(enc) if !enc.is_empty() => match self.decrypt_value(enc) {
-                        Ok(decrypted) => decrypted,
-                        Err(e) => {
-                            tracing::warn!(
-                                "Failed to decrypt project PAT, falling back to system PAT: {}",
-                                e
-                            );
-                            self.get_system_pat_for_repo(&repo_url)
-                                .await
-                                .unwrap_or_default()
-                        }
-                    },
-                    _ => self
-                        .get_system_pat_for_repo(&repo_url)
-                        .await
-                        .unwrap_or_default(),
-                };
+                let (_, pat) = self
+                    .resolve_repository_origin_and_pat(attempt_id, Some(info))
+                    .await?;
 
                 // Check if repo exists to log appropriate message
                 if repo_path.join(".git").exists() {
@@ -4635,7 +4619,12 @@ impl ExecutorOrchestrator {
             .await?;
         }
 
-        self.worktree_manager.push_worktree(worktree_path).await?;
+        let (repo_url, pat) = self
+            .resolve_repository_origin_and_pat(attempt_id, None)
+            .await?;
+        self.worktree_manager
+            .push_worktree(worktree_path, &repo_url, &pat)
+            .await?;
         self.log(
             attempt_id,
             "system",
@@ -4644,6 +4633,45 @@ impl ExecutorOrchestrator {
         .await?;
 
         Ok(())
+    }
+
+    async fn resolve_repository_origin_and_pat(
+        &self,
+        attempt_id: Uuid,
+        project_info: Option<&ProjectInfo>,
+    ) -> Result<(String, String)> {
+        let owned_project_info = if project_info.is_some() {
+            None
+        } else {
+            self.fetch_project_info(attempt_id).await?
+        };
+        let info = project_info
+            .or(owned_project_info.as_ref())
+            .ok_or_else(|| anyhow::anyhow!("Project repository info not found for attempt"))?;
+
+        let repo_url = repository_origin_url(info).ok_or_else(|| {
+            anyhow::anyhow!("Repository origin URL is not configured for attempt")
+        })?;
+        let pat = match info.pat_encrypted.as_deref() {
+            Some(enc) if !enc.is_empty() => match self.decrypt_value(enc) {
+                Ok(decrypted) => decrypted,
+                Err(e) => {
+                    tracing::warn!(
+                        "Failed to decrypt project PAT, falling back to system PAT: {}",
+                        e
+                    );
+                    self.get_system_pat_for_repo(&repo_url)
+                        .await
+                        .unwrap_or_default()
+                }
+            },
+            _ => self
+                .get_system_pat_for_repo(&repo_url)
+                .await
+                .unwrap_or_default(),
+        };
+
+        Ok((repo_url, pat))
     }
 
     /// Emit a final user-facing attempt report in timeline after execution ends.
