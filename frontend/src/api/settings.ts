@@ -210,7 +210,7 @@ export async function testClaudeConnection(): Promise<ConnectionTestResult> {
 }
 
 export async function testGitLabConnection(): Promise<ConnectionTestResult> {
-    return apiGet<ConnectionTestResult>('/api/v1/settings/test-gitlab');
+    return apiGet<ConnectionTestResult>('/api/v1/settings/source-control/connection');
 }
 
 export async function checkCloudflareConnection(

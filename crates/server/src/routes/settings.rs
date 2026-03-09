@@ -19,7 +19,14 @@ use uuid::Uuid;
 pub fn create_routes() -> Router<AppState> {
     Router::new()
         .route("/settings", get(get_settings).put(update_settings))
-        .route("/settings/test-gitlab", get(test_source_control_connection))
+        .route(
+            "/settings/source-control/connection",
+            get(check_source_control_connection),
+        )
+        .route(
+            "/settings/test-gitlab",
+            get(check_source_control_connection),
+        )
         .route(
             "/settings/cloudflare/check",
             post(check_cloudflare_settings),
@@ -122,7 +129,7 @@ pub async fn update_settings(
     )))
 }
 
-pub async fn test_source_control_connection(
+pub async fn check_source_control_connection(
     auth_user: AuthUser,
     State(state): State<AppState>,
 ) -> Result<Json<ApiResponse<ConnectionTestResult>>, ApiError> {
