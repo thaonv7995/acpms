@@ -252,6 +252,19 @@ mod tests {
             Some("load_skill")
         );
     }
+
+    #[test]
+    fn parse_tool_call_metadata_accepts_project_vault_search() {
+        let metadata = parse_tool_call_metadata(
+            r#"{"tool":"search_project_vault","args":{"query":"secret code","top_k":3}}"#,
+        )
+        .expect("search_project_vault metadata should parse");
+
+        assert_eq!(
+            metadata["tool_calls"][0]["name"].as_str(),
+            Some("search_project_vault")
+        );
+    }
 }
 
 /// Extract complete tool call JSON from text that may be streamed (partial) or embedded.
@@ -337,6 +350,16 @@ pub fn parse_tool_call_metadata(line: &str) -> Option<serde_json::Value> {
         "load_skill" => {
             if args
                 .get("skill_id")
+                .and_then(|value| value.as_str())
+                .map(|value| value.trim().is_empty())
+                .unwrap_or(true)
+            {
+                return None;
+            }
+        }
+        "search_project_vault" => {
+            if args
+                .get("query")
                 .and_then(|value| value.as_str())
                 .map(|value| value.trim().is_empty())
                 .unwrap_or(true)

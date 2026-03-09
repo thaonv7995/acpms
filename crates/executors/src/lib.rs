@@ -13,6 +13,7 @@ pub mod normalization;
 pub mod normalization_contract;
 pub mod orchestrator;
 pub mod process;
+pub mod project_vault;
 pub mod retry_handler;
 pub mod router_config;
 pub mod session;
@@ -81,6 +82,10 @@ pub use orchestrator::*;
 pub use orchestrator_gitops::*;
 pub use orchestrator_status::*;
 pub use process::*;
+pub use project_vault::{
+    format_project_vault_search_follow_up, format_project_vault_search_summary,
+    search_project_vault, RuntimeProjectVaultSearchMatch, RuntimeProjectVaultSearchResult,
+};
 pub use retry_handler::{RetryHandler, RetryInfo, RetryScheduleResult};
 pub use router_config::{
     default_filters, serialize_filters, AgentSettings, FilterAction, MessageFilter,

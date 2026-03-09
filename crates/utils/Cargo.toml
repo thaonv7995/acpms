@@ -10,3 +10,5 @@ anyhow.workspace = true
 thiserror.workspace = true
 serde.workspace = true
 serde_json.workspace = true
+hex = "0.4"
+sha2 = "0.10"

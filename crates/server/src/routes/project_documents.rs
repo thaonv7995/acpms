@@ -1,13 +1,13 @@
 use acpms_services::{
-    ProjectDocumentService, ProjectDocumentServiceError, UpdateProjectDocumentInput,
-    UpsertProjectDocumentInput,
+    ProjectDocumentIndexService, ProjectDocumentService, ProjectDocumentServiceError,
+    UpdateProjectDocumentInput, UpsertProjectDocumentInput,
 };
 use axum::extract::{Path, State};
 use axum::Json;
 use serde::{Deserialize, Serialize};
 use std::time::Duration;
-use uuid::Uuid;
 use utoipa::ToSchema;
+use uuid::Uuid;
 use validator::Validate;
 
 use crate::api::{ApiResponse, ProjectDocumentDto};
@@ -47,7 +47,11 @@ pub struct ProjectDocumentUploadUrlResponse {
 
 #[derive(Debug, Deserialize, ToSchema, Validate)]
 pub struct CreateProjectDocumentRequest {
-    #[validate(length(min = 1, max = 255, message = "Title must be between 1 and 255 characters"))]
+    #[validate(length(
+        min = 1,
+        max = 255,
+        message = "Title must be between 1 and 255 characters"
+    ))]
     pub title: String,
     #[validate(length(
         min = 1,
@@ -73,7 +77,11 @@ pub struct CreateProjectDocumentRequest {
 
 #[derive(Debug, Deserialize, ToSchema, Validate)]
 pub struct UpdateProjectDocumentRequest {
-    #[validate(length(min = 1, max = 255, message = "Title must be between 1 and 255 characters"))]
+    #[validate(length(
+        min = 1,
+        max = 255,
+        message = "Title must be between 1 and 255 characters"
+    ))]
     pub title: Option<String>,
     #[validate(length(min = 1, max = 32, message = "Document kind is required"))]
     pub document_kind: Option<String>,
@@ -148,7 +156,9 @@ fn validate_project_document_storage_key(project_id: Uuid, key: &str) -> ApiResu
 
 fn validate_project_document_size(size_bytes: i64) -> ApiResult<()> {
     if size_bytes < 0 {
-        return Err(ApiError::BadRequest("Document size must be non-negative".into()));
+        return Err(ApiError::BadRequest(
+            "Document size must be non-negative".into(),
+        ));
     }
     if size_bytes > MAX_PROJECT_DOCUMENT_SIZE_BYTES {
         return Err(ApiError::BadRequest("Document exceeds 5 MiB limit".into()));
@@ -165,6 +175,35 @@ fn map_project_document_error(error: ProjectDocumentServiceError) -> ApiError {
             ApiError::Conflict("A different filename already uses this title".into())
         }
         ProjectDocumentServiceError::Other(error) => ApiError::Internal(error.to_string()),
+    }
+}
+
+async fn maybe_index_project_document(
+    state: &AppState,
+    document: acpms_db::models::ProjectDocument,
+) -> acpms_db::models::ProjectDocument {
+    if document.ingestion_status != "pending" {
+        return document;
+    }
+
+    let index_service =
+        ProjectDocumentIndexService::new(state.db.clone(), state.storage_service.clone());
+    match index_service.index_document(&document).await {
+        Ok(updated) => updated,
+        Err(error) => {
+            tracing::warn!(
+                project_id = %document.project_id,
+                document_id = %document.id,
+                error = %error,
+                "Project document indexing failed"
+            );
+            ProjectDocumentService::new(state.db.clone())
+                .get_project_document(document.project_id, document.id)
+                .await
+                .ok()
+                .flatten()
+                .unwrap_or(document)
+        }
     }
 }
 
@@ -193,7 +232,10 @@ pub async fn list_project_documents(
         .map_err(map_project_document_error)?;
 
     Ok(Json(ApiResponse::success(
-        documents.into_iter().map(ProjectDocumentDto::from).collect(),
+        documents
+            .into_iter()
+            .map(ProjectDocumentDto::from)
+            .collect(),
         "Project documents retrieved successfully",
     )))
 }
@@ -251,8 +293,13 @@ pub async fn get_project_document_upload_url(
     Path(project_id): Path<Uuid>,
     ValidatedJson(req): ValidatedJson<ProjectDocumentUploadUrlRequest>,
 ) -> ApiResult<Json<ApiResponse<ProjectDocumentUploadUrlResponse>>> {
-    RbacChecker::check_permission(auth_user.id, project_id, Permission::ManageProject, &state.db)
-        .await?;
+    RbacChecker::check_permission(
+        auth_user.id,
+        project_id,
+        Permission::ManageProject,
+        &state.db,
+    )
+    .await?;
 
     let safe_name = sanitize_project_document_filename(&req.filename);
     let key = format!(
@@ -294,8 +341,13 @@ pub async fn create_or_upsert_project_document(
     Path(project_id): Path<Uuid>,
     ValidatedJson(req): ValidatedJson<CreateProjectDocumentRequest>,
 ) -> ApiResult<Json<ApiResponse<ProjectDocumentDto>>> {
-    RbacChecker::check_permission(auth_user.id, project_id, Permission::ManageProject, &state.db)
-        .await?;
+    RbacChecker::check_permission(
+        auth_user.id,
+        project_id,
+        Permission::ManageProject,
+        &state.db,
+    )
+    .await?;
 
     validate_project_document_kind(&req.document_kind)?;
     validate_project_document_source(&req.source)?;
@@ -320,6 +372,7 @@ pub async fn create_or_upsert_project_document(
         )
         .await
         .map_err(map_project_document_error)?;
+    let document = maybe_index_project_document(&state, document).await;
 
     Ok(Json(ApiResponse::success(
         ProjectDocumentDto::from(document),
@@ -350,8 +403,13 @@ pub async fn update_project_document(
     Path((project_id, document_id)): Path<(Uuid, Uuid)>,
     ValidatedJson(req): ValidatedJson<UpdateProjectDocumentRequest>,
 ) -> ApiResult<Json<ApiResponse<ProjectDocumentDto>>> {
-    RbacChecker::check_permission(auth_user.id, project_id, Permission::ManageProject, &state.db)
-        .await?;
+    RbacChecker::check_permission(
+        auth_user.id,
+        project_id,
+        Permission::ManageProject,
+        &state.db,
+    )
+    .await?;
 
     if let Some(document_kind) = req.document_kind.as_deref() {
         validate_project_document_kind(document_kind)?;
@@ -380,6 +438,7 @@ pub async fn update_project_document(
         )
         .await
         .map_err(map_project_document_error)?;
+    let document = maybe_index_project_document(&state, document).await;
 
     Ok(Json(ApiResponse::success(
         ProjectDocumentDto::from(document),
@@ -406,8 +465,13 @@ pub async fn delete_project_document(
     auth_user: AuthUser,
     Path((project_id, document_id)): Path<(Uuid, Uuid)>,
 ) -> ApiResult<Json<ApiResponse<()>>> {
-    RbacChecker::check_permission(auth_user.id, project_id, Permission::ManageProject, &state.db)
-        .await?;
+    RbacChecker::check_permission(
+        auth_user.id,
+        project_id,
+        Permission::ManageProject,
+        &state.db,
+    )
+    .await?;
 
     let service = ProjectDocumentService::new(state.db.clone());
     let deleted = service
@@ -416,7 +480,11 @@ pub async fn delete_project_document(
         .map_err(map_project_document_error)?
         .ok_or_else(|| ApiError::NotFound("Project document not found".into()))?;
 
-    if let Err(error) = state.storage_service.delete_file(&deleted.storage_key).await {
+    if let Err(error) = state
+        .storage_service
+        .delete_file(&deleted.storage_key)
+        .await
+    {
         tracing::warn!(
             "Failed to delete project document object {}: {}",
             deleted.storage_key,

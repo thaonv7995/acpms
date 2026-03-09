@@ -7,10 +7,11 @@ use crate::session::ClaudeSessionManager;
 use crate::worktree::{format_repository_clone_log, format_repository_sync_log, repo_url_matches};
 use crate::{
     append_assistant_log, build_skill_instruction_context, format_loaded_skills_log_line,
-    AgentEvent, AssistantLogMessage, AttemptSuccessHook, ClaudeClient, CodexClient, CursorClient,
-    DeployContextPreparer, GeminiClient, GitOpsHandler, RuntimeSkillLoadResult,
-    RuntimeSkillSearchResult, SkillInstructionContext, SkillKnowledgeHandle, SkillKnowledgeStatus,
-    SkillRuntime, StatusManager, WorktreeManager,
+    format_project_vault_search_follow_up, format_project_vault_search_summary,
+    search_project_vault, AgentEvent, AssistantLogMessage, AttemptSuccessHook, ClaudeClient,
+    CodexClient, CursorClient, DeployContextPreparer, GeminiClient, GitOpsHandler,
+    RuntimeSkillLoadResult, RuntimeSkillSearchResult, SkillInstructionContext,
+    SkillKnowledgeHandle, SkillKnowledgeStatus, SkillRuntime, StatusManager, WorktreeManager,
 };
 use acpms_db::models::{
     project_repo_relative_path, AttemptStatus, InitSource, InitTaskMetadata, Project,
@@ -951,6 +952,13 @@ impl ExecutorOrchestrator {
         };
 
         let runtime = SkillRuntime::new(Some(&self.skill_knowledge));
+        let project_id = sqlx::query_scalar::<_, Uuid>(
+            "SELECT t.project_id FROM task_attempts ta JOIN tasks t ON t.id = ta.task_id WHERE ta.id = $1",
+        )
+        .bind(attempt_id)
+        .fetch_one(&self.db_pool)
+        .await
+        .context("Failed to resolve project for runtime project-vault search")?;
         for tool_call in tool_calls {
             let Some(name) = tool_call.get("name").and_then(|value| value.as_str()) else {
                 continue;
@@ -1007,6 +1015,40 @@ impl ExecutorOrchestrator {
                         );
                         let message = format!(
                             "Failed to deliver runtime skill load response to agent: {}",
+                            error
+                        );
+                        let _ = self.log(attempt_id, "stderr", &message).await;
+                    }
+                }
+                "search_project_vault" => {
+                    let Some(query) = args.get("query").and_then(|value| value.as_str()) else {
+                        continue;
+                    };
+                    let top_k = args
+                        .get("top_k")
+                        .and_then(|value| value.as_u64())
+                        .map(|value| value as usize)
+                        .unwrap_or(3);
+                    let result = search_project_vault(&self.db_pool, project_id, query, top_k)
+                        .await
+                        .unwrap_or_else(|error| crate::RuntimeProjectVaultSearchResult {
+                            status: SkillKnowledgeStatus::Failed,
+                            detail: Some(error.to_string()),
+                            matches: Vec::new(),
+                        });
+                    let summary = format_project_vault_search_summary(query, &result);
+                    self.log(attempt_id, "system", &summary).await?;
+
+                    let follow_up = format_project_vault_search_follow_up(query, &result);
+                    if let Err(error) = self.send_input(attempt_id, &follow_up).await {
+                        warn!(
+                            attempt_id = %attempt_id,
+                            error = %error,
+                            query = %query,
+                            "Failed to deliver project vault search response"
+                        );
+                        let message = format!(
+                            "Failed to deliver project vault search response to agent: {}",
                             error
                         );
                         let _ = self.log(attempt_id, "stderr", &message).await;

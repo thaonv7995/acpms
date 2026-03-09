@@ -535,11 +535,31 @@ fn task_context_attachment_is_vision_only(content_type: &str) -> bool {
     matches!(content_type, "image/png" | "image/jpeg" | "image/webp")
 }
 
-fn prepend_task_context_instruction(instruction: String, task_context_block: Option<&str>) -> String {
-    match task_context_block.map(str::trim).filter(|value| !value.is_empty()) {
+fn prepend_task_context_instruction(
+    instruction: String,
+    task_context_block: Option<&str>,
+) -> String {
+    match task_context_block
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+    {
         Some(block) => format!("{}\n\n{}", block, instruction),
         None => instruction,
     }
+}
+
+fn append_project_vault_runtime_instruction(mut instruction: String) -> String {
+    instruction.push_str(
+        r#"
+
+## Runtime Project Vault Search
+If you need project-specific knowledge from the Documents tab, print exactly one JSON object on its own line with no markdown fences:
+{"tool":"search_project_vault","args":{"query":"<what you need to know>","top_k":3}}
+
+Use this to search architecture notes, API specs, runbooks, and other durable project documents.
+After results arrive, use them as grounded context. Search again with a narrower query if needed."#,
+    );
+    instruction
 }
 
 async fn build_task_context_prompt_block(
@@ -564,7 +584,8 @@ async fn build_task_context_prompt_block(
     let mut seen_storage_keys = HashSet::new();
     let mut processed_attachments = 0usize;
 
-    for (index, context_with_attachments) in contexts.into_iter().take(MAX_CONTEXT_BLOCKS).enumerate()
+    for (index, context_with_attachments) in
+        contexts.into_iter().take(MAX_CONTEXT_BLOCKS).enumerate()
     {
         let label = context_with_attachments
             .context
@@ -589,16 +610,16 @@ async fn build_task_context_prompt_block(
                 continue;
             }
 
-            let fallback_reason = if task_context_attachment_is_vision_only(&attachment.content_type)
-            {
-                Some("vision_only")
-            } else if attachment.size_bytes.unwrap_or(i64::MAX) > MAX_ATTACHMENT_SIZE {
-                Some("too_large")
-            } else if !task_context_attachment_is_extractable(&attachment.content_type) {
-                Some("unsupported_type")
-            } else {
-                None
-            };
+            let fallback_reason =
+                if task_context_attachment_is_vision_only(&attachment.content_type) {
+                    Some("vision_only")
+                } else if attachment.size_bytes.unwrap_or(i64::MAX) > MAX_ATTACHMENT_SIZE {
+                    Some("too_large")
+                } else if !task_context_attachment_is_extractable(&attachment.content_type) {
+                    Some("unsupported_type")
+                } else {
+                    None
+                };
 
             if let Some(reason) = fallback_reason {
                 let download_url = state
@@ -649,7 +670,10 @@ async fn build_task_context_prompt_block(
                 Err(_) => {
                     let download_url = state
                         .storage_service
-                        .get_presigned_download_url(&attachment.storage_key, Duration::from_secs(3600))
+                        .get_presigned_download_url(
+                            &attachment.storage_key,
+                            Duration::from_secs(3600),
+                        )
                         .await
                         .map_err(|e| ApiError::Internal(e.to_string()))?;
                     section_lines.push(format!(
@@ -700,7 +724,7 @@ fn build_attempt_instruction(
         "3. Stage only changed files, commit with descriptive message, and push branch."
     };
 
-    format!(
+    append_project_vault_runtime_instruction(format!(
         r#"## Task
 {}
 
@@ -718,7 +742,7 @@ fn build_attempt_instruction(
         finalize_rule,
         architecture_rule_block,
         skill_context.block
-    )
+    ))
 }
 
 fn parse_job_priority(priority: &str) -> JobPriority {
@@ -2166,6 +2190,7 @@ You previously worked on this task:
 Continue working on the same task. Build on your previous work."#,
         task_desc, wrapped_prompt
     );
+    instruction = append_project_vault_runtime_instruction(instruction);
     let task_context_block = build_task_context_prompt_block(&state, task.id).await?;
     instruction = prepend_task_context_instruction(instruction, task_context_block.as_deref());
     let preferred_settings = state.settings_service.get().await.ok();

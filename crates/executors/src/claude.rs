@@ -25,8 +25,9 @@ use crate::process::{InterruptReceiver, InterruptSender};
 use crate::protocol::{PermissionMode, ProtocolPeer};
 use crate::stdout_dup::create_stdout_pipe_writer;
 use crate::{
-    RuntimeSkillLoadResult, RuntimeSkillSearchResult, SkillKnowledgeHandle, SkillKnowledgeStatus,
-    SkillRuntime,
+    format_project_vault_search_follow_up, format_project_vault_search_summary,
+    search_project_vault, RuntimeSkillLoadResult, RuntimeSkillSearchResult, SkillKnowledgeHandle,
+    SkillKnowledgeStatus, SkillRuntime,
 };
 
 const MAX_RUNTIME_SKILL_CONTENT_CHARS: usize = 12_000;
@@ -192,6 +193,17 @@ fn format_runtime_skill_load_follow_up(skill_id: &str, result: &RuntimeSkillLoad
     }
 }
 
+async fn lookup_attempt_project_id(pool: &sqlx::PgPool, attempt_id: Uuid) -> Option<Uuid> {
+    sqlx::query_scalar::<_, Uuid>(
+        "SELECT t.project_id FROM task_attempts ta JOIN tasks t ON t.id = ta.task_id WHERE ta.id = $1",
+    )
+        .bind(attempt_id)
+        .fetch_optional(pool)
+        .await
+        .ok()
+        .flatten()
+}
+
 async fn handle_runtime_skill_tool_calls_for_sdk(
     attempt_id: Uuid,
     metadata: serde_json::Value,
@@ -259,6 +271,44 @@ async fn handle_runtime_skill_tool_calls_for_sdk(
                         error = %error,
                         skill_id = %skill_id,
                         "Failed to deliver runtime skill load response in SDK session"
+                    );
+                }
+            }
+            "search_project_vault" => {
+                let Some(query) = args.get("query").and_then(|value| value.as_str()) else {
+                    continue;
+                };
+                let Some(pool) = db_pool else {
+                    continue;
+                };
+                let Some(project_id) = lookup_attempt_project_id(pool, attempt_id).await else {
+                    continue;
+                };
+
+                let top_k = args
+                    .get("top_k")
+                    .and_then(|value| value.as_u64())
+                    .map(|value| value as usize)
+                    .unwrap_or(3);
+                let result = search_project_vault(pool, project_id, query, top_k)
+                    .await
+                    .unwrap_or_else(|error| crate::RuntimeProjectVaultSearchResult {
+                        status: SkillKnowledgeStatus::Failed,
+                        detail: Some(error.to_string()),
+                        matches: Vec::new(),
+                    });
+                let summary = format_project_vault_search_summary(query, &result);
+                if let Some(tx) = broadcast_tx {
+                    let _ = StatusManager::log(pool, tx, attempt_id, "system", &summary).await;
+                }
+
+                let follow_up = format_project_vault_search_follow_up(query, &result);
+                if let Err(error) = protocol_peer.send_user_message(follow_up).await {
+                    tracing::warn!(
+                        attempt_id = %attempt_id,
+                        error = %error,
+                        query = %query,
+                        "Failed to deliver project vault search response in SDK session"
                     );
                 }
             }

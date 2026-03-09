@@ -4,10 +4,11 @@ pub mod events;
 pub mod gitlab;
 pub mod normalized_logs;
 pub mod project;
-pub mod project_document;
 pub mod project_assistant_instruction;
 pub mod project_assistant_session;
 pub mod project_assistant_tools;
+pub mod project_document;
+pub mod project_document_index;
 pub mod project_summary;
 pub mod repository_access;
 pub mod requirement;
@@ -92,16 +93,17 @@ pub use openclaw_gateway_events::{
     OpenClawGatewayEventService, OpenClawGatewayMetricsObserver, OpenClawWebhookDeliveryStats,
 };
 pub use project::ProjectService;
-pub use project_document::{
-    ProjectDocumentService, ProjectDocumentServiceError, UpdateProjectDocumentInput,
-    UpsertProjectDocumentInput,
-};
 pub use project_assistant_instruction::{
     apply_preferred_language_to_follow_up_input, build_instruction, build_start_instruction,
     normalize_preferred_agent_language, AssistantMessage, AttachmentContent, TaskSummary,
 };
 pub use project_assistant_session::ProjectAssistantSessionService;
 pub use project_assistant_tools::{parse_tool_call_line, ToolCall};
+pub use project_document::{
+    ProjectDocumentService, ProjectDocumentServiceError, UpdateProjectDocumentInput,
+    UpsertProjectDocumentInput,
+};
+pub use project_document_index::ProjectDocumentIndexService;
 pub use project_summary::{
     derive_project_execution_status, derive_project_lifecycle_status, derive_project_progress,
     load_project_summaries, summarize_project, ProjectComputedSummary,
