@@ -13,7 +13,7 @@ Focused on **project management** and **breaking down requirements** into manage
 - **Contextual Awareness** – Agents work on Tasks linked to approved Requirements and Architecture
 - **Full Lifecycle** – Plan → Code → Deploy → Fix with human-in-the-loop review
 - **Multi-Agent Support** – Claude Code, OpenAI Codex, Gemini CLI, Cursor AI CLI (selectable in Settings)
-- **OpenClaw Gateway** – Connect ACPMS to OpenClaw so you can **manage projects from the chat channels OpenClaw provides** (e.g. Telegram, Slack).
+- **OpenClaw Gateway** – Connect ACPMS to OpenClaw so you can **manage projects from the chat channels** (e.g. Telegram, Slack).
 - **GitLab Integration** – OAuth, MR creation, webhooks
 - **Single Binary Distribution** – Backend serves frontend + S3 proxy for self-hosting
 
