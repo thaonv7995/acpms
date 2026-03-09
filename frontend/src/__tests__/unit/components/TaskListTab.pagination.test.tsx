@@ -113,7 +113,7 @@ describe('TaskListTab pagination visibility', () => {
     expect(onDeleteTask).toHaveBeenCalledWith('task-1');
   });
 
-  it('renders a labeled logs action for completed tasks', () => {
+  it('renders an icon-only logs action for completed tasks without a placeholder dash', () => {
     const onViewLogs = vi.fn();
 
     render(
@@ -135,6 +135,6 @@ describe('TaskListTab pagination visibility', () => {
     fireEvent.click(screen.getByRole('button', { name: 'Open logs for Task 1' }));
 
     expect(onViewLogs).toHaveBeenCalledWith('task-1');
-    expect(screen.getByText('Attempt Logs')).toBeTruthy();
+    expect(screen.queryByText('—')).toBeNull();
   });
 });

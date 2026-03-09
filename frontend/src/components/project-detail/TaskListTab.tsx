@@ -58,9 +58,8 @@ const priorityStyles: Record<KanbanTask['priority'], { bg: string; text: string;
 interface AttemptActionConfig {
     ariaLabel: string;
     icon: string;
-    label: string;
     pulse?: boolean;
-    surfaceClassName: string;
+    buttonClassName: string;
 }
 
 function getAttemptActionConfig(task: KanbanTask): AttemptActionConfig | null {
@@ -68,9 +67,8 @@ function getAttemptActionConfig(task: KanbanTask): AttemptActionConfig | null {
         return {
             ariaLabel: `Open live logs for ${task.title}`,
             icon: 'smart_toy',
-            label: `Live ${task.agentWorking.progress}%`,
             pulse: true,
-            surfaceClassName: 'border-blue-200/80 bg-blue-50 text-blue-700 hover:bg-blue-100 dark:border-blue-700/50 dark:bg-blue-900/20 dark:text-blue-200 dark:hover:bg-blue-900/30',
+            buttonClassName: 'text-blue-600 hover:bg-blue-50 hover:text-blue-700 dark:text-blue-300 dark:hover:bg-blue-900/20 dark:hover:text-blue-200',
         };
     }
 
@@ -78,8 +76,7 @@ function getAttemptActionConfig(task: KanbanTask): AttemptActionConfig | null {
         return {
             ariaLabel: `Open review logs for ${task.title}`,
             icon: 'rate_review',
-            label: 'Review Logs',
-            surfaceClassName: 'border-amber-200/80 bg-amber-50 text-amber-700 hover:bg-amber-100 dark:border-amber-700/50 dark:bg-amber-900/20 dark:text-amber-200 dark:hover:bg-amber-900/30',
+            buttonClassName: 'text-amber-600 hover:bg-amber-50 hover:text-amber-700 dark:text-amber-300 dark:hover:bg-amber-900/20 dark:hover:text-amber-200',
         };
     }
 
@@ -87,8 +84,7 @@ function getAttemptActionConfig(task: KanbanTask): AttemptActionConfig | null {
         return {
             ariaLabel: `Open logs for ${task.title}`,
             icon: 'terminal',
-            label: 'Attempt Logs',
-            surfaceClassName: 'border-emerald-200/80 bg-emerald-50 text-emerald-700 hover:bg-emerald-100 dark:border-emerald-700/50 dark:bg-emerald-900/20 dark:text-emerald-200 dark:hover:bg-emerald-900/30',
+            buttonClassName: 'text-emerald-600 hover:bg-emerald-50 hover:text-emerald-700 dark:text-emerald-300 dark:hover:bg-emerald-900/20 dark:hover:text-emerald-200',
         };
     }
 
@@ -524,7 +520,6 @@ export function TaskListTab({
                                 ? requirementMap.get(task.requirement_id)
                                 : null;
                             const attemptAction = getAttemptActionConfig(task);
-                            const hasQuickControls = !!((canEditTask && onEditTask) || onDeleteTask);
 
                             return (
                                 <div
@@ -577,67 +572,50 @@ export function TaskListTab({
 
                                     {/* Quick Actions */}
                                     <div className="col-span-3 flex items-center justify-end">
-                                        <div className="flex min-w-0 flex-wrap items-center justify-end gap-2">
+                                        <div className="flex min-w-0 items-center justify-end gap-1">
                                             {attemptAction && (
-                                                onViewLogs ? (
-                                                    <button
-                                                        type="button"
-                                                        onClick={(e) => {
-                                                            e.stopPropagation();
-                                                            onViewLogs(task.id);
-                                                        }}
-                                                        className={`flex min-w-0 items-center gap-2 rounded-xl border px-3 py-2 text-xs font-semibold transition-colors ${attemptAction.surfaceClassName}`}
-                                                        title={attemptAction.ariaLabel}
-                                                        aria-label={attemptAction.ariaLabel}
-                                                    >
-                                                        <span className={`material-symbols-outlined text-[16px] ${attemptAction.pulse ? 'animate-pulse' : ''}`}>
-                                                            {attemptAction.icon}
-                                                        </span>
-                                                        <span className="truncate">{attemptAction.label}</span>
-                                                    </button>
-                                                ) : (
-                                                    <div
-                                                        className={`flex min-w-0 items-center gap-2 rounded-xl border px-3 py-2 text-xs font-semibold ${attemptAction.surfaceClassName}`}
-                                                    >
-                                                        <span className={`material-symbols-outlined text-[16px] ${attemptAction.pulse ? 'animate-pulse' : ''}`}>
-                                                            {attemptAction.icon}
-                                                        </span>
-                                                        <span className="truncate">{attemptAction.label}</span>
-                                                    </div>
-                                                )
+                                                <button
+                                                    type="button"
+                                                    onClick={(e) => {
+                                                        e.stopPropagation();
+                                                        onViewLogs?.(task.id);
+                                                    }}
+                                                    className={`flex h-9 w-9 items-center justify-center rounded-xl transition-colors ${attemptAction.buttonClassName}`}
+                                                    title={attemptAction.ariaLabel}
+                                                    aria-label={attemptAction.ariaLabel}
+                                                >
+                                                    <span className={`material-symbols-outlined text-[18px] ${attemptAction.pulse ? 'animate-pulse' : ''}`}>
+                                                        {attemptAction.icon}
+                                                    </span>
+                                                </button>
                                             )}
-
-                                            {hasQuickControls && (
-                                                <div className="flex items-center rounded-2xl border border-border/70 bg-background/80 p-1 shadow-sm shadow-black/5 dark:shadow-black/20">
-                                                    {canEditTask && onEditTask && (
-                                                        <button
-                                                            type="button"
-                                                            onClick={(e) => {
-                                                                e.stopPropagation();
-                                                                onEditTask(task.id);
-                                                            }}
-                                                            className="flex h-9 w-9 items-center justify-center rounded-xl text-muted-foreground transition-colors hover:bg-muted hover:text-card-foreground"
-                                                            title="Edit task"
-                                                            aria-label={`Edit ${task.title}`}
-                                                        >
-                                                            <span className="material-symbols-outlined text-[18px]">edit</span>
-                                                        </button>
-                                                    )}
-                                                    {onDeleteTask && (
-                                                        <button
-                                                            type="button"
-                                                            onClick={(e) => {
-                                                                e.stopPropagation();
-                                                                onDeleteTask(task.id);
-                                                            }}
-                                                            className="flex h-9 w-9 items-center justify-center rounded-xl text-muted-foreground transition-colors hover:bg-red-500/10 hover:text-red-600 dark:hover:text-red-300"
-                                                            title="Delete task"
-                                                            aria-label={`Delete ${task.title}`}
-                                                        >
-                                                            <span className="material-symbols-outlined text-[18px]">delete</span>
-                                                        </button>
-                                                    )}
-                                                </div>
+                                            {canEditTask && onEditTask && (
+                                                <button
+                                                    type="button"
+                                                    onClick={(e) => {
+                                                        e.stopPropagation();
+                                                        onEditTask(task.id);
+                                                    }}
+                                                    className="flex h-9 w-9 items-center justify-center rounded-xl text-muted-foreground transition-colors hover:bg-muted hover:text-card-foreground"
+                                                    title="Edit task"
+                                                    aria-label={`Edit ${task.title}`}
+                                                >
+                                                    <span className="material-symbols-outlined text-[18px]">edit</span>
+                                                </button>
+                                            )}
+                                            {onDeleteTask && (
+                                                <button
+                                                    type="button"
+                                                    onClick={(e) => {
+                                                        e.stopPropagation();
+                                                        onDeleteTask(task.id);
+                                                    }}
+                                                    className="flex h-9 w-9 items-center justify-center rounded-xl text-muted-foreground transition-colors hover:bg-red-500/10 hover:text-red-600 dark:hover:text-red-300"
+                                                    title="Delete task"
+                                                    aria-label={`Delete ${task.title}`}
+                                                >
+                                                    <span className="material-symbols-outlined text-[18px]">delete</span>
+                                                </button>
                                             )}
                                         </div>
                                     </div>
