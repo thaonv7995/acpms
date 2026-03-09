@@ -4,6 +4,14 @@ This document outlines the breakdown of the Project Document Vault feature, the 
 
 Normative schema and API details are defined in [02_data_model_and_api_contracts.md](/Users/thaonv/Projects/Personal/Agentic-Coding/docs/plan-feature/project-document-vault/02_data_model_and_api_contracts.md). Implementers should read that file before touching migrations or routes.
 
+## Current Status
+
+- Phase 1 implementation landed in commit `66fe5ac`.
+- Phase 2 implementation landed in commit `9a6cb67`.
+- Phase 3 implementation landed in commit `5db499d`.
+- Phase 4 implementation landed in commit `6bd6525`.
+- Manual end-to-end UI/curl verification items below are still pending unless explicitly checked.
+
 ## 1. Feature Breakdown & Impact Analysis
 
 The feature is divided into three main logical components. Here is the analysis of each component's impact on the existing codebase:
@@ -81,32 +89,34 @@ The feature is divided into three main logical components. Here is the analysis 
 Below is the step-by-step checklist to implement this feature. 
 
 ### Phase 1: Task Context (Quick Win)
-- [ ] **DB Migration**: Create `task_contexts` and `task_context_attachments` tables.
-- [ ] **API Update**: Implement CRUD endpoints for `task_contexts`, attachment metadata endpoints, upload URL generation (`/api/v1/tasks/{id}/context-attachments/upload-url`), and attachment download URL generation.
-- [ ] **Frontend UI**: Update `TaskDetailPage` to show the context, attachments, and their resolved status before the user hits "Start Agent".
-- [ ] **API Controller**: Update instruction builder in `crates/server/src/routes/task_attempts.rs` to pull context and attachment keys from the new tables.
-- [ ] **API Controller**: Implement file hand-off mechanism in `task_attempts.rs` (before job creation): fetch bytes via `storage_service` using the attachment `key`, apply MIME whitelist max-size limits (similar to `project_assistant.rs::resolve_attachments`), extract text, and inject it into the `instruction` string passed to the `AgentJob`.
+- [x] **DB Migration**: Create `task_contexts` and `task_context_attachments` tables.
+- [x] **API Update**: Implement CRUD endpoints for `task_contexts`, attachment metadata endpoints, upload URL generation (`/api/v1/tasks/{id}/context-attachments/upload-url`), and attachment download URL generation.
+- [x] **Frontend UI**: Update `TaskDetailPage` to show the context, attachments, and their resolved status before the user hits "Start Agent".
+- [x] **API Controller**: Update instruction builder in `crates/server/src/routes/task_attempts.rs` to pull context and attachment keys from the new tables.
+- [x] **API Controller**: Implement file hand-off mechanism in `task_attempts.rs` (before job creation): fetch bytes via `storage_service` using the attachment `key`, apply MIME whitelist max-size limits (similar to `project_assistant.rs::resolve_attachments`), extract text, and inject it into the `instruction` string passed to the `AgentJob`.
 - [ ] **Verification**: Create a task with specific context (e.g., "Use purple for the button"), run the agent, and verify the agent's code uses purple.
 
 ### Phase 2: Project Vault CRUD
-- [ ] **DB Migration**: Create `project_documents` table.
-- [ ] **DB Migration**: Create logical `project_document_chunks` storage required by sqlite-vec integration.
-- [ ] **Rust Models**: Generate `sea-orm` entities for the new table. Ensure it has `created_at` and `updated_at` fields.
-- [ ] **Rust API**: Implement internal endpoints for listing, creating, updating, deleting, upload-url, and download-url on `/projects/{id}/documents`. **Crucial:** Upsert by `filename`; reject ambiguous title collisions across different filenames with `409`.
-- [ ] **Frontend UI**: Add the new "Documents" tab inside the existing `/projects/:id` `ProjectDetailPage` flow. If nested routing is introduced later, keep `/projects/:id` as the current stable entry point and do not replace the Deployments tab.
-- [ ] **Frontend UI**: Implement document listing, creating, and editing interfaces.
+- [x] **DB Migration**: Create `project_documents` table.
+- [x] **DB Migration**: Create logical `project_document_chunks` storage required by sqlite-vec integration.
+- [x] **Rust Models**: Generate `sea-orm` entities for the new table. Ensure it has `created_at` and `updated_at` fields.
+- [x] **Rust API**: Implement internal endpoints for listing, creating, updating, deleting, upload-url, and download-url on `/projects/{id}/documents`. **Crucial:** Upsert by `filename`; reject ambiguous title collisions across different filenames with `409`.
+- [x] **Frontend UI**: Add the new "Documents" tab inside the existing `/projects/:id` `ProjectDetailPage` flow. If nested routing is introduced later, keep `/projects/:id` as the current stable entry point and do not replace the Deployments tab.
+- [x] **Frontend UI**: Implement document listing, creating, and editing interfaces.
 - [ ] **Verification**: Create a test project, add a markdown document, edit it, and delete it via the UI. Ensure data persists correctly in the DB.
 
 ### Phase 3: Vector RAG & Tool Integration
+Current implementation note: chunking, indexing, and runtime search are shipped, but they currently use the in-repo deterministic embedding path rather than a shared `sqlite-vec` + `fastembed` stack.
+
 - [ ] **Dependency Check**: Ensure `sqlite-vec` and `fastembed` are properly set up (overlap with Global KB).
-- [ ] **Chunking Engine**: Implement a Rust text-splitter to process markdown text.
-- [ ] **Embedding Pipeline**: Trigger the embedding generation when a `project_document` is saved. **Crucial:** Chunk replacement must be atomic from the reader's point of view. Use a DB transaction or a staging-and-swap strategy so failed re-indexing never leaves the document with zero searchable chunks.
-- [ ] **Executor Integration**: Add a Project Vault search capability through the concrete executor/runtime path used for agent-side tool calls in this repo. If a shared abstraction is introduced, document that new abstraction explicitly rather than assuming a pre-existing `Tool` trait.
-- [ ] **Executor Wiring**: Ensure the capability is only available when the Session/Attempt belongs to a project and that tool-call logging remains compatible with the current orchestrator/event model.
+- [x] **Chunking Engine**: Implement a Rust text-splitter to process markdown text.
+- [x] **Embedding Pipeline**: Trigger the embedding generation when a `project_document` is saved. **Crucial:** Chunk replacement must be atomic from the reader's point of view. Use a DB transaction or a staging-and-swap strategy so failed re-indexing never leaves the document with zero searchable chunks.
+- [x] **Executor Integration**: Add a Project Vault search capability through the concrete executor/runtime path used for agent-side tool calls in this repo. If a shared abstraction is introduced, document that new abstraction explicitly rather than assuming a pre-existing `Tool` trait.
+- [x] **Executor Wiring**: Ensure the capability is only available when the Session/Attempt belongs to a project and that tool-call logging remains compatible with the current orchestrator/event model.
 - [ ] **Verification**: Upload a document containing a unique secret code (e.g., "The secret code is 998877"). Run the agent on a task asking "What is the secret code?". The agent should use the tool, find the document, and answer correctly.
 
 ### Phase 4: OpenClaw Gateway Endpoints
-- [ ] **API Controller**: Extend the existing `crates/server/src/routes/openclaw.rs` route set to expose the new Vault endpoints under `/api/openclaw/v1/`. Split helper modules only if the file becomes too large.
-- [ ] **API Controller**: Update the Task OpenClaw handlers in the same route layer to accept task context uploads (`POST /api/openclaw/v1/tasks/{task_id}/context`).
-- [ ] **Security Validation**: Apply the existing OpenClaw auth middleware to these new routes (requires `OPENCLAW_API_KEY`).
+- [x] **API Controller**: Extend the existing `crates/server/src/routes/openclaw.rs` route set to expose the new Vault endpoints under `/api/openclaw/v1/`. Split helper modules only if the file becomes too large.
+- [x] **API Controller**: Update the Task OpenClaw handlers in the same route layer to accept task context uploads (`POST /api/openclaw/v1/tasks/{task_id}/context`).
+- [x] **Security Validation**: Apply the existing OpenClaw auth middleware to these new routes (requires `OPENCLAW_API_KEY`).
 - [ ] **Verification**: Use Postman/curl with a valid `OPENCLAW_API_KEY` to successfully post a document to a project and context to a task.

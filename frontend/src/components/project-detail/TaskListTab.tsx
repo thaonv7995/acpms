@@ -494,10 +494,10 @@ export function TaskListTab({
                     {/* Table Header */}
                     <div className="grid grid-cols-12 gap-4 px-4 py-3 bg-muted/50 border-b border-border text-xs font-semibold uppercase tracking-wider text-muted-foreground">
                         <div className="col-span-1">Status</div>
-                        <div className="col-span-4">Title</div>
+                        <div className="col-span-5">Title</div>
                         <div className="col-span-2">Type</div>
                         <div className="col-span-2">Priority</div>
-                        <div className="col-span-3 text-right">Quick Actions</div>
+                        <div className="col-span-2 text-right">Actions</div>
                     </div>
 
                     {/* Task Rows */}
@@ -537,7 +537,7 @@ export function TaskListTab({
                                     </div>
 
                                     {/* Title */}
-                                    <div className="col-span-4 flex flex-col justify-center min-w-0">
+                                    <div className="col-span-5 flex flex-col justify-center min-w-0">
                                         <span className={`font-medium text-sm text-card-foreground truncate ${task.status === 'done' ? 'line-through opacity-60' : ''}`}>
                                             {task.title}
                                         </span>
@@ -571,8 +571,8 @@ export function TaskListTab({
                                     </div>
 
                                     {/* Quick Actions */}
-                                    <div className="col-span-3 flex items-center justify-end">
-                                        <div className="flex min-w-0 items-center justify-end gap-1">
+                                    <div className="col-span-2 flex items-center justify-end">
+                                        <div className="flex min-w-0 items-center justify-end gap-0.5">
                                             {attemptAction && (
                                                 <button
                                                     type="button"
@@ -580,11 +580,11 @@ export function TaskListTab({
                                                         e.stopPropagation();
                                                         onViewLogs?.(task.id);
                                                     }}
-                                                    className={`flex h-9 w-9 items-center justify-center rounded-xl transition-colors ${attemptAction.buttonClassName}`}
+                                                    className={`flex h-8 w-8 items-center justify-center rounded-lg transition-colors ${attemptAction.buttonClassName}`}
                                                     title={attemptAction.ariaLabel}
                                                     aria-label={attemptAction.ariaLabel}
                                                 >
-                                                    <span className={`material-symbols-outlined text-[18px] ${attemptAction.pulse ? 'animate-pulse' : ''}`}>
+                                                    <span className={`material-symbols-outlined text-[17px] ${attemptAction.pulse ? 'animate-pulse' : ''}`}>
                                                         {attemptAction.icon}
                                                     </span>
                                                 </button>
@@ -596,11 +596,11 @@ export function TaskListTab({
                                                         e.stopPropagation();
                                                         onEditTask(task.id);
                                                     }}
-                                                    className="flex h-9 w-9 items-center justify-center rounded-xl text-muted-foreground transition-colors hover:bg-muted hover:text-card-foreground"
+                                                    className="flex h-8 w-8 items-center justify-center rounded-lg text-muted-foreground transition-colors hover:bg-muted hover:text-card-foreground"
                                                     title="Edit task"
                                                     aria-label={`Edit ${task.title}`}
                                                 >
-                                                    <span className="material-symbols-outlined text-[18px]">edit</span>
+                                                    <span className="material-symbols-outlined text-[17px]">edit</span>
                                                 </button>
                                             )}
                                             {onDeleteTask && (
@@ -610,11 +610,11 @@ export function TaskListTab({
                                                         e.stopPropagation();
                                                         onDeleteTask(task.id);
                                                     }}
-                                                    className="flex h-9 w-9 items-center justify-center rounded-xl text-muted-foreground transition-colors hover:bg-red-500/10 hover:text-red-600 dark:hover:text-red-300"
+                                                    className="flex h-8 w-8 items-center justify-center rounded-lg text-muted-foreground transition-colors hover:bg-red-500/10 hover:text-red-600 dark:hover:text-red-300"
                                                     title="Delete task"
                                                     aria-label={`Delete ${task.title}`}
                                                 >
-                                                    <span className="material-symbols-outlined text-[18px]">delete</span>
+                                                    <span className="material-symbols-outlined text-[17px]">delete</span>
                                                 </button>
                                             )}
                                         </div>
