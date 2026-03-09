@@ -2,6 +2,8 @@
 
 ## 1. The Problem
 
+Implementation detail contracts for schema and API live in [02_data_model_and_api_contracts.md](/Users/thaonv/Projects/Personal/Agentic-Coding/docs/plan-feature/project-document-vault/02_data_model_and_api_contracts.md).
+
 When applying AI Agents to a real-world project (e.g., an internal enterprise repository), a Global Knowledge Base (like SKILL files for frameworks, coding conventions) is not enough. Agents often perform poorly due to the lack of **Business Context**:
 - The Agent does not know the current Database Schema of the project (table design, relationships).
 - The Agent is unaware of the existing System APIs (endpoints, payloads, responses).
@@ -56,8 +58,9 @@ To solve this, the **Agentic-Coding** system will divide its context into three 
 - **Backend (Rust)**: 
   - **Storage:**
     - Raw files or objects stored via the current S3/Storage layer (presigned URLs used).
-    - Data stored in the `project_documents` table including: `id, project_id, title, filename, content_type, storage_key, checksum, size_bytes, source, version, ingestion_status, index_error, indexed_at, created_by, updated_by, created_at, updated_at`.
+    - Data stored in the `project_documents` table including: `id, project_id, title, filename, document_kind, content_type, storage_key, checksum, size_bytes, source, version, ingestion_status, index_error, indexed_at, created_by, updated_by, created_at, updated_at`.
     - **No large text fields directly on the DB for raw file content.** The system must rely on the storage endpoints to fetch the content prior to chunking/embedding.
+    - Exact schema, enum values, payload shapes, and limits are defined in [02_data_model_and_api_contracts.md](/Users/thaonv/Projects/Personal/Agentic-Coding/docs/plan-feature/project-document-vault/02_data_model_and_api_contracts.md).
   - Add tables `project_documents` (stores metadata & files) and `project_document_chunks` (stores `f32` vectors via `sqlite-vec`).
   - Add the `Task Context` structure in separate tables `task_contexts` and `task_context_attachments`.
   - Update the agent execution module (e.g., `crates/server/src/routes/task_attempts.rs` and `acpms_executors`) to append Task Context and handle file resolution.

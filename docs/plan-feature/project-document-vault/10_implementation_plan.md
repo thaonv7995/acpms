@@ -2,6 +2,8 @@
 
 This document outlines the breakdown of the Project Document Vault feature, the system impact analysis, and a step-by-step implementation checklist.
 
+Normative schema and API details are defined in [02_data_model_and_api_contracts.md](/Users/thaonv/Projects/Personal/Agentic-Coding/docs/plan-feature/project-document-vault/02_data_model_and_api_contracts.md). Implementers should read that file before touching migrations or routes.
+
 ## 1. Feature Breakdown & Impact Analysis
 
 The feature is divided into three main logical components. Here is the analysis of each component's impact on the existing codebase:
@@ -11,7 +13,7 @@ The feature is divided into three main logical components. Here is the analysis 
 **Impact Level:** Low - Medium.
 **Affected Areas:**
 - **Database (Rust `sea-orm`)**: 
-  - Create a new `task_contexts` table (id, task_id, content_type, raw_content, source, created_at, updated_at). DO NOT overload the `metadata` JSONB field.
+  - Create a new `task_contexts` table (id, task_id, title, content_type, raw_content, source, sort_order, created_by, updated_by, created_at, updated_at). DO NOT overload the `metadata` JSONB field.
   - Create a new `task_context_attachments` table to map S3/Storage files to a task context. Migrate existing attachment logic if necessary to avoid conflicting sources of truth.
   - **Task Execution Flow**: The presence of contextual data changes how the Agent behaves for *this specific Task*. Instead of a generic code edit, the Agent must prioritize the provided context (e.g., matching the provided UI mockup or error stack trace).
   - **Prompt Injection Detail:** The prompt needs a clear boundary. Example: 
@@ -25,6 +27,7 @@ The feature is divided into three main logical components. Here is the analysis 
 - **API Engine (`crates/server`)**:
   - Add internal API endpoints for `task_contexts`.
   - Add presigned URL generation endpoints for `task_context_attachments` (e.g., `POST /api/v1/tasks/{id}/context-attachments/upload-url`), mimicking `tasks::get_task_attachment_upload_url`. The generated key should follow the pattern `task-context-attachments/{project_id}/{task_id}/{uuid}-{filename}`.
+  - Add attachment metadata endpoints plus a download-url endpoint so the UI can preview or link unsupported files.
   - **Instruction Builder**: Update `crates/server/src/routes/task_attempts.rs` to fetch context and implement a **handoff workflow** *before* the `AgentJob` is created. This service will use `storage_service.get_log_bytes(&key)` to download text/markdown payloads, extract the text, and inject it securely into the instruction string passed to the executor. For large/unsupported files, insert the presigned download URL instead.
 - **Frontend (React)**:
   - Update `CreateTaskModal`/`EditTaskModal` to use the new `task_contexts` API instead of dumping into metadata. For attachments, use the new `upload-url` endpoint to push files to S3/Storage, then save the `key` to `task_context_attachments`.
@@ -37,10 +40,11 @@ The feature is divided into three main logical components. Here is the analysis 
 **Impact Level:** Medium.
 **Affected Areas:**
 - **Database (Rust)**:
-  - Create a `project_documents` table to store metadata. Required columns: `id`, `project_id`, `title`, `filename`, `content_type`, `storage_key` (for object storage, do not store huge raw content in DB), `checksum`, `size_bytes`, `source` (upload, repo_sync, api), `version`, `ingestion_status`, `index_error`, `indexed_at`, `created_by`, `updated_by`, `created_at`, `updated_at`.
+  - Create a `project_documents` table to store metadata. Required columns: `id`, `project_id`, `title`, `filename`, `document_kind`, `content_type`, `storage_key` (for object storage, do not store huge raw content in DB), `checksum`, `size_bytes`, `source` (upload, repo_sync, api), `version`, `ingestion_status`, `index_error`, `indexed_at`, `created_by`, `updated_by`, `created_at`, `updated_at`.
   - Update `projects` entity module to include the relation to documents.
 - **API Engine (`crates/server`)**:
   - Create REST endpoints for CRUD operations on Project Documents.
+  - Add presigned upload-url and download-url endpoints because project documents are storage-backed in v1.
 - **Frontend (React)**:
   - Add a new "Documents" tab inside the Project Dashboard layout (Do NOT replace the existing "Deployments" tab).
   - Implement a Document Viewer/Editor (Markdown editor).
@@ -78,7 +82,7 @@ Below is the step-by-step checklist to implement this feature.
 
 ### Phase 1: Task Context (Quick Win)
 - [ ] **DB Migration**: Create `task_contexts` and `task_context_attachments` tables.
-- [ ] **API Update**: Implement CRUD endpoints for `task_contexts` and upload URL generation (`/api/v1/tasks/{id}/context-attachments/upload-url`) mimicking the existing presigned flow.
+- [ ] **API Update**: Implement CRUD endpoints for `task_contexts`, attachment metadata endpoints, upload URL generation (`/api/v1/tasks/{id}/context-attachments/upload-url`), and attachment download URL generation.
 - [ ] **Frontend UI**: Update `TaskDetailPage` to show the context, attachments, and their resolved status before the user hits "Start Agent".
 - [ ] **API Controller**: Update instruction builder in `crates/server/src/routes/task_attempts.rs` to pull context and attachment keys from the new tables.
 - [ ] **API Controller**: Implement file hand-off mechanism in `task_attempts.rs` (before job creation): fetch bytes via `storage_service` using the attachment `key`, apply MIME whitelist max-size limits (similar to `project_assistant.rs::resolve_attachments`), extract text, and inject it into the `instruction` string passed to the `AgentJob`.
@@ -86,15 +90,15 @@ Below is the step-by-step checklist to implement this feature.
 
 ### Phase 2: Project Vault CRUD
 - [ ] **DB Migration**: Create `project_documents` table.
+- [ ] **DB Migration**: Create logical `project_document_chunks` storage required by sqlite-vec integration.
 - [ ] **Rust Models**: Generate `sea-orm` entities for the new table. Ensure it has `created_at` and `updated_at` fields.
-- [ ] **Rust API**: Implement internal endpoints (`GET`, `POST`, `PUT`, `DELETE`) for `/projects/{id}/documents`. **Crucial:** Implement "Upsert" logic. If a document with the same `title` or `filename` is uploaded, overwrite the existing one and update `updated_at` to ensure only the latest version exists.
+- [ ] **Rust API**: Implement internal endpoints for listing, creating, updating, deleting, upload-url, and download-url on `/projects/{id}/documents`. **Crucial:** Upsert by `filename`; reject ambiguous title collisions across different filenames with `409`.
 - [ ] **Frontend UI**: Add the new "Documents" tab inside the existing `/projects/:id` `ProjectDetailPage` flow. If nested routing is introduced later, keep `/projects/:id` as the current stable entry point and do not replace the Deployments tab.
 - [ ] **Frontend UI**: Implement document listing, creating, and editing interfaces.
 - [ ] **Verification**: Create a test project, add a markdown document, edit it, and delete it via the UI. Ensure data persists correctly in the DB.
 
 ### Phase 3: Vector RAG & Tool Integration
 - [ ] **Dependency Check**: Ensure `sqlite-vec` and `fastembed` are properly set up (overlap with Global KB).
-- [ ] **DB Migration**: Create `project_document_chunks` virtual/vector table.
 - [ ] **Chunking Engine**: Implement a Rust text-splitter to process markdown text.
 - [ ] **Embedding Pipeline**: Trigger the embedding generation when a `project_document` is saved. **Crucial:** If updating an existing document, the pipeline must DELETE the old chunks from `project_document_chunks` before inserting the new ones to avoid stale context.
 - [ ] **Executor Integration**: Add a Project Vault search capability through the concrete executor/runtime path used for agent-side tool calls in this repo. If a shared abstraction is introduced, document that new abstraction explicitly rather than assuming a pre-existing `Tool` trait.
