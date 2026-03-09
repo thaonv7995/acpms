@@ -1,11 +1,11 @@
 use axum::{
-    extract::{Query, State},
+    extract::{Path, Query, State},
     http::{HeaderMap, StatusCode},
     response::{
         sse::{Event, KeepAlive, Sse},
         IntoResponse, Json, Response,
     },
-    routing::get,
+    routing::{get, post},
     Router,
 };
 use futures::StreamExt;
@@ -22,17 +22,19 @@ use std::{
 use tokio_stream::wrappers::BroadcastStream;
 use utoipa::ToSchema;
 use uuid::Uuid;
+use validator::Validate;
 
 use crate::{
     api::{
         openapi_spec::{build_filtered_openclaw_openapi_json, OpenClawOpenApiQuery},
-        ApiErrorDetail, ApiResponse, ResponseCode,
+        ApiErrorDetail, ApiResponse, ResponseCode, TaskContextDto,
     },
-    error::ApiResult,
-    middleware::AuthUser,
+    error::{ApiError, ApiResult},
+    middleware::{AuthUser, Permission, RbacChecker, ValidatedJson},
     AppState,
 };
-use acpms_db::models::TaskStatus;
+use acpms_db::models::{Task, TaskStatus};
+use acpms_services::{CreateTaskContextInput, TaskContextService, TaskService};
 
 const OPENCLAW_HANDOFF_CONTRACT_VERSION: &str = "v1";
 const OPENCLAW_CONNECTION_BUNDLE_FIELDS: &[&str] = &[
@@ -205,6 +207,20 @@ pub struct OpenClawCursorExpiredApiResponseDoc {
     pub error: Option<ApiErrorDetail>,
 }
 
+#[derive(Debug, Deserialize, ToSchema, Validate)]
+pub struct OpenClawCreateTaskContextRequest {
+    #[validate(length(max = 255, message = "Title must not exceed 255 characters"))]
+    pub title: Option<String>,
+    #[validate(length(min = 1, max = 64, message = "Content type is required"))]
+    pub content_type: String,
+    #[validate(length(
+        max = 20000,
+        message = "Context content must not exceed 20000 characters"
+    ))]
+    pub raw_content: String,
+    pub sort_order: i32,
+}
+
 struct OpenClawEventStreamDisconnectGuard {
     metrics: crate::observability::Metrics,
     after_cursor: Option<i64>,
@@ -224,6 +240,23 @@ impl Drop for OpenClawEventStreamDisconnectGuard {
             "OpenClaw event stream disconnected"
         );
     }
+}
+
+async fn fetch_task_for_openclaw_permission(
+    state: &AppState,
+    auth_user: &AuthUser,
+    task_id: Uuid,
+    permission: Permission,
+) -> ApiResult<Task> {
+    let task_service = TaskService::new(state.db.clone());
+    let task = task_service
+        .get_task(task_id)
+        .await
+        .map_err(|e| ApiError::Internal(e.to_string()))?
+        .ok_or_else(|| ApiError::NotFound("Task not found".to_string()))?;
+
+    RbacChecker::check_permission(auth_user.id, task.project_id, permission, &state.db).await?;
+    Ok(task)
 }
 
 fn header_value(headers: &HeaderMap, name: &str) -> Option<String> {
@@ -519,6 +552,55 @@ pub async fn openapi_json(
     Json(build_filtered_openclaw_openapi_json(&query))
 }
 
+pub async fn create_task_context_from_openclaw(
+    State(state): State<AppState>,
+    auth_user: AuthUser,
+    Path(task_id): Path<Uuid>,
+    ValidatedJson(req): ValidatedJson<OpenClawCreateTaskContextRequest>,
+) -> ApiResult<Json<ApiResponse<TaskContextDto>>> {
+    fetch_task_for_openclaw_permission(&state, &auth_user, task_id, Permission::ModifyTask).await?;
+
+    let service = TaskContextService::new(state.db.clone());
+    if service
+        .count_task_contexts(task_id)
+        .await
+        .map_err(|e| ApiError::Internal(e.to_string()))?
+        >= 10
+    {
+        return Err(ApiError::BadRequest(
+            "A task cannot have more than 10 context blocks".to_string(),
+        ));
+    }
+
+    let context = service
+        .create_task_context(
+            task_id,
+            auth_user.id,
+            CreateTaskContextInput {
+                title: req.title,
+                content_type: req.content_type,
+                raw_content: req.raw_content,
+                source: "openclaw".to_string(),
+                sort_order: req.sort_order,
+            },
+        )
+        .await
+        .map_err(|e| match e.to_string().as_str() {
+            "Unsupported task context content_type" => {
+                ApiError::BadRequest("Unsupported task context content_type".to_string())
+            }
+            "Unsupported task context source" => {
+                ApiError::BadRequest("Unsupported task context source".to_string())
+            }
+            _ => ApiError::Internal(e.to_string()),
+        })?;
+
+    Ok(Json(ApiResponse::success(
+        TaskContextDto::from_parts(context, Vec::new()),
+        "Task context created successfully",
+    )))
+}
+
 fn parse_resume_cursor(
     headers: &HeaderMap,
     params: &OpenClawEventStreamParams,
@@ -766,7 +848,12 @@ pub async fn events_stream(
 }
 
 pub fn create_router(state: AppState) -> Router {
-    let v1_routes = super::build_business_api_routes().route("/events/stream", get(events_stream));
+    let v1_routes = super::build_business_api_routes()
+        .route("/events/stream", get(events_stream))
+        .route(
+            "/tasks/:task_id/context",
+            post(create_task_context_from_openclaw),
+        );
 
     Router::new()
         .route(

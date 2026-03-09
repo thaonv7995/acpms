@@ -349,6 +349,42 @@ impl StorageService {
         Ok(())
     }
 
+    /// Upload raw bytes directly to S3 with the provided content type.
+    pub async fn upload_bytes(&self, key: &str, content: &[u8], content_type: &str) -> Result<()> {
+        use aws_sdk_s3::primitives::ByteStream;
+
+        self.client
+            .put_object()
+            .bucket(&self.bucket)
+            .key(key)
+            .content_type(content_type)
+            .body(ByteStream::from(content.to_vec()))
+            .send()
+            .await
+            .map_err(|e| {
+                anyhow::anyhow!(
+                    "Failed to upload bytes to s3://{}/{}: {}",
+                    self.bucket,
+                    key,
+                    e
+                )
+            })?;
+
+        tracing::info!(
+            "Uploaded bytes to s3://{}/{} ({} bytes)",
+            self.bucket,
+            key,
+            content.len()
+        );
+        Ok(())
+    }
+
+    /// Upload UTF-8 text directly to S3 with the provided content type.
+    pub async fn upload_text(&self, key: &str, content: &str, content_type: &str) -> Result<()> {
+        self.upload_bytes(key, content.as_bytes(), content_type)
+            .await
+    }
+
     /// Download and parse JSON from S3
     ///
     /// Automatically handles gzip decompression if Content-Encoding header is set.

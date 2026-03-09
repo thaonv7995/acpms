@@ -68,9 +68,11 @@ pub struct CreateProjectDocumentRequest {
         max = 512,
         message = "Storage key must be between 1 and 512 characters"
     ))]
-    pub storage_key: String,
+    pub storage_key: Option<String>,
     pub checksum: Option<String>,
-    pub size_bytes: i64,
+    pub size_bytes: Option<i64>,
+    #[validate(length(min = 1, message = "Document content must not be empty"))]
+    pub content_text: Option<String>,
     #[validate(length(min = 1, max = 32, message = "Source is required"))]
     pub source: String,
 }
@@ -128,6 +130,22 @@ fn sanitize_project_document_filename(filename: &str) -> String {
 
 fn project_document_storage_prefix(project_id: Uuid) -> String {
     format!("project-documents/{project_id}/")
+}
+
+fn openclaw_project_document_storage_key(project_id: Uuid, filename: &str) -> String {
+    let safe_name = sanitize_project_document_filename(filename);
+    format!(
+        "{}openclaw/{}-{}",
+        project_document_storage_prefix(project_id),
+        Uuid::new_v4(),
+        safe_name
+    )
+}
+
+struct ResolvedProjectDocumentUpload {
+    storage_key: String,
+    checksum: Option<String>,
+    size_bytes: i64,
 }
 
 fn validate_project_document_kind(kind: &str) -> ApiResult<()> {
@@ -205,6 +223,63 @@ async fn maybe_index_project_document(
                 .unwrap_or(document)
         }
     }
+}
+
+async fn resolve_project_document_upload(
+    state: &AppState,
+    project_id: Uuid,
+    req: &CreateProjectDocumentRequest,
+) -> ApiResult<ResolvedProjectDocumentUpload> {
+    let uses_inline_content = req.content_text.is_some();
+    let has_storage_metadata =
+        req.storage_key.is_some() || req.size_bytes.is_some() || req.checksum.is_some();
+
+    if uses_inline_content && has_storage_metadata {
+        return Err(ApiError::BadRequest(
+            "Provide either content_text or storage-backed upload metadata, not both".into(),
+        ));
+    }
+
+    if let Some(content_text) = req.content_text.as_deref() {
+        if req.source != "api" {
+            return Err(ApiError::BadRequest(
+                "Inline content_text is only supported for source='api'".into(),
+            ));
+        }
+
+        let size_bytes = i64::try_from(content_text.as_bytes().len())
+            .map_err(|_| ApiError::BadRequest("Document exceeds supported size".into()))?;
+        validate_project_document_size(size_bytes)?;
+
+        let storage_key = openclaw_project_document_storage_key(project_id, &req.filename);
+        state
+            .storage_service
+            .upload_text(&storage_key, content_text, &req.content_type)
+            .await
+            .map_err(|e| ApiError::Internal(e.to_string()))?;
+
+        return Ok(ResolvedProjectDocumentUpload {
+            storage_key,
+            checksum: None,
+            size_bytes,
+        });
+    }
+
+    let storage_key = req.storage_key.clone().ok_or_else(|| {
+        ApiError::BadRequest("storage_key is required when content_text is omitted".into())
+    })?;
+    let size_bytes = req.size_bytes.ok_or_else(|| {
+        ApiError::BadRequest("size_bytes is required when content_text is omitted".into())
+    })?;
+
+    validate_project_document_size(size_bytes)?;
+    validate_project_document_storage_key(project_id, &storage_key)?;
+
+    Ok(ResolvedProjectDocumentUpload {
+        storage_key,
+        checksum: req.checksum.clone(),
+        size_bytes,
+    })
 }
 
 #[utoipa::path(
@@ -351,8 +426,16 @@ pub async fn create_or_upsert_project_document(
 
     validate_project_document_kind(&req.document_kind)?;
     validate_project_document_source(&req.source)?;
-    validate_project_document_size(req.size_bytes)?;
-    validate_project_document_storage_key(project_id, &req.storage_key)?;
+    let resolved_upload = resolve_project_document_upload(&state, project_id, &req).await?;
+
+    let CreateProjectDocumentRequest {
+        title,
+        filename,
+        document_kind,
+        content_type,
+        source,
+        ..
+    } = req;
 
     let service = ProjectDocumentService::new(state.db.clone());
     let document = service
@@ -360,14 +443,14 @@ pub async fn create_or_upsert_project_document(
             project_id,
             auth_user.id,
             UpsertProjectDocumentInput {
-                title: req.title,
-                filename: req.filename,
-                document_kind: req.document_kind,
-                content_type: req.content_type,
-                storage_key: req.storage_key,
-                checksum: req.checksum,
-                size_bytes: req.size_bytes,
-                source: req.source,
+                title,
+                filename,
+                document_kind,
+                content_type,
+                storage_key: resolved_upload.storage_key,
+                checksum: resolved_upload.checksum,
+                size_bytes: resolved_upload.size_bytes,
+                source,
             },
         )
         .await

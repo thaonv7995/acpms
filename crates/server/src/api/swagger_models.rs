@@ -152,7 +152,9 @@ pub struct UpdateProjectRequestDoc {
 }
 
 // Tasks
-use super::{ProjectDocumentDto, TaskAttemptDto, TaskContextAttachmentDto, TaskContextDto, TaskDto};
+use super::{
+    ProjectDocumentDto, TaskAttemptDto, TaskContextAttachmentDto, TaskContextDto, TaskDto,
+};
 define_response!(TaskResponse, TaskDto);
 define_response!(TaskListResponse, Vec<TaskDto>);
 define_response!(TaskAttemptResponse, TaskAttemptDto);
@@ -227,11 +229,32 @@ pub struct CreateTaskContextRequestDoc {
     #[validate(length(min = 1, max = 64, message = "Content type is required"))]
     pub content_type: String,
 
-    #[validate(length(max = 20000, message = "Context content must not exceed 20000 characters"))]
+    #[validate(length(
+        max = 20000,
+        message = "Context content must not exceed 20000 characters"
+    ))]
     pub raw_content: String,
 
     #[validate(length(min = 1, max = 32, message = "Source is required"))]
     pub source: String,
+
+    pub sort_order: i32,
+}
+
+#[derive(ToSchema, serde::Deserialize, Validate)]
+#[allow(dead_code)]
+pub struct OpenClawCreateTaskContextRequestDoc {
+    #[validate(length(max = 255, message = "Title must not exceed 255 characters"))]
+    pub title: Option<String>,
+
+    #[validate(length(min = 1, max = 64, message = "Content type is required"))]
+    pub content_type: String,
+
+    #[validate(length(
+        max = 20000,
+        message = "Context content must not exceed 20000 characters"
+    ))]
+    pub raw_content: String,
 
     pub sort_order: i32,
 }
@@ -245,7 +268,10 @@ pub struct UpdateTaskContextRequestDoc {
     #[validate(length(min = 1, max = 64, message = "Content type is required"))]
     pub content_type: Option<String>,
 
-    #[validate(length(max = 20000, message = "Context content must not exceed 20000 characters"))]
+    #[validate(length(
+        max = 20000,
+        message = "Context content must not exceed 20000 characters"
+    ))]
     pub raw_content: Option<String>,
 
     pub sort_order: Option<i32>,
@@ -303,10 +329,41 @@ pub struct CreateProjectDocumentRequestDoc {
         max = 512,
         message = "Storage key must be between 1 and 512 characters"
     ))]
-    pub storage_key: String,
+    pub storage_key: Option<String>,
 
     pub checksum: Option<String>,
-    pub size_bytes: i64,
+    pub size_bytes: Option<i64>,
+    pub content_text: Option<String>,
+
+    #[validate(length(min = 1, max = 32, message = "Source is required"))]
+    pub source: String,
+}
+
+#[derive(ToSchema, serde::Deserialize, Validate)]
+#[allow(dead_code)]
+pub struct OpenClawCreateProjectDocumentRequestDoc {
+    #[validate(length(
+        min = 1,
+        max = 255,
+        message = "Title must be between 1 and 255 characters"
+    ))]
+    pub title: String,
+
+    #[validate(length(
+        min = 1,
+        max = 255,
+        message = "Filename must be between 1 and 255 characters"
+    ))]
+    pub filename: String,
+
+    #[validate(length(min = 1, max = 32, message = "Document kind is required"))]
+    pub document_kind: String,
+
+    #[validate(length(min = 1, max = 255, message = "Content type is required"))]
+    pub content_type: String,
+
+    #[validate(length(min = 1, message = "Document content must not be empty"))]
+    pub content_text: String,
 
     #[validate(length(min = 1, max = 32, message = "Source is required"))]
     pub source: String,

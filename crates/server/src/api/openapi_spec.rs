@@ -144,12 +144,14 @@ use crate::{api, routes};
             api::TaskContextListResponse,
             api::TaskContextAttachmentResponse,
             api::CreateTaskContextRequestDoc,
+            api::OpenClawCreateTaskContextRequestDoc,
             api::UpdateTaskContextRequestDoc,
             api::CreateTaskContextAttachmentRequestDoc,
             api::ProjectDocumentDto,
             api::ProjectDocumentResponse,
             api::ProjectDocumentListResponse,
             api::CreateProjectDocumentRequestDoc,
+            api::OpenClawCreateProjectDocumentRequestDoc,
             api::UpdateProjectDocumentRequestDoc,
             routes::tasks::UpdateStatusRequest,
             routes::tasks::AssignTaskRequest,
@@ -360,6 +362,82 @@ fn ensure_openclaw_path_security(item: &mut Value) {
         operation
             .entry("security".to_string())
             .or_insert_with(openclaw_bearer_security);
+    }
+}
+
+fn ensure_generic_api_response_schema(document: &mut Value) {
+    let Some(schemas) = document
+        .get_mut("components")
+        .and_then(Value::as_object_mut)
+        .and_then(|components| components.get_mut("schemas"))
+        .and_then(Value::as_object_mut)
+    else {
+        return;
+    };
+
+    schemas.entry("ApiResponse".to_string()).or_insert_with(|| {
+        serde_json::json!({
+            "type": "object",
+            "properties": {
+                "success": { "type": "boolean" },
+                "code": { "$ref": "#/components/schemas/ResponseCode" },
+                "message": { "type": "string" },
+                "data": {},
+                "metadata": {},
+                "error": {
+                    "anyOf": [
+                        { "$ref": "#/components/schemas/ApiErrorDetail" },
+                        { "type": "null" }
+                    ]
+                }
+            }
+        })
+    });
+}
+
+fn normalize_schema_refs(value: &mut Value) {
+    match value {
+        Value::Object(map) => {
+            if let Some(reference) = map.get("$ref").and_then(Value::as_str).map(str::to_string) {
+                let normalized = match reference.as_str() {
+                    "ApiResponse" => Some("#/components/schemas/ApiResponse".to_string()),
+                    "crate.api.EmptyResponse" => {
+                        Some("#/components/schemas/EmptyResponse".to_string())
+                    }
+                    "crate.api.ProjectDocumentListResponse" => {
+                        Some("#/components/schemas/ProjectDocumentListResponse".to_string())
+                    }
+                    "crate.api.ProjectDocumentResponse" => {
+                        Some("#/components/schemas/ProjectDocumentResponse".to_string())
+                    }
+                    "crate.api.UpdateProjectDocumentRequestDoc" => {
+                        Some("#/components/schemas/UpdateProjectDocumentRequestDoc".to_string())
+                    }
+                    _ => reference
+                        .strip_prefix("crate.api.")
+                        .map(|name| format!("#/components/schemas/{name}"))
+                        .or_else(|| {
+                            reference
+                                .strip_prefix("#/components/schemas/crate.api.")
+                                .map(|name| format!("#/components/schemas/{name}"))
+                        }),
+                };
+
+                if let Some(normalized) = normalized {
+                    map.insert("$ref".to_string(), Value::String(normalized));
+                }
+            }
+
+            for child in map.values_mut() {
+                normalize_schema_refs(child);
+            }
+        }
+        Value::Array(items) => {
+            for item in items {
+                normalize_schema_refs(item);
+            }
+        }
+        _ => {}
     }
 }
 
@@ -590,6 +668,38 @@ pub fn build_openclaw_openapi_json() -> Value {
         }
     }
 
+    if let Some(post) = rewritten
+        .get_mut("/api/openclaw/v1/projects/{project_id}/documents")
+        .and_then(Value::as_object_mut)
+        .and_then(|item| item.get_mut("post"))
+        .and_then(Value::as_object_mut)
+    {
+        post.insert(
+            "summary".to_string(),
+            Value::String("Create or upsert a project document from inline text".to_string()),
+        );
+        post.insert(
+            "description".to_string(),
+            Value::String(
+                "Create or upsert a storage-backed project document using inline `content_text`. OpenClaw v1 requires `content_text`; ACPMS stores the text under `project-documents/{project_id}/openclaw/...` before indexing it."
+                    .to_string(),
+            ),
+        );
+        post.insert(
+            "requestBody".to_string(),
+            serde_json::json!({
+                "required": true,
+                "content": {
+                    "application/json": {
+                        "schema": {
+                            "$ref": "#/components/schemas/OpenClawCreateProjectDocumentRequestDoc"
+                        }
+                    }
+                }
+            }),
+        );
+    }
+
     rewritten.insert(
         "/api/openclaw/openapi.json".to_string(),
         serde_json::json!({
@@ -704,6 +814,60 @@ pub fn build_openclaw_openapi_json() -> Value {
                     },
                     "403": {
                         "description": "Gateway disabled or not configured"
+                    }
+                }
+            }
+        }),
+    );
+    rewritten.insert(
+        "/api/openclaw/v1/tasks/{task_id}/context".to_string(),
+        serde_json::json!({
+            "post": {
+                "tags": ["OpenClaw"],
+                "summary": "Create a task context block from inline text",
+                "description": "Create a text-based task context block for an existing task. OpenClaw v1 supports inline text only for this alias route and ACPMS records the context source as `openclaw`.",
+                "security": openclaw_bearer_security(),
+                "parameters": [
+                    {
+                        "name": "task_id",
+                        "in": "path",
+                        "required": true,
+                        "schema": { "type": "string", "format": "uuid" },
+                        "description": "Task ID"
+                    }
+                ],
+                "requestBody": {
+                    "required": true,
+                    "content": {
+                        "application/json": {
+                            "schema": {
+                                "$ref": "#/components/schemas/OpenClawCreateTaskContextRequestDoc"
+                            }
+                        }
+                    }
+                },
+                "responses": {
+                    "200": {
+                        "description": "Task context created successfully",
+                        "content": {
+                            "application/json": {
+                                "schema": {
+                                    "$ref": "#/components/schemas/TaskContextResponse"
+                                }
+                            }
+                        }
+                    },
+                    "400": {
+                        "description": "Invalid task context input"
+                    },
+                    "401": {
+                        "description": "Missing or invalid OpenClaw bearer token"
+                    },
+                    "403": {
+                        "description": "Forbidden"
+                    },
+                    "404": {
+                        "description": "Task not found"
                     }
                 }
             }
@@ -996,6 +1160,8 @@ pub fn build_openclaw_openapi_json() -> Value {
         ),
     );
     *paths = rewritten;
+    ensure_generic_api_response_schema(&mut document);
+    normalize_schema_refs(&mut document);
 
     if let Some(info) = document.get_mut("info").and_then(Value::as_object_mut) {
         info.insert(
@@ -1098,6 +1264,27 @@ mod tests {
         let document = build_openclaw_openapi_json();
         assert!(document
             .pointer("/paths/~1api~1openclaw~1openapi.json/get")
+            .is_some());
+    }
+
+    #[test]
+    fn openclaw_document_create_uses_inline_request_contract() {
+        let document = build_openclaw_openapi_json();
+        let request_ref = document
+            .pointer("/paths/~1api~1openclaw~1v1~1projects~1{project_id}~1documents/post/requestBody/content/application~1json/schema/$ref")
+            .and_then(|value| value.as_str());
+
+        assert_eq!(
+            request_ref,
+            Some("#/components/schemas/OpenClawCreateProjectDocumentRequestDoc")
+        );
+    }
+
+    #[test]
+    fn openclaw_task_context_alias_is_present() {
+        let document = build_openclaw_openapi_json();
+        assert!(document
+            .pointer("/paths/~1api~1openclaw~1v1~1tasks~1{task_id}~1context/post")
             .is_some());
     }
 
