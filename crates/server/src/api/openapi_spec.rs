@@ -615,6 +615,27 @@ pub fn build_openclaw_openapi_json() -> Value {
     rewritten.insert(
         "/api/openclaw/guide-for-openclaw".to_string(),
         serde_json::json!({
+            "get": {
+                "tags": ["OpenClaw"],
+                "summary": "Bootstrap the OpenClaw integration",
+                "description": "Returns the authoritative runtime guide, operating rules, reporting policy, and ACPMS connection profile that OpenClaw should load before controlling ACPMS. GET is supported for simple retrieval when no custom reporting payload is needed.",
+                "security": openclaw_bearer_security(),
+                "responses": {
+                    "200": {
+                        "description": "Bootstrap guide generated successfully",
+                        "content": {
+                            "application/json": {
+                                "schema": {
+                                    "$ref": "#/components/schemas/OpenClawGuideApiResponseDoc"
+                                }
+                            }
+                        }
+                    },
+                    "401": {
+                        "description": "Missing or invalid OpenClaw bearer token"
+                    }
+                }
+            },
             "post": {
                 "tags": ["OpenClaw"],
                 "summary": "Bootstrap the OpenClaw integration",

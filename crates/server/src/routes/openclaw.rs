@@ -5,7 +5,7 @@ use axum::{
         sse::{Event, KeepAlive, Sse},
         IntoResponse, Json, Response,
     },
-    routing::{get, post},
+    routing::get,
     Router,
 };
 use futures::StreamExt;
@@ -338,14 +338,12 @@ fn build_handoff_contract() -> OpenClawHandoffContract {
     }
 }
 
-pub async fn guide_for_openclaw(
-    State(state): State<AppState>,
-    headers: HeaderMap,
-    _auth_user: AuthUser,
-    payload: Option<Json<OpenClawGuideRequest>>,
+fn build_openclaw_guide_response(
+    state: &AppState,
+    headers: &HeaderMap,
+    payload: OpenClawGuideRequest,
 ) -> ApiResult<Json<ApiResponse<OpenClawGuideResponse>>> {
-    let payload = payload.map(|value| value.0).unwrap_or_default();
-    let base_url = infer_public_base_url(&headers);
+    let base_url = infer_public_base_url(headers);
     let profile = OpenClawAcpmsProfile {
         product_name: "ACPMS".to_string(),
         role: "super_admin_integration".to_string(),
@@ -491,6 +489,23 @@ pub async fn guide_for_openclaw(
         response,
         "OpenClaw bootstrap guide generated successfully",
     )))
+}
+
+pub async fn guide_for_openclaw(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+    _auth_user: AuthUser,
+    payload: Option<Json<OpenClawGuideRequest>>,
+) -> ApiResult<Json<ApiResponse<OpenClawGuideResponse>>> {
+    build_openclaw_guide_response(&state, &headers, payload.map(|value| value.0).unwrap_or_default())
+}
+
+pub async fn guide_for_openclaw_get(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+    _auth_user: AuthUser,
+) -> ApiResult<Json<ApiResponse<OpenClawGuideResponse>>> {
+    build_openclaw_guide_response(&state, &headers, OpenClawGuideRequest::default())
 }
 
 pub async fn openapi_json(
@@ -750,7 +765,10 @@ pub fn create_router(state: AppState) -> Router {
     let v1_routes = super::build_business_api_routes().route("/events/stream", get(events_stream));
 
     Router::new()
-        .route("/guide-for-openclaw", post(guide_for_openclaw))
+        .route(
+            "/guide-for-openclaw",
+            get(guide_for_openclaw_get).post(guide_for_openclaw),
+        )
         .route("/openapi.json", get(openapi_json))
         .nest("/v1", v1_routes)
         .layer(axum::middleware::from_fn_with_state(

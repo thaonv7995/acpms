@@ -118,7 +118,7 @@ ACPMS connection bundle:
 
 Your required first actions:
 1. Store the API Key as the Bearer credential for ACPMS.
-2. Call the Guide Endpoint first and treat its response as the authoritative runtime guide.
+2. Call the Guide Endpoint first with GET for basic bootstrap and treat its response as the authoritative runtime guide.
 3. Load the OpenAPI document.
 4. Open and maintain the Global Event SSE connection.
 5. Use only ACPMS OpenClaw routes.
@@ -128,6 +128,7 @@ Your required first actions:
 
 Bootstrap example (curl):
 curl -sS \\
+  -X GET \\
   -H "Authorization: Bearer ${OPENCLAW_API_KEY}" \\
   "${guide_url}"
 

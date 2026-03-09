@@ -195,6 +195,35 @@ async fn openclaw_guide_returns_bootstrap_payload() {
 }
 
 #[tokio::test]
+async fn openclaw_guide_accepts_get_method() {
+    let _guard = env_lock().lock().unwrap_or_else(|error| error.into_inner());
+    configure_openclaw_env();
+    std::env::set_var("ACPMS_PUBLIC_URL", "https://acpms.example.com");
+    if !test_database_ready().await {
+        eprintln!("skipping openclaw gateway test because DATABASE_URL is not reachable");
+        return;
+    }
+
+    let router = create_test_router().await;
+    let (status, body) = make_request_with_string_headers(
+        &router,
+        "GET",
+        "/api/openclaw/guide-for-openclaw",
+        None,
+        vec![("authorization", "Bearer oc_test_phase1_key".to_string())],
+    )
+    .await;
+
+    assert_eq!(status, StatusCode::OK, "{body}");
+    let json: Value = serde_json::from_str(&body).expect("valid json");
+    assert_eq!(json["success"], true, "{body}");
+    assert_eq!(
+        json["data"]["acpms_profile"]["guide_url"],
+        "https://acpms.example.com/api/openclaw/guide-for-openclaw"
+    );
+}
+
+#[tokio::test]
 async fn openclaw_can_access_mirrored_projects_and_openapi() {
     let _guard = env_lock().lock().unwrap_or_else(|error| error.into_inner());
     configure_openclaw_env();

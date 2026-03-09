@@ -11,7 +11,7 @@ The intended outcome is:
 *   the user does not need to manually explain ACPMS to OpenClaw
 *   the user does not need to manually map each field one by one
 *   OpenClaw receives enough context to bootstrap itself correctly
-*   OpenClaw knows that its first authoritative action is to call `POST /api/openclaw/guide-for-openclaw`
+*   OpenClaw knows that its first authoritative action is to call `GET /api/openclaw/guide-for-openclaw` for basic bootstrap
 
 ## 2. Output Contract
 
@@ -87,13 +87,21 @@ ACPMS connection bundle:
 
 Your required first actions:
 1. Store the API Key as the Bearer credential for ACPMS.
-2. Call the Guide Endpoint first and treat its response as the authoritative runtime guide.
+2. Call the Guide Endpoint first with `GET` for basic bootstrap and treat its response as the authoritative runtime guide.
 3. Load the OpenAPI document.
 4. Open and maintain the Global Event SSE connection.
 5. Use only ACPMS OpenClaw routes:
    - /api/openclaw/v1/*
    - /api/openclaw/ws/*
 6. Follow the ACPMS operating rules returned by the Guide Endpoint.
+
+Bootstrap example (curl):
+```bash
+curl -sS \
+  -X GET \
+  -H "Authorization: Bearer oc_live_5x8a9b2c3d4e5f6g7h8i9j0k" \
+  "https://api.yourdomain.com/api/openclaw/guide-for-openclaw"
+```
 
 Human reporting rules:
 - report important status, analyses, plans, started attempts, completed attempts, failed attempts, blocked work, and approval requests
@@ -115,7 +123,7 @@ The installer-generated prompt should be:
 *   short enough for a user to paste directly into OpenClaw
 *   specific enough that OpenClaw knows its first next step
 *   instance-specific, with real endpoint URLs and real credentials already embedded
-*   subordinate to `POST /api/openclaw/guide-for-openclaw`, which remains the source of truth for detailed runtime policy
+*   subordinate to `/api/openclaw/guide-for-openclaw`, which remains the source of truth for detailed runtime policy
 
 The installer prompt should **not** try to duplicate the full long-form rulebook.
 
@@ -155,7 +163,7 @@ After the user sends the installer prompt to OpenClaw, OpenClaw should:
 
 1.  parse the embedded connection bundle
 2.  store the ACPMS API key securely
-3.  call `POST /api/openclaw/guide-for-openclaw`
+3.  call `GET /api/openclaw/guide-for-openclaw` for basic bootstrap
 4.  load the OpenAPI contract
 5.  open the global event stream
 6.  follow the returned operating rules for future user commands
