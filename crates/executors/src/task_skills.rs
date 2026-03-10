@@ -2300,6 +2300,7 @@ fn builtin_skill_content(skill_id: &str) -> Option<&'static str> {
 - If preview runs in Docker, write `.acpms/preview-output.json` with `preview_target` and `runtime_control`.
 - ACPMS injects Cloudflare config into env vars: `CLOUDFLARE_ACCOUNT_ID`, `CLOUDFLARE_API_TOKEN`, `CLOUDFLARE_ZONE_ID`, `CLOUDFLARE_BASE_DOMAIN`.
 - After the local preview responds, use `create-cloudflare-custom-domain-preview-url` to create any public preview URL.
+- Never start `cloudflared` with `--token` or put Cloudflare tunnel secrets on the command line; use a credentials file instead so secrets do not appear in process lists.
 - When tunnel fails: tell user to ensure all 4 fields in System Settings (/settings)."#,
         ),
         "create-cloudflare-custom-domain-preview-url" => Some(
@@ -2310,8 +2311,10 @@ fn builtin_skill_content(skill_id: &str) -> Option<&'static str> {
 - Authenticate Cloudflare API calls with `Authorization: Bearer $CLOUDFLARE_API_TOKEN`.
 - Create a named tunnel with `POST /accounts/$CLOUDFLARE_ACCOUNT_ID/cfd_tunnel`.
 - Create or update a proxied `CNAME` in zone `CLOUDFLARE_ZONE_ID` for a deterministic preview subdomain under `CLOUDFLARE_BASE_DOMAIN`, pointing it to `<tunnel_id>.cfargotunnel.com`.
-- Start a real `cloudflared tunnel run` connector, or a Docker `cloudflared` sidecar, using the returned credentials so that the custom hostname routes to `PREVIEW_TARGET`.
+- Use the returned tunnel credentials payload to write a credentials JSON file with restrictive permissions, then start a real `cloudflared tunnel run` connector, or a Docker `cloudflared` sidecar, so that the custom hostname routes to `PREVIEW_TARGET`.
+- Never run `cloudflared ... --token ...` and never put tunnel tokens/secrets on the command line, because process lists and logs can expose them.
 - For Docker previews, prefer a `cloudflared` service/container that runs `cloudflared tunnel --no-autoupdate run --credentials-file ... --url <PREVIEW_TARGET> <tunnel_id>`.
+- For host-side connectors, use the same credentials-file pattern: `cloudflared tunnel --no-autoupdate run --credentials-file <path> --url <PREVIEW_TARGET> <tunnel_id>`.
 - Verify the public `https://<subdomain>.<CLOUDFLARE_BASE_DOMAIN>` URL serves traffic before emitting it as `PREVIEW_URL`.
 - Never use `*.trycloudflare.com`, never CNAME a custom domain to a quick tunnel URL, and never emit a public `PREVIEW_URL` outside `CLOUDFLARE_BASE_DOMAIN`.
 - If tunnel creation, DNS, `cloudflared`, or public verification fails, keep the local preview contract and output `CLOUDFLARE_TUNNEL_ERROR: <reason>`."#,
@@ -2743,6 +2746,15 @@ mod tests {
         assert!(!skills
             .iter()
             .any(|skill| skill == "deploy-cloudflare-pages"));
+    }
+
+    #[test]
+    fn cloudflare_custom_domain_preview_skill_requires_credentials_file_connector() {
+        let content = get_skill_content("create-cloudflare-custom-domain-preview-url", None);
+
+        assert!(content.contains("--credentials-file"));
+        assert!(content.contains("Never run `cloudflared ... --token ...`"));
+        assert!(content.contains("process lists and logs can expose them"));
     }
 
     #[test]

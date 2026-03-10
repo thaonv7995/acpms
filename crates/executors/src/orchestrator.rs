@@ -122,6 +122,8 @@ static GITLAB_PAT_REGEX: Lazy<Option<Regex>> =
 static GITHUB_TOKEN_REGEX: Lazy<Option<Regex>> = Lazy::new(|| {
     Regex::new(r"\b(?:gh[pousr]_[A-Za-z0-9_]{20,}|github_pat_[A-Za-z0-9_]{20,})\b").ok()
 });
+static CLI_TOKEN_FLAG_REGEX: Lazy<Option<Regex>> =
+    Lazy::new(|| Regex::new(r#"(?i)(--token(?:=|\s+))((?:"[^"]*"|'[^']*'|[^\s"'`]+))"#).ok());
 static BEARER_TOKEN_REGEX: Lazy<Option<Regex>> =
     Lazy::new(|| Regex::new(r"(?i)\b(bearer)(\s+)([A-Za-z0-9._~+/=-]{12,})").ok());
 static SECRET_JSON_VALUE_REGEX: Lazy<Option<Regex>> = Lazy::new(|| {
@@ -182,6 +184,22 @@ pub fn sanitize_log(line: &str) -> String {
     if let Some(github_token_regex) = GITHUB_TOKEN_REGEX.as_ref() {
         sanitized = github_token_regex
             .replace_all(&sanitized, "***GITHUB_TOKEN_REDACTED***")
+            .to_string();
+    }
+    if let Some(cli_token_flag_regex) = CLI_TOKEN_FLAG_REGEX.as_ref() {
+        sanitized = cli_token_flag_regex
+            .replace_all(&sanitized, |caps: &regex::Captures| {
+                let prefix = caps.get(1).map(|m| m.as_str()).unwrap_or_default();
+                let value = caps.get(2).map(|m| m.as_str()).unwrap_or_default();
+                if is_non_secret_placeholder(value) {
+                    caps.get(0)
+                        .map(|m| m.as_str())
+                        .unwrap_or_default()
+                        .to_string()
+                } else {
+                    format!("{prefix}***SECRET_REDACTED***")
+                }
+            })
             .to_string();
     }
     if let Some(bearer_token_regex) = BEARER_TOKEN_REGEX.as_ref() {
@@ -8090,6 +8108,16 @@ mod tests {
         assert_eq!(
             output,
             r#"{"access_token":"***SECRET_REDACTED***","refresh_token":"***SECRET_REDACTED***"}"#
+        );
+    }
+
+    #[test]
+    fn test_sanitize_log_redacts_cli_token_flags() {
+        let input = r#"cloudflared tunnel --no-autoupdate run --token eyJhIjoiN2UwYjhlZmVmNDRm --url http://127.0.0.1:8080"#;
+        let output = sanitize_log(input);
+        assert_eq!(
+            output,
+            r#"cloudflared tunnel --no-autoupdate run --token ***SECRET_REDACTED*** --url http://127.0.0.1:8080"#
         );
     }
 

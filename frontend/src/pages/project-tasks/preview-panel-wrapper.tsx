@@ -62,6 +62,7 @@ const AGENT_PREVIEW_FOLLOW_UP_PROMPT = [
   'Keep `PREVIEW_TARGET` as the local Docker preview URL.',
   'If you emit `PREVIEW_URL`, it must be a real public URL on `CLOUDFLARE_BASE_DOMAIN` when Cloudflare settings are present.',
   'Do not use `*.trycloudflare.com` and do not CNAME a custom domain to a quick tunnel URL.',
+  'Never start `cloudflared` with `--token`; use a credentials file so tunnel secrets do not appear in process lists.',
   'If you cannot create the proper custom-domain preview yourself, leave `PREVIEW_URL` unset or equal to the local URL and include `CLOUDFLARE_TUNNEL_ERROR: <reason>`.',
   'Verify the preview serves the latest code, then print `PREVIEW_TARGET: <local-url>` in the logs and also print `PREVIEW_URL: <url>` where the URL is public when available, or the same local URL when no public URL exists.',
   'Write `.acpms/preview-output.json` with `preview_target`, `preview_url`, and `runtime_control` metadata if the runtime can be stopped by ACPMS.',
@@ -82,6 +83,7 @@ const AGENT_PREVIEW_RESTART_PROMPT = [
   'Stop the old Docker preview runtime if one is still running, start a fresh Docker preview, and keep `PREVIEW_TARGET` as the local Docker URL. If a public tunnel URL exists, write it to `PREVIEW_URL`; otherwise keep `PREVIEW_URL` equal to the same local URL.',
   'Any public `PREVIEW_URL` must use `CLOUDFLARE_BASE_DOMAIN` when Cloudflare settings are present.',
   'Do not use `*.trycloudflare.com` and do not point a custom domain at a quick tunnel URL.',
+  'Never start `cloudflared` with `--token`; use a credentials file so tunnel secrets do not appear in process lists.',
   'Verify the preview serves the latest code, then print `PREVIEW_TARGET: <local-url>` in the logs and also print `PREVIEW_URL: <url>` where the URL is public when available, or the same local URL when no public URL exists.',
   'Write `.acpms/preview-output.json` with the new `preview_target`, `preview_url`, and `runtime_control` metadata if ACPMS can stop it.',
 ].join(' ');

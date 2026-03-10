@@ -816,6 +816,7 @@ Project type: {}
    Only output `PREVIEW_TARGET: http://127.0.0.1:<port>` after `curl` or an equivalent probe succeeds against that local URL.
 4. If `CLOUDFLARE_ACCOUNT_ID`, `CLOUDFLARE_API_TOKEN`, `CLOUDFLARE_ZONE_ID`, and `CLOUDFLARE_BASE_DOMAIN` are present in env, any public `PREVIEW_URL` must use that configured base domain.
    Do NOT use `*.trycloudflare.com` and do NOT point a custom domain at a quick tunnel URL via CNAME.
+   Do NOT start `cloudflared` with `--token` or place tunnel secrets on the command line; use a credentials file connector instead.
    Only fall back to `PREVIEW_URL == PREVIEW_TARGET` when proper custom-domain tunnel creation truly fails, and then output `CLOUDFLARE_TUNNEL_ERROR: <reason>`.
 5. Creating only `Dockerfile`, `docker-compose.yml`, or `.acpms/preview-output.json` is NOT enough. The preview runtime must actually be running.
    If you launch preview via Docker, also write `.acpms/preview-output.json` with
@@ -874,6 +875,7 @@ Project type: {}
 6. Verify the local runtime responds successfully before finishing, for example with `curl -sf http://127.0.0.1:<port>` or another real HTTP check.
 7. If `CLOUDFLARE_ACCOUNT_ID`, `CLOUDFLARE_API_TOKEN`, `CLOUDFLARE_ZONE_ID`, and `CLOUDFLARE_BASE_DOMAIN` are present in env, you must also try to create a public Cloudflare preview URL after the local runtime is reachable.
    That public URL must use `CLOUDFLARE_BASE_DOMAIN`; do not use `*.trycloudflare.com` and do not CNAME a custom domain to a quick tunnel URL.
+   Do not run `cloudflared` with `--token`; write the returned tunnel credentials to a file and use `--credentials-file` so the secret does not appear in process lists.
 8. Only after the runtime is reachable, write `.acpms/preview-output.json` with `preview_target`, `preview_url`, and `runtime_control`.
 9. Only after the runtime is reachable, print:
    - `PREVIEW_TARGET: http://127.0.0.1:<port>`
