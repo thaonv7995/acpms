@@ -36,7 +36,13 @@ export function ConfirmModal({
     };
 
     return (
-        <div className="fixed inset-0 z-50 flex items-center justify-center p-4 font-display">
+        <div
+            className="fixed inset-0 z-[60] flex items-center justify-center p-4 font-display"
+            role="dialog"
+            aria-modal="true"
+            aria-labelledby="confirm-modal-title"
+            aria-describedby="confirm-modal-message"
+        >
             <div className="absolute inset-0 bg-black/70 backdrop-blur-[2px]" onClick={onClose}></div>
             <div className="relative w-full max-w-md bg-card border border-border rounded-2xl shadow-2xl overflow-hidden">
                 <div className="p-6">
@@ -46,9 +52,9 @@ export function ConfirmModal({
                                 {confirmVariant === 'danger' ? 'warning' : 'help'}
                             </span>
                         </div>
-                        <h2 className="text-lg font-bold text-card-foreground">{title}</h2>
+                        <h2 id="confirm-modal-title" className="text-lg font-bold text-card-foreground">{title}</h2>
                     </div>
-                    <p className="text-sm text-muted-foreground mb-6">{message}</p>
+                    <p id="confirm-modal-message" className="text-sm text-muted-foreground mb-6">{message}</p>
                     <div className="flex justify-end gap-3">
                         <button
                             onClick={onClose}

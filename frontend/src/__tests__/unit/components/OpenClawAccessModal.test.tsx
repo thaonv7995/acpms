@@ -13,7 +13,6 @@ describe('OpenClawAccessModal', () => {
 
     beforeEach(() => {
         vi.clearAllMocks();
-        vi.stubGlobal('confirm', vi.fn(() => true));
         vi.stubGlobal('navigator', {
             clipboard: {
                 writeText: vi.fn().mockResolvedValue(undefined),
@@ -27,7 +26,7 @@ describe('OpenClawAccessModal', () => {
                     display_name: 'OpenClaw Production',
                     status: 'active',
                     enrolled_at: '2026-03-10T10:00:00Z',
-                    last_seen_at: '2026-03-10T10:10:00Z',
+                    last_seen_at: new Date(Date.now() - 5 * 60 * 1000).toISOString(),
                     last_seen_ip: '203.0.113.10',
                     last_seen_user_agent: 'OpenClaw/1.0.0',
                     key_fingerprints: ['ed25519:ab12cd34'],
@@ -74,10 +73,33 @@ describe('OpenClawAccessModal', () => {
             <OpenClawAccessModal isOpen onClose={vi.fn()} showToast={showToast} />
         );
 
-        expect(screen.getByText('OpenClaw Access Management')).toBeTruthy();
+        expect(screen.getByText('OpenClaw Access')).toBeTruthy();
+        expect(screen.getByText('Total installations')).toBeTruthy();
         expect(screen.getByText('OpenClaw Production')).toBeTruthy();
         expect(screen.getByText('OpenClaw Staging')).toBeTruthy();
+        expect(screen.getByText('Live now')).toBeTruthy();
+        expect(screen.getByText('Never seen')).toBeTruthy();
         expect(screen.getByDisplayValue('single-use bootstrap prompt')).toBeTruthy();
+        expect(screen.getByRole('button', { name: 'Copy Prompt' })).toBeTruthy();
+    });
+
+    it('filters installations by search query and status', () => {
+        render(
+            <OpenClawAccessModal isOpen onClose={vi.fn()} showToast={showToast} />
+        );
+
+        fireEvent.change(screen.getByLabelText('Search installations'), {
+            target: { value: 'staging' },
+        });
+
+        expect(screen.queryByText('OpenClaw Production')).toBeNull();
+        expect(screen.getByText('OpenClaw Staging')).toBeTruthy();
+
+        fireEvent.change(screen.getByLabelText('Status filter'), {
+            target: { value: 'active' },
+        });
+
+        expect(screen.getByText('No installations match the current filters.')).toBeTruthy();
     });
 
     it('generates a bootstrap prompt from form input', async () => {
@@ -97,7 +119,7 @@ describe('OpenClawAccessModal', () => {
             <OpenClawAccessModal isOpen onClose={vi.fn()} showToast={showToast} />
         );
 
-        fireEvent.change(screen.getAllByPlaceholderText('OpenClaw Staging')[0], {
+        fireEvent.change(screen.getByLabelText('Internal label'), {
             target: { value: 'OpenClaw QA' },
         });
 
@@ -107,7 +129,7 @@ describe('OpenClawAccessModal', () => {
             expect(generateBootstrapPrompt).toHaveBeenCalledWith({
                 label: 'OpenClaw QA',
                 expires_in_minutes: 15,
-                suggested_display_name: undefined,
+                suggested_display_name: 'OpenClaw QA',
             });
         });
     });
@@ -127,6 +149,8 @@ describe('OpenClawAccessModal', () => {
         );
 
         fireEvent.click(screen.getByRole('button', { name: 'Disable Access' }));
+        expect(screen.getByRole('dialog', { name: 'Disable access?' })).toBeTruthy();
+        fireEvent.click(screen.getByRole('button', { name: 'Disable Client' }));
         await waitFor(() => {
             expect(disableClient).toHaveBeenCalledWith('oc_client_prod');
         });
@@ -135,5 +159,22 @@ describe('OpenClawAccessModal', () => {
         await waitFor(() => {
             expect(enableClient).toHaveBeenCalledWith('oc_client_disabled');
         });
+    });
+
+    it('clears the latest prompt when generating another installation prompt', async () => {
+        const clearLatestPrompt = vi.fn();
+
+        vi.mocked(useOpenClawAccess).mockReturnValue({
+            ...baseHookReturn,
+            clearLatestPrompt,
+        });
+
+        render(
+            <OpenClawAccessModal isOpen onClose={vi.fn()} showToast={showToast} />
+        );
+
+        fireEvent.click(screen.getByRole('button', { name: 'Generate Another' }));
+
+        expect(clearLatestPrompt).toHaveBeenCalledTimes(1);
     });
 });
