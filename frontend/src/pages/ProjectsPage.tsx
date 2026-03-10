@@ -318,6 +318,7 @@ export function ProjectsPage() {
       pages.push(
         <button
           key={i}
+          type="button"
           onClick={() => setPage(i)}
           className={`h-10 w-10 rounded-lg flex items-center justify-center font-medium transition-colors ${page === i
               ? 'bg-primary text-primary-foreground'
@@ -338,6 +339,7 @@ export function ProjectsPage() {
         </p>
         <div className="flex items-center gap-2 overflow-x-auto pb-2 sm:pb-0 w-full sm:w-auto">
           <button
+            type="button"
             onClick={() => setPage(page - 1)}
             disabled={page === 1}
             className="h-10 px-3 rounded-lg flex items-center justify-center font-medium transition-colors bg-card text-muted-foreground hover:bg-muted border border-border disabled:opacity-50 disabled:cursor-not-allowed shrink-0"
@@ -348,6 +350,7 @@ export function ProjectsPage() {
           {startPage > 1 && (
             <>
               <button
+                type="button"
                 onClick={() => setPage(1)}
                 className="h-10 w-10 rounded-lg flex items-center justify-center font-medium transition-colors bg-card text-muted-foreground hover:bg-muted border border-border shrink-0"
               >
@@ -363,6 +366,7 @@ export function ProjectsPage() {
             <>
               {endPage < totalPages - 1 && <span className="text-muted-foreground px-2">...</span>}
               <button
+                type="button"
                 onClick={() => setPage(totalPages)}
                 className="h-10 w-10 rounded-lg flex items-center justify-center font-medium transition-colors bg-card text-muted-foreground hover:bg-muted border border-border shrink-0"
               >
@@ -372,6 +376,7 @@ export function ProjectsPage() {
           )}
 
           <button
+            type="button"
             onClick={() => setPage(page + 1)}
             disabled={page === totalPages}
             className="h-10 px-3 rounded-lg flex items-center justify-center font-medium transition-colors bg-card text-muted-foreground hover:bg-muted border border-border disabled:opacity-50 disabled:cursor-not-allowed shrink-0"

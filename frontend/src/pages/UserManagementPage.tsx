@@ -377,6 +377,7 @@ export function UserManagementPage() {
                             <div className="flex items-center gap-2">
                                 <span className="text-xs text-muted-foreground">Page {page} / {totalPages}</span>
                                 <button
+                                    type="button"
                                     disabled={page <= 1}
                                     onClick={() => setPage(page - 1)}
                                     className="px-4 py-2 bg-card border border-border rounded-lg text-sm text-muted-foreground hover:text-card-foreground hover:border-border/80 transition-colors disabled:opacity-50"
@@ -384,6 +385,7 @@ export function UserManagementPage() {
                                     Previous
                                 </button>
                                 <button
+                                    type="button"
                                     disabled={page >= totalPages}
                                     onClick={() => setPage(page + 1)}
                                     className="px-4 py-2 bg-card border border-border rounded-lg text-sm text-muted-foreground hover:text-card-foreground hover:border-border/80 transition-colors disabled:opacity-50"

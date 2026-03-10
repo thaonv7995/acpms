@@ -52,6 +52,7 @@ export function useUsers(): UseUsersResult {
                 role: roleFilter || undefined,
                 status: statusFilter || undefined,
             }),
+        placeholderData: (previousData) => previousData,
         staleTime: 30 * 1000,
     });
 
@@ -87,6 +88,10 @@ export function useUsers(): UseUsersResult {
         () => ((response?.metadata ?? {}) as UsersPageMetadata),
         [response]
     );
+    const hasServerTotalPages = Number.isFinite(Number(metadata.total_pages));
+    const resolvedTotalPages = hasServerTotalPages
+        ? Math.max(1, Number(metadata.total_pages))
+        : 1;
 
     const stats = useMemo(() => {
         const statsMetadata = metadata?.stats;
@@ -125,11 +130,13 @@ export function useUsers(): UseUsersResult {
     }, []);
 
     useEffect(() => {
-        const totalPages = Math.max(1, metadata.total_pages || 1);
-        if (page > totalPages) {
-            setPageState(totalPages);
+        if (!hasServerTotalPages) {
+            return;
         }
-    }, [metadata.total_pages, page]);
+        if (page > resolvedTotalPages) {
+            setPageState(resolvedTotalPages);
+        }
+    }, [hasServerTotalPages, page, resolvedTotalPages]);
 
     return {
         users: allUsers,
@@ -142,7 +149,7 @@ export function useUsers(): UseUsersResult {
         search,
         page,
         setPage,
-        totalPages: Math.max(1, metadata.total_pages || 1),
+        totalPages: resolvedTotalPages,
         totalCount: Number.isFinite(metadata.total_count) ? metadata.total_count : allUsers.length,
     };
 }

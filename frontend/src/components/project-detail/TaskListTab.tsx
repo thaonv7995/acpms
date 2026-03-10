@@ -632,6 +632,7 @@ export function TaskListTab({
                         </p>
                         <div className="flex items-center gap-2">
                             <button
+                                type="button"
                                 onClick={() => setCurrentPage((prev) => Math.max(1, prev - 1))}
                                 disabled={currentPage <= 1}
                                 className="px-3 py-1.5 text-xs rounded border border-border hover:bg-muted disabled:opacity-50 disabled:cursor-not-allowed"
@@ -639,6 +640,7 @@ export function TaskListTab({
                                 Previous
                             </button>
                             <button
+                                type="button"
                                 onClick={() => setCurrentPage((prev) => Math.min(totalPages, prev + 1))}
                                 disabled={currentPage >= totalPages}
                                 className="px-3 py-1.5 text-xs rounded border border-border hover:bg-muted disabled:opacity-50 disabled:cursor-not-allowed"

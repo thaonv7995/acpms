@@ -171,6 +171,7 @@ export function useProjects(options?: { limit?: number }): UseProjectsResult {
             hasActiveClientFilters,
         ],
         queryFn: () => getProjects(queryParams),
+        placeholderData: (previousData) => previousData,
         staleTime: 30 * 1000,
         refetchInterval: 60 * 1000,
     });
@@ -183,7 +184,10 @@ export function useProjects(options?: { limit?: number }): UseProjectsResult {
             : [];
     const metadata = (body?.metadata ?? {}) as Record<string, unknown>;
 
-    const serverTotalPages: number = Number(metadata.total_pages) || 1;
+    const hasServerTotalPages = Number.isFinite(Number(metadata.total_pages));
+    const serverTotalPages: number = hasServerTotalPages
+        ? Math.max(1, Number(metadata.total_pages))
+        : 1;
     const serverTotalCount: number = Number(metadata.total_count) || apiProjects.length;
     const serverHasMore = !!metadata.has_more;
 
@@ -230,10 +234,13 @@ export function useProjects(options?: { limit?: number }): UseProjectsResult {
 
     // Keep page in valid range after filter changes
     useEffect(() => {
+        if (!hasActiveClientFilters && !hasServerTotalPages) {
+            return;
+        }
         if (page > totalPages) {
             setPage(totalPages);
         }
-    }, [page, totalPages]);
+    }, [hasActiveClientFilters, hasServerTotalPages, page, totalPages]);
 
     return {
         projects,
