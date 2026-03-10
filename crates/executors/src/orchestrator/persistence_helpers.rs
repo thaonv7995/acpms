@@ -4,6 +4,7 @@ use super::*;
 pub(super) struct PersistedStructuredOutputs {
     pub preview_target: Option<String>,
     pub preview_url: Option<String>,
+    pub cloudflare_tunnel_error: Option<String>,
     pub deployment_report: Option<serde_json::Value>,
     pub mr_title: Option<String>,
     pub mr_description: Option<String>,
@@ -25,7 +26,55 @@ struct PreviewRuntimeControlContract {
 pub(super) struct ExtractedPreviewContract {
     pub(super) preview_target: Option<String>,
     pub(super) preview_url: Option<String>,
+    pub(super) cloudflare_tunnel_error: Option<String>,
     pub(super) runtime_control: Option<serde_json::Value>,
+}
+
+fn parse_preview_output_contract(contents: &str) -> Option<ExtractedPreviewContract> {
+    #[derive(serde::Deserialize)]
+    struct PreviewOutputContract {
+        preview_target: Option<String>,
+        preview_url: Option<String>,
+        #[serde(default)]
+        cloudflare_tunnel_error: Option<String>,
+        #[serde(default)]
+        runtime_control: Option<PreviewRuntimeControlContract>,
+    }
+
+    let parsed: PreviewOutputContract = serde_json::from_str(contents).ok()?;
+
+    let target = parsed
+        .preview_target
+        .map(|s| trim_repo_url_candidate(s.trim()))
+        .filter(|s| !s.is_empty() && !s.contains("<port>"));
+    let url = parsed
+        .preview_url
+        .map(|s| trim_repo_url_candidate(s.trim()))
+        .filter(|s| !s.is_empty());
+    let cloudflare_tunnel_error = parsed
+        .cloudflare_tunnel_error
+        .map(|s| s.trim().to_string())
+        .filter(|s| !s.is_empty());
+    let (target, url) = canonicalize_preview_signals(target, url);
+
+    let runtime_control = parsed
+        .runtime_control
+        .and_then(normalize_preview_runtime_control_value);
+
+    if target.is_none()
+        && url.is_none()
+        && cloudflare_tunnel_error.is_none()
+        && runtime_control.is_none()
+    {
+        return None;
+    }
+
+    Some(ExtractedPreviewContract {
+        preview_target: target,
+        preview_url: url,
+        cloudflare_tunnel_error,
+        runtime_control,
+    })
 }
 
 fn is_local_preview_signal_url(candidate: &str) -> bool {
@@ -52,11 +101,7 @@ fn canonicalize_preview_signals(
         .filter(|value| !value.is_empty());
 
     if let Some(preview_target_value) = preview_target.as_ref() {
-        if is_local_preview_signal_url(preview_target_value) {
-            if preview_url.is_none() {
-                preview_url = Some(preview_target_value.clone());
-            }
-        } else {
+        if !is_local_preview_signal_url(preview_target_value) {
             let url_missing_or_local = preview_url
                 .as_deref()
                 .map(is_local_preview_signal_url)
@@ -156,14 +201,30 @@ impl ExecutorOrchestrator {
             preview_target,
             preview_url,
             preview_runtime_control,
+            cloudflare_tunnel_error,
             preview_target_source,
             preview_url_source,
+            cloudflare_tunnel_error_source,
         ) = if let Some(wp) = worktree_path {
             if let Ok(Some(contract)) = self.extract_preview_from_file_contract(wp).await {
                 let file_url_present = contract.preview_url.is_some();
+                let file_error_present = contract.cloudflare_tunnel_error.is_some();
                 let preview_url = contract.preview_url.or_else(|| extract_preview_url(&lines));
+                let cloudflare_tunnel_error = contract.cloudflare_tunnel_error.or_else(|| {
+                    extract_labeled_value(&lines, "CLOUDFLARE_TUNNEL_ERROR")
+                        .or_else(|| extract_labeled_value(&lines, "cloudflare_tunnel_error"))
+                });
                 let preview_url_source = if preview_url.is_some() {
                     if file_url_present {
+                        "file_contract"
+                    } else {
+                        "agent_output"
+                    }
+                } else {
+                    "agent_output"
+                };
+                let cloudflare_tunnel_error_source = if cloudflare_tunnel_error.is_some() {
+                    if file_error_present {
                         "file_contract"
                     } else {
                         "agent_output"
@@ -175,14 +236,19 @@ impl ExecutorOrchestrator {
                     contract.preview_target,
                     preview_url,
                     contract.runtime_control,
+                    cloudflare_tunnel_error,
                     "file_contract",
                     preview_url_source,
+                    cloudflare_tunnel_error_source,
                 )
             } else {
                 (
                     extract_preview_target(&lines),
                     extract_preview_url(&lines),
                     None,
+                    extract_labeled_value(&lines, "CLOUDFLARE_TUNNEL_ERROR")
+                        .or_else(|| extract_labeled_value(&lines, "cloudflare_tunnel_error")),
+                    "agent_output",
                     "agent_output",
                     "agent_output",
                 )
@@ -192,6 +258,9 @@ impl ExecutorOrchestrator {
                 extract_preview_target(&lines),
                 extract_preview_url(&lines),
                 None,
+                extract_labeled_value(&lines, "CLOUDFLARE_TUNNEL_ERROR")
+                    .or_else(|| extract_labeled_value(&lines, "cloudflare_tunnel_error")),
+                "agent_output",
                 "agent_output",
                 "agent_output",
             )
@@ -257,6 +326,16 @@ impl ExecutorOrchestrator {
             patch.insert(
                 "preview_url_source".to_string(),
                 serde_json::Value::String(preview_url_source.to_string()),
+            );
+        }
+        if let Some(error) = &cloudflare_tunnel_error {
+            patch.insert(
+                "cloudflare_tunnel_error".to_string(),
+                serde_json::Value::String(error.to_string()),
+            );
+            patch.insert(
+                "cloudflare_tunnel_error_source".to_string(),
+                serde_json::Value::String(cloudflare_tunnel_error_source.to_string()),
             );
         }
         if let Some(runtime_control) = &preview_runtime_control {
@@ -343,6 +422,7 @@ impl ExecutorOrchestrator {
         Ok(PersistedStructuredOutputs {
             preview_target,
             preview_url,
+            cloudflare_tunnel_error,
             deployment_report,
             mr_title,
             mr_description,
@@ -709,42 +789,7 @@ impl ExecutorOrchestrator {
             Err(e) => return Err(e.into()),
         };
 
-        #[derive(serde::Deserialize)]
-        struct PreviewOutputContract {
-            preview_target: Option<String>,
-            preview_url: Option<String>,
-            #[serde(default)]
-            runtime_control: Option<PreviewRuntimeControlContract>,
-        }
-
-        let parsed: PreviewOutputContract = match serde_json::from_str(&contents) {
-            Ok(p) => p,
-            Err(_) => return Ok(None),
-        };
-
-        let target = parsed
-            .preview_target
-            .map(|s| trim_repo_url_candidate(s.trim()))
-            .filter(|s| !s.is_empty() && !s.contains("<port>"));
-        let url = parsed
-            .preview_url
-            .map(|s| trim_repo_url_candidate(s.trim()))
-            .filter(|s| !s.is_empty());
-        let (target, url) = canonicalize_preview_signals(target, url);
-
-        let runtime_control = parsed
-            .runtime_control
-            .and_then(normalize_preview_runtime_control_value);
-
-        if target.is_none() && url.is_none() && runtime_control.is_none() {
-            return Ok(None);
-        }
-
-        Ok(Some(ExtractedPreviewContract {
-            preview_target: target,
-            preview_url: url,
-            runtime_control,
-        }))
+        Ok(parse_preview_output_contract(&contents))
     }
 
     /// Extract PREVIEW_TARGET from file contract first, then from logs. Persist to attempt metadata.
@@ -753,26 +798,23 @@ impl ExecutorOrchestrator {
         attempt_id: Uuid,
         worktree_path: Option<&std::path::Path>,
     ) -> Result<Option<String>> {
-        let (preview_target, preview_url, preview_runtime_control, source) =
-            if let Some(wp) = worktree_path {
-                if let Ok(Some(contract)) = self.extract_preview_from_file_contract(wp).await {
-                    (
-                        contract.preview_target,
-                        contract.preview_url,
-                        contract.runtime_control,
-                        "file_contract",
-                    )
-                } else {
-                    let lines = self
-                        .fetch_attempt_log_lines(attempt_id, "preview target extraction")
-                        .await?;
-                    (
-                        extract_preview_target(&lines),
-                        extract_preview_url(&lines),
-                        None,
-                        "agent_output",
-                    )
-                }
+        let (
+            preview_target,
+            preview_url,
+            preview_runtime_control,
+            cloudflare_tunnel_error,
+            source,
+            cloudflare_tunnel_error_source,
+        ) = if let Some(wp) = worktree_path {
+            if let Ok(Some(contract)) = self.extract_preview_from_file_contract(wp).await {
+                (
+                    contract.preview_target,
+                    contract.preview_url,
+                    contract.runtime_control,
+                    contract.cloudflare_tunnel_error,
+                    "file_contract",
+                    "file_contract",
+                )
             } else {
                 let lines = self
                     .fetch_attempt_log_lines(attempt_id, "preview target extraction")
@@ -781,26 +823,41 @@ impl ExecutorOrchestrator {
                     extract_preview_target(&lines),
                     extract_preview_url(&lines),
                     None,
+                    extract_labeled_value(&lines, "CLOUDFLARE_TUNNEL_ERROR")
+                        .or_else(|| extract_labeled_value(&lines, "cloudflare_tunnel_error")),
+                    "agent_output",
                     "agent_output",
                 )
-            };
+            }
+        } else {
+            let lines = self
+                .fetch_attempt_log_lines(attempt_id, "preview target extraction")
+                .await?;
+            (
+                extract_preview_target(&lines),
+                extract_preview_url(&lines),
+                None,
+                extract_labeled_value(&lines, "CLOUDFLARE_TUNNEL_ERROR")
+                    .or_else(|| extract_labeled_value(&lines, "cloudflare_tunnel_error")),
+                "agent_output",
+                "agent_output",
+            )
+        };
 
         let (preview_target, preview_url) =
             canonicalize_preview_signals(preview_target, preview_url);
 
-        let Some(preview_target) = preview_target else {
-            return Ok(None);
-        };
-
         let mut metadata_patch = serde_json::Map::new();
-        metadata_patch.insert(
-            "preview_target".to_string(),
-            serde_json::Value::String(preview_target.clone()),
-        );
-        metadata_patch.insert(
-            "preview_target_source".to_string(),
-            serde_json::Value::String(source.to_string()),
-        );
+        if let Some(preview_target) = preview_target.as_ref() {
+            metadata_patch.insert(
+                "preview_target".to_string(),
+                serde_json::Value::String(preview_target.clone()),
+            );
+            metadata_patch.insert(
+                "preview_target_source".to_string(),
+                serde_json::Value::String(source.to_string()),
+            );
+        }
         if let Some(url) = preview_url {
             metadata_patch.insert(
                 "preview_url".to_string(),
@@ -813,6 +870,16 @@ impl ExecutorOrchestrator {
             metadata_patch.insert(
                 "preview_url_source".to_string(),
                 serde_json::Value::String(source.to_string()),
+            );
+        }
+        if let Some(error) = cloudflare_tunnel_error {
+            metadata_patch.insert(
+                "cloudflare_tunnel_error".to_string(),
+                serde_json::Value::String(error),
+            );
+            metadata_patch.insert(
+                "cloudflare_tunnel_error_source".to_string(),
+                serde_json::Value::String(cloudflare_tunnel_error_source.to_string()),
             );
         }
         if let Some(runtime_control) = preview_runtime_control {
@@ -832,20 +899,22 @@ impl ExecutorOrchestrator {
             );
         }
 
-        sqlx::query(
-            r#"
-            UPDATE task_attempts
-            SET metadata = COALESCE(metadata, '{}'::jsonb) || $2::jsonb
-            WHERE id = $1
-            "#,
-        )
-        .bind(attempt_id)
-        .bind(serde_json::Value::Object(metadata_patch))
-        .execute(&self.db_pool)
-        .await
-        .context("Failed to persist preview target to attempt metadata")?;
+        if !metadata_patch.is_empty() {
+            sqlx::query(
+                r#"
+                UPDATE task_attempts
+                SET metadata = COALESCE(metadata, '{}'::jsonb) || $2::jsonb
+                WHERE id = $1
+                "#,
+            )
+            .bind(attempt_id)
+            .bind(serde_json::Value::Object(metadata_patch))
+            .execute(&self.db_pool)
+            .await
+            .context("Failed to persist preview target to attempt metadata")?;
+        }
 
-        Ok(Some(preview_target))
+        Ok(preview_target)
     }
 
     /// Extract origin URL directly from git remote configuration.
@@ -1250,41 +1319,67 @@ fn extract_local_preview_port(url: &str) -> Option<u16> {
 
 #[cfg(test)]
 mod tests {
-    use super::canonicalize_preview_signals;
+    use super::{canonicalize_preview_signals, parse_preview_output_contract};
 
     #[test]
     fn canonicalize_preview_signals_promotes_public_target_into_preview_url() {
         let (preview_target, preview_url) = canonicalize_preview_signals(
-            Some("https://alike-demonstration-ace-provides.trycloudflare.com".to_string()),
+            Some("https://task-abcd.preview.example.com".to_string()),
             None,
         );
 
         assert_eq!(preview_target, None);
         assert_eq!(
             preview_url.as_deref(),
-            Some("https://alike-demonstration-ace-provides.trycloudflare.com")
+            Some("https://task-abcd.preview.example.com")
         );
     }
 
     #[test]
     fn canonicalize_preview_signals_prefers_public_target_over_local_preview_url() {
         let (_preview_target, preview_url) = canonicalize_preview_signals(
-            Some("https://alike-demonstration-ace-provides.trycloudflare.com".to_string()),
+            Some("https://task-abcd.preview.example.com".to_string()),
             Some("http://127.0.0.1:4174".to_string()),
         );
 
         assert_eq!(
             preview_url.as_deref(),
-            Some("https://alike-demonstration-ace-provides.trycloudflare.com")
+            Some("https://task-abcd.preview.example.com")
         );
     }
 
     #[test]
-    fn canonicalize_preview_signals_mirrors_local_target_into_preview_url() {
+    fn canonicalize_preview_signals_keeps_local_target_separate_from_preview_url() {
         let (preview_target, preview_url) =
             canonicalize_preview_signals(Some("http://127.0.0.1:4174".to_string()), None);
 
         assert_eq!(preview_target.as_deref(), Some("http://127.0.0.1:4174"));
-        assert_eq!(preview_url.as_deref(), Some("http://127.0.0.1:4174"));
+        assert_eq!(preview_url, None);
+    }
+
+    #[test]
+    fn parse_preview_output_contract_preserves_cloudflare_tunnel_error() {
+        let contract = parse_preview_output_contract(
+            r#"{
+  "preview_target": "http://127.0.0.1:8080",
+  "cloudflare_tunnel_error": "cloudflare_not_configured — missing: CLOUDFLARE_ACCOUNT_ID",
+  "runtime_control": {
+    "controllable": true,
+    "runtime_type": "docker_compose_project",
+    "compose_project_name": "landing-page-abc"
+  }
+}"#,
+        )
+        .expect("preview contract should parse");
+
+        assert_eq!(
+            contract.preview_target.as_deref(),
+            Some("http://127.0.0.1:8080")
+        );
+        assert_eq!(
+            contract.cloudflare_tunnel_error.as_deref(),
+            Some("cloudflare_not_configured — missing: CLOUDFLARE_ACCOUNT_ID")
+        );
+        assert!(contract.runtime_control.is_some());
     }
 }

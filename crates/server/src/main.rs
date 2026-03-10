@@ -10,7 +10,7 @@ mod state;
 mod types;
 
 use acpms_executors::ExecutorOrchestrator;
-use acpms_preview::PreviewManager;
+use acpms_preview::{PreviewDelivery, PreviewFallbackReason, PreviewManager};
 use anyhow::Context;
 use api::openapi_spec::ApiDoc;
 use axum::middleware as axum_middleware;
@@ -23,6 +23,7 @@ use std::path::PathBuf;
 use std::sync::Arc;
 use tokio::sync::broadcast;
 use tower_http::{cors::CorsLayer, trace::TraceLayer};
+use url::Url;
 use uuid::Uuid;
 
 use utoipa::OpenApi;
@@ -493,6 +494,11 @@ fn is_cloudflare_configured(
             .is_some()
 }
 
+#[derive(Debug, Clone, sqlx::FromRow)]
+struct CloudflarePreviewSettings {
+    cloudflare_base_domain: Option<String>,
+}
+
 #[allow(dead_code)]
 fn missing_cloudflare_config_fields(
     cloudflare_account_id: Option<&str>,
@@ -514,6 +520,136 @@ fn missing_cloudflare_config_fields(
         missing.push("cloudflare_api_token");
     }
     missing
+}
+
+fn normalize_cloudflare_base_domain(cloudflare_base_domain: Option<&str>) -> Option<String> {
+    let trimmed = cloudflare_base_domain?.trim();
+    if trimmed.is_empty() {
+        return None;
+    }
+
+    let host = if trimmed.contains("://") {
+        Url::parse(trimmed)
+            .ok()
+            .and_then(|parsed| parsed.host_str().map(ToString::to_string))?
+    } else {
+        trimmed.to_string()
+    };
+
+    let normalized = host.trim().trim_matches('.').to_ascii_lowercase();
+    (!normalized.is_empty()).then_some(normalized)
+}
+
+fn is_loopback_preview_url(candidate: &str) -> bool {
+    let normalized = candidate.trim().to_ascii_lowercase();
+    normalized.starts_with("http://localhost:")
+        || normalized.starts_with("https://localhost:")
+        || normalized.starts_with("http://127.0.0.1:")
+        || normalized.starts_with("https://127.0.0.1:")
+        || normalized.starts_with("http://0.0.0.0:")
+        || normalized.starts_with("https://0.0.0.0:")
+        || normalized.starts_with("http://[::1]:")
+        || normalized.starts_with("https://[::1]:")
+}
+
+fn is_trycloudflare_preview_url(candidate: &str) -> bool {
+    let parsed = match Url::parse(candidate.trim()) {
+        Ok(parsed) => parsed,
+        Err(_) => return false,
+    };
+
+    parsed
+        .host_str()
+        .map(|host| {
+            let normalized = host.trim().trim_matches('.').to_ascii_lowercase();
+            normalized == "trycloudflare.com" || normalized.ends_with(".trycloudflare.com")
+        })
+        .unwrap_or(false)
+}
+
+fn agent_preview_url_matches_base_domain(agent_preview_url: &str, base_domain: &str) -> bool {
+    let parsed = match Url::parse(agent_preview_url) {
+        Ok(parsed) => parsed,
+        Err(_) => return false,
+    };
+
+    let host = match parsed.host_str() {
+        Some(host) => host.trim().trim_matches('.').to_ascii_lowercase(),
+        None => return false,
+    };
+
+    host == base_domain || host.ends_with(&format!(".{}", base_domain))
+}
+
+fn select_agent_preview_url(
+    agent_preview_url: Option<&str>,
+    expected_base_domain: Option<&str>,
+) -> Option<String> {
+    let normalized = agent_preview_url
+        .map(str::trim)
+        .filter(|value| !value.is_empty())?;
+
+    if is_loopback_preview_url(normalized) {
+        return None;
+    }
+
+    if is_trycloudflare_preview_url(normalized) {
+        return None;
+    }
+
+    if let Some(base_domain) = expected_base_domain {
+        if !agent_preview_url_matches_base_domain(normalized, base_domain) {
+            return None;
+        }
+    }
+
+    Some(normalized.to_string())
+}
+
+fn apply_local_preview_target_fallback(
+    metadata_patch: &mut serde_json::Map<String, serde_json::Value>,
+    attempt_metadata_patch: &mut serde_json::Map<String, serde_json::Value>,
+    preview_target: &str,
+    reason: PreviewFallbackReason,
+    error: Option<&str>,
+) {
+    let preview_target = preview_target.trim();
+    if preview_target.is_empty() {
+        return;
+    }
+
+    let reason_value = serde_json::Value::String(reason.as_str().to_string());
+    let preview_url_value = serde_json::Value::String(preview_target.to_string());
+    let deployment_kind_value = serde_json::Value::String("local_preview_target".to_string());
+    let deployment_status_value = serde_json::Value::String("active".to_string());
+    let preview_url_source_value = serde_json::Value::String("preview_target_fallback".to_string());
+
+    for patch in [metadata_patch, attempt_metadata_patch] {
+        patch.insert("preview_url".to_string(), preview_url_value.clone());
+        patch.insert(
+            "preview_target".to_string(),
+            serde_json::Value::String(preview_target.to_string()),
+        );
+        patch.insert("deployment_kind".to_string(), deployment_kind_value.clone());
+        patch.insert(
+            "deployment_status".to_string(),
+            deployment_status_value.clone(),
+        );
+        patch.insert(
+            "preview_url_source".to_string(),
+            preview_url_source_value.clone(),
+        );
+        patch.insert(
+            "preview_url_fallback_reason".to_string(),
+            reason_value.clone(),
+        );
+        if let Some(error) = error {
+            patch.insert(
+                "cloudflare_tunnel_error".to_string(),
+                serde_json::Value::String(error.to_string()),
+            );
+        }
+    }
 }
 
 async fn append_attempt_system_log(
@@ -591,59 +727,23 @@ async fn handle_attempt_success_deployment(
     let delivery_mode = task_success_delivery_mode(project.project_type);
     let requires_cloudflare_for_preview =
         preview_wanted && matches!(delivery_mode, TaskSuccessDeliveryMode::Preview);
-
-    if requires_cloudflare_for_preview {
-        let cloudflare_settings: Option<(Option<String>, Option<String>)> = sqlx::query_as(
+    let cloudflare_settings = if requires_cloudflare_for_preview {
+        sqlx::query_as::<_, CloudflarePreviewSettings>(
             r#"
-            SELECT cloudflare_account_id, cloudflare_api_token_encrypted
+            SELECT
+                cloudflare_base_domain
             FROM system_settings
             LIMIT 1
             "#,
         )
         .fetch_optional(db)
-        .await?;
-
-        let (account_id, api_token) = cloudflare_settings
-            .as_ref()
-            .map(|(account_id, api_token)| (account_id.as_deref(), api_token.as_deref()))
-            .unwrap_or((None, None));
-        let cloudflare_ready = is_cloudflare_configured(account_id, api_token);
-
-        if !cloudflare_ready {
-            // Skip deploy only when Cloudflare is not configured. When configured, we must proceed to deploy.
-            let message = "Cloudflare is not configured. Configure in System Settings (/settings) to enable preview. Task completed successfully.".to_string();
-            let mut metadata_patch = serde_json::Map::new();
-            metadata_patch.insert(
-                "deployment_status".to_string(),
-                serde_json::Value::String("skipped_cloudflare_not_configured".to_string()),
-            );
-            metadata_patch.insert(
-                "deployment_error".to_string(),
-                serde_json::Value::String(message.clone()),
-            );
-            metadata_patch.insert(
-                "production_deployment_status".to_string(),
-                serde_json::Value::String("skipped_cloudflare_not_configured".to_string()),
-            );
-            metadata_patch.insert(
-                "production_deployment_error".to_string(),
-                serde_json::Value::String(message.clone()),
-            );
-            metadata_patch.insert(
-                "deploy_precheck".to_string(),
-                serde_json::Value::String("skipped_cloudflare_not_configured".to_string()),
-            );
-            metadata_patch.insert(
-                "deploy_precheck_reason".to_string(),
-                serde_json::Value::String(message.clone()),
-            );
-
-            update_task_metadata_patch(db, task.id, serde_json::Value::Object(metadata_patch))
-                .await?;
-            let _ = append_attempt_system_log(db, attempt_id, &message).await;
-            return Ok(());
-        }
-    }
+        .await?
+    } else {
+        None
+    };
+    let expected_preview_base_domain = cloudflare_settings.as_ref().and_then(|settings| {
+        normalize_cloudflare_base_domain(settings.cloudflare_base_domain.as_deref())
+    });
 
     let _agent_reported_deploy = attempt.metadata.get("preview_target").is_some()
         || attempt.metadata.get("preview_url").is_some()
@@ -659,21 +759,24 @@ async fn handle_attempt_success_deployment(
                 .metadata
                 .get("preview_target")
                 .and_then(|value| value.as_str());
-            let preview_url = attempt
-                .metadata
-                .get("preview_url")
-                .and_then(|value| value.as_str())
-                .or_else(|| {
-                    attempt
-                        .metadata
-                        .get("preview_url_agent")
-                        .and_then(|value| value.as_str())
-                });
+            let accepted_agent_preview_url = select_agent_preview_url(
+                attempt
+                    .metadata
+                    .get("preview_url")
+                    .and_then(|value| value.as_str())
+                    .or_else(|| {
+                        attempt
+                            .metadata
+                            .get("preview_url_agent")
+                            .and_then(|value| value.as_str())
+                    }),
+                expected_preview_base_domain.as_deref(),
+            );
 
-            if let Some(agent_url) = preview_url {
+            if let Some(agent_url) = accepted_agent_preview_url {
                 metadata_patch.insert(
                     "preview_url".to_string(),
-                    serde_json::Value::String(agent_url.to_string()),
+                    serde_json::Value::String(agent_url),
                 );
                 if let Some(target) = preview_target {
                     metadata_patch.insert(
@@ -700,17 +803,16 @@ async fn handle_attempt_success_deployment(
                 );
             } else if preview_wanted {
                 if !preview_manager.runtime_enabled() {
-                    metadata_patch.insert(
-                        "deployment_status".to_string(),
-                        serde_json::Value::String("skipped_preview_runtime_disabled".to_string()),
-                    );
-                    metadata_patch.insert(
-                        "deployment_error".to_string(),
-                        serde_json::Value::String(preview_runtime_disabled_message(
-                            project.project_type,
-                        )),
-                    );
-                } else if let Some(preview) = preview_manager
+                    if let Some(target) = preview_target {
+                        apply_local_preview_target_fallback(
+                            &mut metadata_patch,
+                            &mut attempt_metadata_patch,
+                            target,
+                            PreviewFallbackReason::RuntimeDisabled,
+                            Some(&preview_runtime_disabled_message(project.project_type)),
+                        );
+                    }
+                } else if let Some(preview_delivery) = preview_manager
                     .create_preview_if_enabled(
                         &project,
                         attempt_id,
@@ -720,46 +822,88 @@ async fn handle_attempt_success_deployment(
                     )
                     .await?
                 {
-                    metadata_patch.insert(
-                        "preview_url".to_string(),
-                        serde_json::Value::String(preview.preview_url.clone()),
-                    );
-                    if let Some(target) = preview_target {
-                        metadata_patch.insert(
-                            "preview_target".to_string(),
-                            serde_json::Value::String(target.to_string()),
-                        );
-                    }
-                    metadata_patch.insert(
-                        "deployment_kind".to_string(),
-                        serde_json::Value::String("preview_tunnel".to_string()),
-                    );
+                    match preview_delivery {
+                        PreviewDelivery::Managed(preview) => {
+                            metadata_patch.insert(
+                                "preview_url".to_string(),
+                                serde_json::Value::String(preview.preview_url.clone()),
+                            );
+                            attempt_metadata_patch.insert(
+                                "preview_url".to_string(),
+                                serde_json::Value::String(preview.preview_url.clone()),
+                            );
+                            if let Some(target) = preview_target {
+                                metadata_patch.insert(
+                                    "preview_target".to_string(),
+                                    serde_json::Value::String(target.to_string()),
+                                );
+                                attempt_metadata_patch.insert(
+                                    "preview_target".to_string(),
+                                    serde_json::Value::String(target.to_string()),
+                                );
+                            }
+                            metadata_patch.insert(
+                                "deployment_kind".to_string(),
+                                serde_json::Value::String("preview_tunnel".to_string()),
+                            );
+                            attempt_metadata_patch.insert(
+                                "deployment_kind".to_string(),
+                                serde_json::Value::String("preview_tunnel".to_string()),
+                            );
 
-                    if let Err(e) = preview_manager
-                        .start_preview_runtime(attempt_id, project.project_type)
-                        .await
-                    {
-                        tracing::warn!(
-                            "Preview tunnel created but runtime start failed for attempt {}: {}",
-                            attempt_id,
-                            e
-                        );
-                        metadata_patch.insert(
-                            "deployment_status".to_string(),
-                            serde_json::Value::String("preview_runtime_failed".to_string()),
-                        );
-                        metadata_patch.insert(
-                            "deployment_error".to_string(),
-                            serde_json::Value::String(format!(
-                                "Preview URL created but runtime failed to start: {}. You may need to manually start preview.",
-                                e
-                            )),
-                        );
-                    } else {
-                        metadata_patch.insert(
-                            "deployment_status".to_string(),
-                            serde_json::Value::String("active".to_string()),
-                        );
+                            if let Err(e) = preview_manager
+                                .start_preview_runtime(attempt_id, project.project_type)
+                                .await
+                            {
+                                tracing::warn!(
+                                    "Preview tunnel created but runtime start failed for attempt {}: {}",
+                                    attempt_id,
+                                    e
+                                );
+                                metadata_patch.insert(
+                                    "deployment_status".to_string(),
+                                    serde_json::Value::String("preview_runtime_failed".to_string()),
+                                );
+                                attempt_metadata_patch.insert(
+                                    "deployment_status".to_string(),
+                                    serde_json::Value::String("preview_runtime_failed".to_string()),
+                                );
+                                metadata_patch.insert(
+                                    "deployment_error".to_string(),
+                                    serde_json::Value::String(format!(
+                                        "Preview URL created but runtime failed to start: {}. You may need to manually start preview.",
+                                        e
+                                    )),
+                                );
+                                attempt_metadata_patch.insert(
+                                    "deployment_error".to_string(),
+                                    serde_json::Value::String(format!(
+                                        "Preview URL created but runtime failed to start: {}. You may need to manually start preview.",
+                                        e
+                                    )),
+                                );
+                            } else {
+                                metadata_patch.insert(
+                                    "deployment_status".to_string(),
+                                    serde_json::Value::String("active".to_string()),
+                                );
+                                attempt_metadata_patch.insert(
+                                    "deployment_status".to_string(),
+                                    serde_json::Value::String("active".to_string()),
+                                );
+                            }
+                        }
+                        PreviewDelivery::AgentFallback { reason, error } => {
+                            if let Some(target) = preview_target {
+                                apply_local_preview_target_fallback(
+                                    &mut metadata_patch,
+                                    &mut attempt_metadata_patch,
+                                    target,
+                                    reason,
+                                    error.as_deref(),
+                                );
+                            }
+                        }
                     }
                 }
             }
@@ -1267,6 +1411,55 @@ mod tests {
             vec!["cloudflare_account_id"]
         );
         assert!(missing_cloudflare_config_fields(Some("account"), Some("token")).is_empty());
+    }
+
+    #[test]
+    fn normalize_cloudflare_base_domain_accepts_plain_host_or_url() {
+        assert_eq!(
+            normalize_cloudflare_base_domain(Some("preview.example.com")),
+            Some("preview.example.com".to_string())
+        );
+        assert_eq!(
+            normalize_cloudflare_base_domain(Some("https://preview.example.com/")),
+            Some("preview.example.com".to_string())
+        );
+    }
+
+    #[test]
+    fn select_agent_preview_url_rejects_loopback_and_wrong_domain() {
+        assert_eq!(
+            select_agent_preview_url(Some("http://127.0.0.1:8080"), Some("thaonv.online")),
+            None
+        );
+        assert_eq!(
+            select_agent_preview_url(
+                Some("https://border-wages-forget-kinda.trycloudflare.com"),
+                Some("thaonv.online")
+            ),
+            None
+        );
+    }
+
+    #[test]
+    fn select_agent_preview_url_rejects_trycloudflare_without_domain_requirements() {
+        assert_eq!(
+            select_agent_preview_url(
+                Some("https://border-wages-forget-kinda.trycloudflare.com"),
+                None
+            ),
+            None
+        );
+    }
+
+    #[test]
+    fn select_agent_preview_url_accepts_matching_custom_domain() {
+        assert_eq!(
+            select_agent_preview_url(
+                Some("https://landing-page-abc-preview.thaonv.online"),
+                Some("thaonv.online")
+            ),
+            Some("https://landing-page-abc-preview.thaonv.online".to_string())
+        );
     }
 
     #[test]

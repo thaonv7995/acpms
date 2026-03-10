@@ -443,7 +443,9 @@ impl OpenClawAdminService {
                 .bind(pending_token_id)
                 .execute(&self.pool)
                 .await
-                .map_err(|error| Self::internal("delete pending OpenClaw bootstrap token", error))?;
+                .map_err(|error| {
+                    Self::internal("delete pending OpenClaw bootstrap token", error)
+                })?;
 
             return Ok(Self::build_pending_summary(row));
         }

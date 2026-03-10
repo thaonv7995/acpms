@@ -66,26 +66,65 @@ function getPreviewDeliveryKind(projectType?: string): PreviewDeliveryKind {
   }
 }
 
+function isLoopbackPreviewUrl(candidate?: string): boolean {
+  if (!candidate) return false;
+
+  const normalized = candidate.trim().toLowerCase();
+  return (
+    normalized.startsWith('http://localhost:') ||
+    normalized.startsWith('https://localhost:') ||
+    normalized.startsWith('http://127.0.0.1:') ||
+    normalized.startsWith('https://127.0.0.1:') ||
+    normalized.startsWith('http://0.0.0.0:') ||
+    normalized.startsWith('https://0.0.0.0:') ||
+    normalized.startsWith('http://[::1]:') ||
+    normalized.startsWith('https://[::1]:')
+  );
+}
+
+function readPreviewMetadataValue(
+  metadata: Record<string, unknown> | undefined,
+  key: 'preview_url' | 'preview_url_agent' | 'preview_target'
+): string | undefined {
+  const value = metadata?.[key];
+  return typeof value === 'string' && value.trim().length > 0
+    ? value.trim()
+    : undefined;
+}
+
 function getAttemptPreviewUrl(
-  metadata?: Record<string, unknown>,
+  attemptMetadata?: Record<string, unknown>,
+  taskMetadata?: Record<string, unknown>,
   taskStatus?: string
 ): string | undefined {
-  if (!metadata) return undefined;
-  if (taskStatus === 'done') return undefined;
-  if (metadata.preview_runtime_state === 'stopped') return undefined;
+  if (attemptMetadata?.preview_runtime_state === 'stopped') return undefined;
 
-  const previewUrl = metadata.preview_url;
-  if (typeof previewUrl === 'string' && previewUrl.trim().length > 0) {
-    return previewUrl;
+  const explicitPreviewUrls = [
+    readPreviewMetadataValue(attemptMetadata, 'preview_url'),
+    readPreviewMetadataValue(attemptMetadata, 'preview_url_agent'),
+    readPreviewMetadataValue(taskMetadata, 'preview_url'),
+    readPreviewMetadataValue(taskMetadata, 'preview_url_agent'),
+  ].filter((value): value is string => Boolean(value));
+
+  const publicPreviewUrl = explicitPreviewUrls.find(
+    (value) => !isLoopbackPreviewUrl(value)
+  );
+  if (publicPreviewUrl) {
+    return publicPreviewUrl;
   }
 
-  const previewUrlAgent = metadata.preview_url_agent;
-  if (typeof previewUrlAgent === 'string' && previewUrlAgent.trim().length > 0) {
-    return previewUrlAgent;
+  if (taskStatus === 'done') {
+    return undefined;
   }
 
-  const previewTarget = metadata.preview_target;
-  if (typeof previewTarget === 'string' && previewTarget.trim().length > 0) {
+  if (explicitPreviewUrls.length > 0) {
+    return explicitPreviewUrls[0];
+  }
+
+  const previewTarget =
+    readPreviewMetadataValue(attemptMetadata, 'preview_target') ||
+    readPreviewMetadataValue(taskMetadata, 'preview_target');
+  if (previewTarget) {
     return previewTarget;
   }
 
@@ -297,8 +336,13 @@ export function ProjectTasksPage() {
     [selectedAttempt?.id, selectedAttempt?.metadata, usesArtifactDownloads]
   );
   const selectedAttemptPreviewUrl = useMemo(
-    () => getAttemptPreviewUrl(selectedAttempt?.metadata, selectedTask?.status),
-    [selectedAttempt?.metadata, selectedTask?.status]
+    () =>
+      getAttemptPreviewUrl(
+        selectedAttempt?.metadata,
+        selectedTask?.metadata,
+        selectedTask?.status
+      ),
+    [selectedAttempt?.metadata, selectedTask?.metadata, selectedTask?.status]
   );
   const artifactDownloadDisabledReason = useMemo(() => {
     if (!usesArtifactDownloads) return undefined;

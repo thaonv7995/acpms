@@ -33,6 +33,32 @@ pub struct PreviewManager {
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum PreviewFallbackReason {
+    CloudflareNotConfigured,
+    CloudflareProvisioningFailed,
+    RuntimeDisabled,
+}
+
+impl PreviewFallbackReason {
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::CloudflareNotConfigured => "cloudflare_not_configured",
+            Self::CloudflareProvisioningFailed => "cloudflare_preview_creation_failed",
+            Self::RuntimeDisabled => "preview_runtime_disabled",
+        }
+    }
+}
+
+#[derive(Debug)]
+pub enum PreviewDelivery {
+    Managed(PreviewInfo),
+    AgentFallback {
+        reason: PreviewFallbackReason,
+        error: Option<String>,
+    },
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum PackageManager {
     Npm,
     Pnpm,
@@ -206,41 +232,47 @@ impl PreviewManager {
             .filter(|value| !value.is_empty());
 
         // Generate preview URL and capture DNS record ID
-        let (preview_url, dns_record_id) =
-            if let (Some(zone_id_value), Some(base_domain_value)) = (&zone_id, &base_domain) {
-                // New Flow: Create DNS record
-                let subdomain = format!("task-{}", &attempt_id.to_string()[..8]);
-                let full_domain = format!("{}.{}", subdomain, base_domain_value);
-                let target = format!("{}.cfargotunnel.com", credentials.tunnel_id);
+        let (preview_url, dns_record_id) = if let (Some(zone_id_value), Some(base_domain_value)) =
+            (&zone_id, &base_domain)
+        {
+            // New Flow: Create DNS record
+            let subdomain = format!("task-{}", &attempt_id.to_string()[..8]);
+            let full_domain = format!("{}.{}", subdomain, base_domain_value);
+            let target = format!("{}.cfargotunnel.com", credentials.tunnel_id);
 
-                info!("Creating DNS record for {}", full_domain);
-                let record_id_result = cloudflare
-                    .create_dns_record(zone_id_value, &subdomain, &target, "CNAME", true)
+            info!("Creating DNS record for {}", full_domain);
+            let record_id_result = cloudflare
+                .create_dns_record(zone_id_value, &subdomain, &target, "CNAME", true)
+                .await;
+            let record_id = match record_id_result {
+                Ok(record_id) => record_id,
+                Err(error) => {
+                    self.rollback_cloudflare_resources(
+                        &cloudflare,
+                        Some(zone_id_value.as_str()),
+                        None,
+                        &credentials.tunnel_id,
+                        "DNS creation failed in create_preview",
+                    )
                     .await;
-                let record_id = match record_id_result {
-                    Ok(record_id) => record_id,
-                    Err(error) => {
-                        self.rollback_cloudflare_resources(
-                            &cloudflare,
-                            Some(zone_id_value.as_str()),
-                            None,
-                            &credentials.tunnel_id,
-                            "DNS creation failed in create_preview",
-                        )
-                        .await;
-                        return Err(error).context("Failed to create DNS record");
-                    }
-                };
-
-                (format!("https://{}", full_domain), Some(record_id))
-            } else {
-                // Fallback: Use default Cloudflare URL
-                warn!("Missing Zone ID or Base Domain settings. Using default Cloudflare URL.");
-                (
-                    cloudflare.generate_preview_url(&credentials.tunnel_id),
-                    None,
-                )
+                    return Err(error).context("Failed to create DNS record");
+                }
             };
+
+            (format!("https://{}", full_domain), Some(record_id))
+        } else {
+            self.rollback_cloudflare_resources(
+                &cloudflare,
+                zone_id.as_deref(),
+                None,
+                &credentials.tunnel_id,
+                "Missing zone or base domain in create_cloudflare_preview",
+            )
+            .await;
+            anyhow::bail!(
+                    "Missing Cloudflare Zone ID or Base Domain; refusing to use default Cloudflare tunnel URL"
+                );
+        };
 
         // Encrypt credentials
         let credentials_encrypted = match self.encryption.encrypt(&credentials.credentials_file) {
@@ -574,7 +606,7 @@ impl PreviewManager {
         task_name: &str,
         artifact_id: Option<Uuid>,
         preview_target: Option<&str>,
-    ) -> Result<Option<PreviewInfo>> {
+    ) -> Result<Option<PreviewDelivery>> {
         // Check if preview is enabled (auto_deploy = preview when task completes; preview_enabled is legacy alias)
         let preview_wanted = project.settings.auto_deploy || project.settings.preview_enabled;
         if !preview_wanted {
@@ -595,63 +627,12 @@ impl PreviewManager {
 
         if !self.cloudflare_preview_configured().await? {
             info!(
-                "Cloudflare preview config missing; using local preview URL for project {} attempt {}",
+                "Cloudflare preview config missing; falling back to agent local preview target for project {} attempt {}",
                 project.name, attempt_id
             );
-
-            let tunnel = self
-                .create_local_preview_tunnel(attempt_id, task_name, ttl_days)
-                .await?;
-            let preview_url = tunnel.preview_url.clone();
-
-            let preview_deployment_result = sqlx::query_as::<_, PreviewDeployment>(
-                r#"
-                INSERT INTO preview_deployments (
-                    attempt_id, project_id, artifact_id, url, tunnel_id,
-                    dns_record_id, status, expires_at, metadata
-                )
-                VALUES ($1, $2, $3, $4, $5, $6, 'active', $7, $8)
-                RETURNING *
-                "#,
-            )
-            .bind(attempt_id)
-            .bind(project.id)
-            .bind(artifact_id)
-            .bind(&preview_url)
-            .bind(&tunnel.tunnel_id)
-            .bind(Option::<String>::None)
-            .bind(tunnel.expires_at)
-            .bind(serde_json::json!({
-                "preview_target": preview_target,
-                "target_source": if preview_target.is_some() { "agent_output" } else { "unspecified" },
-                "delivery_mode": "local_runtime",
-            }))
-            .fetch_one(&self.db)
-            .await;
-
-            if let Err(error) = preview_deployment_result {
-                let _ = sqlx::query(
-                    r#"
-                    UPDATE cloudflare_tunnels
-                    SET status = $1, deleted_at = NOW(), stopped_at = COALESCE(stopped_at, NOW())
-                    WHERE id = $2
-                    "#,
-                )
-                .bind(TunnelStatus::Deleted)
-                .bind(tunnel.id)
-                .execute(&self.db)
-                .await;
-
-                return Err(error).context("Failed to insert local preview deployment record");
-            }
-
-            return Ok(Some(PreviewInfo {
-                id: tunnel.id,
-                attempt_id: tunnel.attempt_id,
-                preview_url: tunnel.preview_url,
-                status: tunnel.status,
-                created_at: tunnel.created_at,
-                expires_at: tunnel.expires_at,
+            return Ok(Some(PreviewDelivery::AgentFallback {
+                reason: PreviewFallbackReason::CloudflareNotConfigured,
+                error: None,
             }));
         }
 
@@ -666,67 +647,15 @@ impl PreviewManager {
             )
             .await
         {
-            Ok(preview) => Ok(Some(preview)),
+            Ok(preview) => Ok(Some(PreviewDelivery::Managed(preview))),
             Err(error) => {
                 warn!(
-                    "Cloudflare preview creation failed for project {} attempt {}. Falling back to local preview: {:#}",
+                    "Cloudflare preview creation failed for project {} attempt {}. Falling back to agent local preview target: {:#}",
                     project.name, attempt_id, error
                 );
-
-                let tunnel = self
-                    .create_local_preview_tunnel(attempt_id, task_name, ttl_days)
-                    .await?;
-                let preview_url = tunnel.preview_url.clone();
-
-                let preview_deployment_result = sqlx::query_as::<_, PreviewDeployment>(
-                    r#"
-                    INSERT INTO preview_deployments (
-                        attempt_id, project_id, artifact_id, url, tunnel_id,
-                        dns_record_id, status, expires_at, metadata
-                    )
-                    VALUES ($1, $2, $3, $4, $5, $6, 'active', $7, $8)
-                    RETURNING *
-                    "#,
-                )
-                .bind(attempt_id)
-                .bind(project.id)
-                .bind(artifact_id)
-                .bind(&preview_url)
-                .bind(&tunnel.tunnel_id)
-                .bind(Option::<String>::None)
-                .bind(tunnel.expires_at)
-                .bind(serde_json::json!({
-                    "preview_target": preview_target,
-                    "target_source": if preview_target.is_some() { "agent_output" } else { "unspecified" },
-                    "delivery_mode": "local_runtime",
-                    "fallback_reason": "cloudflare_preview_creation_failed",
-                }))
-                .fetch_one(&self.db)
-                .await;
-
-                if let Err(error) = preview_deployment_result {
-                    let _ = sqlx::query(
-                        r#"
-                        UPDATE cloudflare_tunnels
-                        SET status = $1, deleted_at = NOW(), stopped_at = COALESCE(stopped_at, NOW())
-                        WHERE id = $2
-                        "#,
-                    )
-                    .bind(TunnelStatus::Deleted)
-                    .bind(tunnel.id)
-                    .execute(&self.db)
-                    .await;
-
-                    return Err(error).context("Failed to insert local preview deployment record");
-                }
-
-                Ok(Some(PreviewInfo {
-                    id: tunnel.id,
-                    attempt_id: tunnel.attempt_id,
-                    preview_url: tunnel.preview_url,
-                    status: tunnel.status,
-                    created_at: tunnel.created_at,
-                    expires_at: tunnel.expires_at,
+                Ok(Some(PreviewDelivery::AgentFallback {
+                    reason: PreviewFallbackReason::CloudflareProvisioningFailed,
+                    error: Some(format!("{:#}", error)),
                 }))
             }
         }
@@ -772,39 +701,46 @@ impl PreviewManager {
             .filter(|value| !value.is_empty());
 
         // Generate preview URL and capture DNS record ID
-        let (preview_url, dns_record_id) =
-            if let (Some(zone_id_value), Some(base_domain_value)) = (&zone_id, &base_domain) {
-                let subdomain = format!("task-{}", &attempt_id.to_string()[..8]);
-                let full_domain = format!("{}.{}", subdomain, base_domain_value);
-                let target = format!("{}.cfargotunnel.com", credentials.tunnel_id);
+        let (preview_url, dns_record_id) = if let (Some(zone_id_value), Some(base_domain_value)) =
+            (&zone_id, &base_domain)
+        {
+            let subdomain = format!("task-{}", &attempt_id.to_string()[..8]);
+            let full_domain = format!("{}.{}", subdomain, base_domain_value);
+            let target = format!("{}.cfargotunnel.com", credentials.tunnel_id);
 
-                info!("Creating DNS record for {}", full_domain);
-                let record_id_result = cloudflare
-                    .create_dns_record(zone_id_value, &subdomain, &target, "CNAME", true)
+            info!("Creating DNS record for {}", full_domain);
+            let record_id_result = cloudflare
+                .create_dns_record(zone_id_value, &subdomain, &target, "CNAME", true)
+                .await;
+            let record_id = match record_id_result {
+                Ok(record_id) => record_id,
+                Err(error) => {
+                    self.rollback_cloudflare_resources(
+                        &cloudflare,
+                        Some(zone_id_value.as_str()),
+                        None,
+                        &credentials.tunnel_id,
+                        "DNS creation failed in create_preview_if_enabled",
+                    )
                     .await;
-                let record_id = match record_id_result {
-                    Ok(record_id) => record_id,
-                    Err(error) => {
-                        self.rollback_cloudflare_resources(
-                            &cloudflare,
-                            Some(zone_id_value.as_str()),
-                            None,
-                            &credentials.tunnel_id,
-                            "DNS creation failed in create_preview_if_enabled",
-                        )
-                        .await;
-                        return Err(error).context("Failed to create DNS record");
-                    }
-                };
-
-                (format!("https://{}", full_domain), Some(record_id))
-            } else {
-                warn!("Missing Zone ID or Base Domain settings. Using default Cloudflare URL.");
-                (
-                    cloudflare.generate_preview_url(&credentials.tunnel_id),
-                    None,
-                )
+                    return Err(error).context("Failed to create DNS record");
+                }
             };
+
+            (format!("https://{}", full_domain), Some(record_id))
+        } else {
+            self.rollback_cloudflare_resources(
+                &cloudflare,
+                zone_id.as_deref(),
+                None,
+                &credentials.tunnel_id,
+                "Missing zone or base domain in create_preview_if_enabled",
+            )
+            .await;
+            anyhow::bail!(
+                    "Missing Cloudflare Zone ID or Base Domain; refusing to use default Cloudflare tunnel URL"
+                );
+        };
 
         // Encrypt credentials
         let credentials_encrypted = match self.encryption.encrypt(&credentials.credentials_file) {

@@ -63,13 +63,14 @@ impl AgentLogBuffer {
     ) -> (Uuid, DateTime<Utc>) {
         let id = Uuid::new_v4();
         let created_at = Utc::now();
+        let sanitized_content = crate::sanitize_log(content);
 
         let mut inner = self.inner.lock().await;
         inner.buffer.push(LogEntry {
             id,
             attempt_id,
             log_type: log_type.to_string(),
-            content: content.to_string(),
+            content: sanitized_content,
             created_at,
         });
 
@@ -209,7 +210,7 @@ pub fn parse_jsonl_to_agent_logs(bytes: &[u8]) -> Vec<AgentLog> {
             None => continue,
         };
         let content = match v.get("content").and_then(|x| x.as_str()) {
-            Some(s) => s.to_string(),
+            Some(s) => crate::sanitize_log(s),
             None => continue,
         };
         let created_at = match v
@@ -297,7 +298,7 @@ pub async fn append_log_to_jsonl(
         id,
         attempt_id,
         log_type: log_type.to_string(),
-        content: content.to_string(),
+        content: crate::sanitize_log(content),
         created_at,
     };
     append_to_jsonl_file(attempt_id, vec![&entry]).await
@@ -322,7 +323,7 @@ async fn append_to_jsonl_file(attempt_id: Uuid, entries: Vec<&LogEntry>) -> Resu
             "id": entry.id,
             "attempt_id": entry.attempt_id,
             "log_type": entry.log_type,
-            "content": entry.content,
+            "content": crate::sanitize_log(&entry.content),
             "created_at": entry.created_at,
         });
         let s = serde_json::to_string(&line).context("Failed to serialize log entry")?;
@@ -331,4 +332,29 @@ async fn append_to_jsonl_file(attempt_id: Uuid, entries: Vec<&LogEntry>) -> Resu
     }
 
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::parse_jsonl_to_agent_logs;
+    use chrono::Utc;
+    use uuid::Uuid;
+
+    #[test]
+    fn parse_jsonl_to_agent_logs_redacts_legacy_secret_content_on_read() {
+        let attempt_id = Uuid::new_v4();
+        let log_id = Uuid::new_v4();
+        let created_at = Utc::now().to_rfc3339();
+        let bytes = format!(
+            "{{\"id\":\"{log_id}\",\"attempt_id\":\"{attempt_id}\",\"log_type\":\"stdout\",\"content\":\"Authorization: Bearer abcdefghijklmnopqrstuvwxyz123456\",\"created_at\":\"{created_at}\"}}\n"
+        );
+
+        let logs = parse_jsonl_to_agent_logs(bytes.as_bytes());
+
+        assert_eq!(logs.len(), 1);
+        assert_eq!(
+            logs[0].content,
+            "Authorization: Bearer ***BEARER_TOKEN_REDACTED***"
+        );
+    }
 }

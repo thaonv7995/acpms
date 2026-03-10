@@ -57,9 +57,12 @@ const PREVIEW_RUNTIME_DISABLED_REASON =
 const AGENT_PREVIEW_FOLLOW_UP_PROMPT = [
   'Deploy a preview for the latest code in this attempt.',
   'Use the `preview-docker-runtime` skill.',
-  'If a public/tunneled preview is needed, also use `setup-cloudflare-tunnel` after the local Docker preview is reachable.',
+  'If a public/tunneled preview is needed, also use `create-cloudflare-custom-domain-preview-url` after the local Docker preview is reachable.',
   'Run the preview in Docker only, not as a host process.',
-  'Keep `PREVIEW_TARGET` as the local Docker preview URL. If a public Cloudflare tunnel URL is available, write it to `PREVIEW_URL`; otherwise set `PREVIEW_URL` to the same local URL as `PREVIEW_TARGET`.',
+  'Keep `PREVIEW_TARGET` as the local Docker preview URL.',
+  'If you emit `PREVIEW_URL`, it must be a real public URL on `CLOUDFLARE_BASE_DOMAIN` when Cloudflare settings are present.',
+  'Do not use `*.trycloudflare.com` and do not CNAME a custom domain to a quick tunnel URL.',
+  'If you cannot create the proper custom-domain preview yourself, leave `PREVIEW_URL` unset or equal to the local URL and include `CLOUDFLARE_TUNNEL_ERROR: <reason>`.',
   'Verify the preview serves the latest code, then print `PREVIEW_TARGET: <local-url>` in the logs and also print `PREVIEW_URL: <url>` where the URL is public when available, or the same local URL when no public URL exists.',
   'Write `.acpms/preview-output.json` with `preview_target`, `preview_url`, and `runtime_control` metadata if the runtime can be stopped by ACPMS.',
 ].join(' ');
@@ -75,8 +78,10 @@ const AGENT_PREVIEW_STOP_PROMPT = [
 const AGENT_PREVIEW_RESTART_PROMPT = [
   'Restart the preview for the latest code in this attempt.',
   'Use the `preview-docker-runtime` skill.',
-  'If a public/tunneled preview is needed, also use `setup-cloudflare-tunnel` after the local Docker preview is reachable.',
+  'If a public/tunneled preview is needed, also use `create-cloudflare-custom-domain-preview-url` after the local Docker preview is reachable.',
   'Stop the old Docker preview runtime if one is still running, start a fresh Docker preview, and keep `PREVIEW_TARGET` as the local Docker URL. If a public tunnel URL exists, write it to `PREVIEW_URL`; otherwise keep `PREVIEW_URL` equal to the same local URL.',
+  'Any public `PREVIEW_URL` must use `CLOUDFLARE_BASE_DOMAIN` when Cloudflare settings are present.',
+  'Do not use `*.trycloudflare.com` and do not point a custom domain at a quick tunnel URL.',
   'Verify the preview serves the latest code, then print `PREVIEW_TARGET: <local-url>` in the logs and also print `PREVIEW_URL: <url>` where the URL is public when available, or the same local URL when no public URL exists.',
   'Write `.acpms/preview-output.json` with the new `preview_target`, `preview_url`, and `runtime_control` metadata if ACPMS can stop it.',
 ].join(' ');
@@ -106,7 +111,13 @@ export function PreviewPanelWrapper({
     dismissOnly,
     cloudflareReady,
     missingCloudflareFields,
-  } = useDevServer(taskId, attemptId, fallbackPreviewUrl, autoStartOnMount);
+  } = useDevServer(
+    taskId,
+    attemptId,
+    fallbackPreviewUrl,
+    autoStartOnMount,
+    attemptStatus
+  );
   const { processes } = useExecutionProcessesStream(attemptId);
   const [isRequestingAgentPreview, setIsRequestingAgentPreview] = useState(false);
   const [previewActionError, setPreviewActionError] = useState<string | undefined>();

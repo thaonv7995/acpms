@@ -119,8 +119,52 @@ struct PreparedReferenceManifest {
 
 static GITLAB_PAT_REGEX: Lazy<Option<Regex>> =
     Lazy::new(|| Regex::new(r"glpat-[A-Za-z0-9_-]{20,}").ok());
+static GITHUB_TOKEN_REGEX: Lazy<Option<Regex>> = Lazy::new(|| {
+    Regex::new(r"\b(?:gh[pousr]_[A-Za-z0-9_]{20,}|github_pat_[A-Za-z0-9_]{20,})\b").ok()
+});
+static BEARER_TOKEN_REGEX: Lazy<Option<Regex>> =
+    Lazy::new(|| Regex::new(r"(?i)\b(bearer)(\s+)([A-Za-z0-9._~+/=-]{12,})").ok());
+static SECRET_JSON_VALUE_REGEX: Lazy<Option<Regex>> = Lazy::new(|| {
+    Regex::new(
+        r#"(?i)("(?:(?:access|refresh)_token|api[_-]?key|api[_-]?token|client_secret|password|secret|token)"\s*:\s*")([^"]+)(")"#,
+    )
+    .ok()
+});
+static SECRET_QUERY_PARAM_REGEX: Lazy<Option<Regex>> = Lazy::new(|| {
+    Regex::new(
+        r#"(?i)([?&](?:(?:access|refresh)_token|api[_-]?key|api[_-]?token|client_secret|password|secret|token)=)([^&#\s]+)"#,
+    )
+    .ok()
+});
+static SECRET_ASSIGNMENT_REGEX: Lazy<Option<Regex>> = Lazy::new(|| {
+    Regex::new(
+        r#"(?i)\b((?:(?:access|refresh)_token|api[_-]?key|api[_-]?token|client_secret|password|secret|token|[A-Z][A-Z0-9_]*(?:TOKEN|PASSWORD|SECRET|API_KEY|API_TOKEN)))\b(\s*[:=]\s*)([^\s,;]+)"#,
+    )
+    .ok()
+});
 static EMAIL_REGEX: Lazy<Option<Regex>> =
     Lazy::new(|| Regex::new(r"(?i)\b[a-z0-9._%+\-]+@[a-z0-9.\-]+\.[a-z]{2,}\b").ok());
+
+fn is_non_secret_placeholder(value: &str) -> bool {
+    let trimmed = strip_matching_quotes(value).trim();
+    if trimmed.is_empty() {
+        return true;
+    }
+
+    let lowered = trimmed.to_ascii_lowercase();
+    lowered.starts_with('$')
+        || lowered.starts_with("${")
+        || lowered.starts_with("$(")
+        || lowered.starts_with("***")
+        || lowered == "(set)"
+        || lowered.starts_with("(set,")
+        || lowered.contains("not set")
+        || lowered.contains("missing")
+        || lowered.contains("unset")
+        || lowered.contains("hidden")
+        || lowered.contains("redacted")
+        || lowered.contains("empty/not set")
+}
 
 /// Sanitize log content to redact sensitive information.
 ///
@@ -133,6 +177,76 @@ pub fn sanitize_log(line: &str) -> String {
     if let Some(pat_regex) = GITLAB_PAT_REGEX.as_ref() {
         sanitized = pat_regex
             .replace_all(&sanitized, "***GITLAB_PAT_REDACTED***")
+            .to_string();
+    }
+    if let Some(github_token_regex) = GITHUB_TOKEN_REGEX.as_ref() {
+        sanitized = github_token_regex
+            .replace_all(&sanitized, "***GITHUB_TOKEN_REDACTED***")
+            .to_string();
+    }
+    if let Some(bearer_token_regex) = BEARER_TOKEN_REGEX.as_ref() {
+        sanitized = bearer_token_regex
+            .replace_all(&sanitized, "$1$2***BEARER_TOKEN_REDACTED***")
+            .to_string();
+    }
+    if let Some(secret_json_regex) = SECRET_JSON_VALUE_REGEX.as_ref() {
+        sanitized = secret_json_regex
+            .replace_all(&sanitized, |caps: &regex::Captures| {
+                let prefix = caps.get(1).map(|m| m.as_str()).unwrap_or_default();
+                let value = caps.get(2).map(|m| m.as_str()).unwrap_or_default();
+                let suffix = caps.get(3).map(|m| m.as_str()).unwrap_or_default();
+                if is_non_secret_placeholder(value) {
+                    caps.get(0)
+                        .map(|m| m.as_str())
+                        .unwrap_or_default()
+                        .to_string()
+                } else {
+                    format!("{}***SECRET_REDACTED***{}", prefix, suffix)
+                }
+            })
+            .to_string();
+    }
+    if let Some(secret_query_regex) = SECRET_QUERY_PARAM_REGEX.as_ref() {
+        sanitized = secret_query_regex
+            .replace_all(&sanitized, |caps: &regex::Captures| {
+                let prefix = caps.get(1).map(|m| m.as_str()).unwrap_or_default();
+                let value = caps.get(2).map(|m| m.as_str()).unwrap_or_default();
+                if is_non_secret_placeholder(value) {
+                    caps.get(0)
+                        .map(|m| m.as_str())
+                        .unwrap_or_default()
+                        .to_string()
+                } else {
+                    format!("{}***SECRET_REDACTED***", prefix)
+                }
+            })
+            .to_string();
+    }
+    if let Some(secret_assignment_regex) = SECRET_ASSIGNMENT_REGEX.as_ref() {
+        sanitized = secret_assignment_regex
+            .replace_all(&sanitized, |caps: &regex::Captures| {
+                let key = caps.get(1).map(|m| m.as_str()).unwrap_or_default();
+                let separator = caps.get(2).map(|m| m.as_str()).unwrap_or_default();
+                let value = caps.get(3).map(|m| m.as_str()).unwrap_or_default();
+                if key.eq_ignore_ascii_case("authorization") || is_non_secret_placeholder(value) {
+                    caps.get(0)
+                        .map(|m| m.as_str())
+                        .unwrap_or_default()
+                        .to_string()
+                } else {
+                    let trimmed_value = value.trim();
+                    let redacted_value = if trimmed_value.len() >= 2
+                        && ((trimmed_value.starts_with('"') && trimmed_value.ends_with('"'))
+                            || (trimmed_value.starts_with('\'') && trimmed_value.ends_with('\'')))
+                    {
+                        let quote = &trimmed_value[..1];
+                        format!("{quote}***SECRET_REDACTED***{quote}")
+                    } else {
+                        "***SECRET_REDACTED***".to_string()
+                    };
+                    format!("{key}{separator}{redacted_value}")
+                }
+            })
             .to_string();
     }
     if let Some(email_regex) = EMAIL_REGEX.as_ref() {
@@ -1763,23 +1877,35 @@ impl ExecutorOrchestrator {
                     .await?;
 
                 // Persist structured outputs (including MR_TITLE, MR_DESCRIPTION) before GitOps
-                if let Err(err) = self
+                match self
                     .persist_structured_outputs_from_attempt_logs(attempt_id, Some(&worktree_path))
                     .await
                 {
-                    warn!(
-                        "Failed to persist structured outputs for attempt {}: {}",
-                        attempt_id, err
-                    );
-                    self.log(
-                        attempt_id,
-                        "stderr",
-                        &format!(
-                            "Warning: failed to persist structured deployment/report outputs: {}",
-                            err
-                        ),
-                    )
-                    .await?;
+                    Ok(structured) => {
+                        if let Some(error) = structured.cloudflare_tunnel_error {
+                            self.log(
+                                attempt_id,
+                                "system",
+                                &format!("⚠️ CLOUDFLARE_TUNNEL_ERROR: {}", error),
+                            )
+                            .await?;
+                        }
+                    }
+                    Err(err) => {
+                        warn!(
+                            "Failed to persist structured outputs for attempt {}: {}",
+                            attempt_id, err
+                        );
+                        self.log(
+                            attempt_id,
+                            "stderr",
+                            &format!(
+                                "Warning: failed to persist structured deployment/report outputs: {}",
+                                err
+                            ),
+                        )
+                        .await?;
+                    }
                 }
 
                 // GitOps: Create MR (agent already pushed)
@@ -2418,6 +2544,18 @@ impl ExecutorOrchestrator {
             &format!("Starting {} Agent...", provider.display_name()),
         )
         .await?;
+
+        // System settings-backed runtime secrets such as Cloudflare preview
+        // config must be present for every task/follow-up agent spawn, not
+        // only init flows.
+        let mut runtime_env = provider_env.unwrap_or_default();
+        self.extend_agent_env_with_cloudflare_settings(&mut runtime_env)
+            .await;
+        let provider_env = if runtime_env.is_empty() {
+            None
+        } else {
+            Some(runtime_env)
+        };
 
         // Load agent settings (Claude-only for now)
         let agent_settings = self.load_agent_settings(attempt_id).await?;
@@ -6880,26 +7018,38 @@ IMPORTANT: Do not commit unrelated files. Verify changes work before committing.
         };
 
         if status.success() {
-            if let Err(err) = self
+            match self
                 .persist_structured_outputs_from_attempt_logs(
                     attempt_id,
                     Some(effective_path.as_path()),
                 )
                 .await
             {
-                warn!(
-                    "Failed to persist structured outputs for follow-up attempt {}: {}",
-                    attempt_id, err
-                );
-                self.log(
-                    attempt_id,
-                    "stderr",
-                    &format!(
-                        "Warning: failed to persist structured deployment/report outputs: {}",
-                        err
-                    ),
-                )
-                .await?;
+                Ok(structured) => {
+                    if let Some(error) = structured.cloudflare_tunnel_error {
+                        self.log(
+                            attempt_id,
+                            "system",
+                            &format!("⚠️ CLOUDFLARE_TUNNEL_ERROR: {}", error),
+                        )
+                        .await?;
+                    }
+                }
+                Err(err) => {
+                    warn!(
+                        "Failed to persist structured outputs for follow-up attempt {}: {}",
+                        attempt_id, err
+                    );
+                    self.log(
+                        attempt_id,
+                        "stderr",
+                        &format!(
+                            "Warning: failed to persist structured deployment/report outputs: {}",
+                            err
+                        ),
+                    )
+                    .await?;
+                }
             }
 
             let branch_ready = if require_review {
@@ -7236,7 +7386,7 @@ fn extract_preview_url(lines: &[String]) -> Option<String> {
 fn extract_preview_url_from_text(text: &str) -> Option<String> {
     // Supported forms:
     // PREVIEW_URL: https://task-abcd.preview.example.com
-    // PREVIEW_URL = https://xxxx.trycloudflare.com
+    // PREVIEW_URL = https://task-abcd.preview.example.com
     let labeled_regex = Regex::new(r#"(?i)\bpreview_url\b\s*[:=]\s*(https?://\S+)"#).ok()?;
     if let Some(caps) = labeled_regex.captures(text) {
         if let Some(value) = caps.get(1) {
@@ -7924,6 +8074,37 @@ mod tests {
     }
 
     #[test]
+    fn test_sanitize_log_redacts_bearer_tokens() {
+        let input = r#"curl -H "Authorization: Bearer abcdefghijklmnopqrstuvwxyz123456" https://example.com"#;
+        let output = sanitize_log(input);
+        assert_eq!(
+            output,
+            r#"curl -H "Authorization: Bearer ***BEARER_TOKEN_REDACTED***" https://example.com"#
+        );
+    }
+
+    #[test]
+    fn test_sanitize_log_redacts_secret_json_values() {
+        let input = r#"{"access_token":"secret-value-123","refresh_token":"another-secret"}"#;
+        let output = sanitize_log(input);
+        assert_eq!(
+            output,
+            r#"{"access_token":"***SECRET_REDACTED***","refresh_token":"***SECRET_REDACTED***"}"#
+        );
+    }
+
+    #[test]
+    fn test_sanitize_log_redacts_secret_assignments_but_keeps_placeholders() {
+        let input =
+            "API_TOKEN=super-secret-value CLOUDFLARE_API_TOKEN=${CLOUDFLARE_API_TOKEN:-(missing)}";
+        let output = sanitize_log(input);
+        assert_eq!(
+            output,
+            "API_TOKEN=***SECRET_REDACTED*** CLOUDFLARE_API_TOKEN=${CLOUDFLARE_API_TOKEN:-(missing)}"
+        );
+    }
+
+    #[test]
     fn test_extract_repo_url() {
         let lines = vec![
             "Creating repository...".to_string(),
@@ -8016,10 +8197,10 @@ REPO_URL: https://gitlab.com/user/repo"#
     #[test]
     fn test_extract_preview_url_from_normalized_json_content() {
         let lines = vec![
-            r#"{"timestamp":"2026-02-08T00:00:00Z","entry_type":{"type":"assistant_message"},"content":"Deploy summary\nPREVIEW_URL: https://demo.trycloudflare.com"}"#.to_string(),
+            r#"{"timestamp":"2026-02-08T00:00:00Z","entry_type":{"type":"assistant_message"},"content":"Deploy summary\nPREVIEW_URL: https://demo.preview.example.com"}"#.to_string(),
         ];
         let url = extract_preview_url(&lines);
-        assert_eq!(url, Some("https://demo.trycloudflare.com".to_string()));
+        assert_eq!(url, Some("https://demo.preview.example.com".to_string()));
     }
 
     #[test]

@@ -183,10 +183,11 @@ impl StatusManager {
         created_at: DateTime<Utc>,
         tool_name: Option<String>,
     ) {
+        let sanitized_content = crate::sanitize_log(&content);
         let _ = broadcast_tx.send(AgentEvent::Log(LogMessage {
             attempt_id,
             log_type: log_type.to_string(),
-            content,
+            content: sanitized_content,
             timestamp: Utc::now(),
             id: Some(id),
             created_at: Some(created_at),
@@ -698,15 +699,16 @@ impl StatusManager {
         attempt_id: Uuid,
         error: &str,
     ) -> Result<()> {
+        let sanitized_error = crate::sanitize_log(error);
         // Log error to attempt logs so user sees it in the timeline (not just DB)
-        if !error.trim().is_empty() {
-            let sanitized = crate::sanitize_log(error);
-            let (log_id, created_at) = buffer_agent_log(attempt_id, "stderr", &sanitized).await;
+        if !sanitized_error.trim().is_empty() {
+            let (log_id, created_at) =
+                buffer_agent_log(attempt_id, "stderr", &sanitized_error).await;
             Self::broadcast_log(
                 broadcast_tx,
                 attempt_id,
                 "stderr",
-                sanitized,
+                sanitized_error.clone(),
                 log_id,
                 created_at,
                 None,
@@ -722,7 +724,7 @@ impl StatusManager {
               AND status != 'cancelled'
             "#,
         )
-        .bind(error)
+        .bind(&sanitized_error)
         .bind(attempt_id)
         .execute(db_pool)
         .await

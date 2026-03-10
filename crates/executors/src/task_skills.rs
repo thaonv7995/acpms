@@ -1448,8 +1448,11 @@ fn derive_skill_chain(
                 push_skill(&mut ids, &mut seen, "cloudflare-config-validate");
                 push_skill(&mut ids, &mut seen, "cloudflare-tunnel-setup-guide");
                 push_skill(&mut ids, &mut seen, "deploy-precheck-cloudflare");
-                push_skill(&mut ids, &mut seen, "setup-cloudflare-tunnel");
-                push_skill(&mut ids, &mut seen, "create-cloudflare-preview-tunnel");
+                push_skill(
+                    &mut ids,
+                    &mut seen,
+                    "create-cloudflare-custom-domain-preview-url",
+                );
             }
         }
         ProjectType::Api => {
@@ -1460,8 +1463,11 @@ fn derive_skill_chain(
                 push_skill(&mut ids, &mut seen, "cloudflare-config-validate");
                 push_skill(&mut ids, &mut seen, "cloudflare-tunnel-setup-guide");
                 push_skill(&mut ids, &mut seen, "deploy-precheck-cloudflare");
-                push_skill(&mut ids, &mut seen, "setup-cloudflare-tunnel");
-                push_skill(&mut ids, &mut seen, "create-cloudflare-preview-tunnel");
+                push_skill(
+                    &mut ids,
+                    &mut seen,
+                    "create-cloudflare-custom-domain-preview-url",
+                );
             }
         }
         ProjectType::Desktop => {
@@ -2293,7 +2299,22 @@ fn builtin_skill_content(skill_id: &str) -> Option<&'static str> {
 - Output PREVIEW_TARGET: http://127.0.0.1:<port> when preview needed.
 - If preview runs in Docker, write `.acpms/preview-output.json` with `preview_target` and `runtime_control`.
 - ACPMS injects Cloudflare config into env vars: `CLOUDFLARE_ACCOUNT_ID`, `CLOUDFLARE_API_TOKEN`, `CLOUDFLARE_ZONE_ID`, `CLOUDFLARE_BASE_DOMAIN`.
+- After the local preview responds, use `create-cloudflare-custom-domain-preview-url` to create any public preview URL.
 - When tunnel fails: tell user to ensure all 4 fields in System Settings (/settings)."#,
+        ),
+        "create-cloudflare-custom-domain-preview-url" => Some(
+            r#"Create a real public Cloudflare preview URL from the injected Cloudflare settings after the local runtime is reachable.
+- Keep `PREVIEW_TARGET` as the verified local runtime URL and do not change it to a public hostname.
+- Read Cloudflare config only from env vars `CLOUDFLARE_ACCOUNT_ID`, `CLOUDFLARE_API_TOKEN`, `CLOUDFLARE_ZONE_ID`, `CLOUDFLARE_BASE_DOMAIN`.
+- If any required Cloudflare env var is missing, do not fabricate a public URL; leave `PREVIEW_URL` unset or local and output `CLOUDFLARE_TUNNEL_ERROR: cloudflare_not_configured`.
+- Authenticate Cloudflare API calls with `Authorization: Bearer $CLOUDFLARE_API_TOKEN`.
+- Create a named tunnel with `POST /accounts/$CLOUDFLARE_ACCOUNT_ID/cfd_tunnel`.
+- Create or update a proxied `CNAME` in zone `CLOUDFLARE_ZONE_ID` for a deterministic preview subdomain under `CLOUDFLARE_BASE_DOMAIN`, pointing it to `<tunnel_id>.cfargotunnel.com`.
+- Start a real `cloudflared tunnel run` connector, or a Docker `cloudflared` sidecar, using the returned credentials so that the custom hostname routes to `PREVIEW_TARGET`.
+- For Docker previews, prefer a `cloudflared` service/container that runs `cloudflared tunnel --no-autoupdate run --credentials-file ... --url <PREVIEW_TARGET> <tunnel_id>`.
+- Verify the public `https://<subdomain>.<CLOUDFLARE_BASE_DOMAIN>` URL serves traffic before emitting it as `PREVIEW_URL`.
+- Never use `*.trycloudflare.com`, never CNAME a custom domain to a quick tunnel URL, and never emit a public `PREVIEW_URL` outside `CLOUDFLARE_BASE_DOMAIN`.
+- If tunnel creation, DNS, `cloudflared`, or public verification fails, keep the local preview contract and output `CLOUDFLARE_TUNNEL_ERROR: <reason>`."#,
         ),
         "deploy-cloudflare-pages" => Some(
             r#"Deploy web build to Cloudflare Pages flow configured for this project.
@@ -2310,15 +2331,17 @@ fn builtin_skill_content(skill_id: &str) -> Option<&'static str> {
 - Produce PREVIEW_TARGET for runtime endpoint.
 - If preview runtime is controllable via Docker, emit `.acpms/preview-output.json` with `runtime_control`.
 - Read Cloudflare config from env vars `CLOUDFLARE_ACCOUNT_ID`, `CLOUDFLARE_API_TOKEN`, `CLOUDFLARE_ZONE_ID`, `CLOUDFLARE_BASE_DOMAIN`.
-- If all 4 Cloudflare env vars are present, try to create a public preview URL before falling back to a local PREVIEW_URL.
+- If all 4 Cloudflare env vars are present, only emit a public PREVIEW_URL when it uses `CLOUDFLARE_BASE_DOMAIN`.
+- Never use `*.trycloudflare.com` and never CNAME a custom domain to a quick tunnel URL.
 - If public URL is available, output PREVIEW_URL."#,
         ),
         "create-cloudflare-preview-tunnel" => Some(
             r#"Create a public Cloudflare preview URL after the local runtime is reachable.
 - Read Cloudflare config from env vars `CLOUDFLARE_ACCOUNT_ID`, `CLOUDFLARE_API_TOKEN`, `CLOUDFLARE_ZONE_ID`, `CLOUDFLARE_BASE_DOMAIN`.
 - Keep PREVIEW_TARGET as the local runtime URL.
-- Set PREVIEW_URL to the public Cloudflare tunnel/domain URL when tunnel creation succeeds.
-- Only fall back to a local PREVIEW_URL when Cloudflare tunnel creation truly fails."#,
+- Set PREVIEW_URL to the public Cloudflare tunnel/domain URL when tunnel creation succeeds, and that URL must use `CLOUDFLARE_BASE_DOMAIN`.
+- Do not use `*.trycloudflare.com` and do not point a custom domain at a quick tunnel URL.
+- Only fall back to a local PREVIEW_URL when proper custom-domain tunnel creation truly fails."#,
         ),
         "deploy-precheck-cloudflare" => Some(
             r#"Before deploy/tunnel, verify Cloudflare settings are configured.
@@ -2626,6 +2649,9 @@ mod tests {
             .any(|skill| skill == "deploy-precheck-cloudflare"));
         assert!(skills
             .iter()
+            .any(|skill| skill == "create-cloudflare-custom-domain-preview-url"));
+        assert!(!skills
+            .iter()
             .any(|skill| skill == "setup-cloudflare-tunnel"));
         assert!(!skills
             .iter()
@@ -2709,6 +2735,9 @@ mod tests {
             .iter()
             .any(|skill| skill == "deploy-precheck-cloudflare"));
         assert!(skills
+            .iter()
+            .any(|skill| skill == "create-cloudflare-custom-domain-preview-url"));
+        assert!(!skills
             .iter()
             .any(|skill| skill == "setup-cloudflare-tunnel"));
         assert!(!skills

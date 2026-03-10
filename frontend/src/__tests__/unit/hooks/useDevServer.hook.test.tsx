@@ -1,6 +1,9 @@
 import { renderHook, waitFor } from '@testing-library/react';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
-import { useDevServer } from '@/hooks/useDevServer';
+import {
+  extractPreviewSignalFromAttemptLogs,
+  useDevServer,
+} from '@/hooks/useDevServer';
 import {
   getPreview,
   getPreviewControl,
@@ -25,6 +28,7 @@ vi.mock('@/api/taskAttempts', () => ({
 describe('useDevServer preview URL syncing', () => {
   beforeEach(() => {
     vi.clearAllMocks();
+    window.localStorage.clear();
 
     vi.mocked(getPreviewReadiness).mockResolvedValue({
       attempt_id: 'attempt-1',
@@ -68,6 +72,17 @@ describe('useDevServer preview URL syncing', () => {
 
   it('replaces a fallback local preview URL with the latest public preview URL from logs', async () => {
     vi.mocked(getPreview).mockResolvedValue(null);
+    vi.mocked(getPreviewControl).mockResolvedValue({
+      attempt_id: 'attempt-1',
+      preview_available: true,
+      controllable: false,
+      dismissible: true,
+      action: 'dismiss',
+      runtime_type: null,
+      control_source: 'agent_output',
+      container_name: null,
+      compose_project_name: null,
+    });
     vi.mocked(getAttemptLogs).mockResolvedValue([
       {
         id: 'log-1',
@@ -93,6 +108,74 @@ describe('useDevServer preview URL syncing', () => {
       );
     });
 
+    expect(result.current.externalPreview).toBe(true);
+  });
+
+  it('prefers the newest public preview signal even when logs arrive newest-first', () => {
+    const signal = extractPreviewSignalFromAttemptLogs([
+      {
+        id: 'log-new',
+        attempt_id: 'attempt-1',
+        log_type: 'stdout',
+        content: 'PREVIEW_URL: https://preview-9b0679a1.thaonv.online',
+        created_at: '2026-03-10T10:25:19Z',
+      },
+      {
+        id: 'log-old',
+        attempt_id: 'attempt-1',
+        log_type: 'stdout',
+        content: 'PREVIEW_TARGET: http://127.0.0.1:8080',
+        created_at: '2026-03-10T10:03:32Z',
+      },
+    ]);
+
+    expect(signal).toEqual({
+      url: 'https://preview-9b0679a1.thaonv.online',
+      signalKey:
+        'log-new:2026-03-10T10:25:19Z:https://preview-9b0679a1.thaonv.online',
+    });
+  });
+
+  it('prefers metadata fallback over log-derived local preview when the attempt is done', async () => {
+    vi.mocked(getPreview).mockResolvedValue(null);
+    vi.mocked(getPreviewControl).mockResolvedValue({
+      attempt_id: 'attempt-1',
+      preview_available: true,
+      controllable: false,
+      dismissible: true,
+      action: 'dismiss',
+      runtime_type: null,
+      control_source: 'file_contract',
+      container_name: null,
+      compose_project_name: null,
+    });
+    vi.mocked(getAttemptLogs).mockResolvedValue([
+      {
+        id: 'log-local',
+        attempt_id: 'attempt-1',
+        log_type: 'stdout',
+        content: 'PREVIEW_TARGET: http://127.0.0.1:8080',
+        created_at: '2026-03-10T10:03:32Z',
+      },
+    ]);
+
+    const { result } = renderHook(() =>
+      useDevServer(
+        'task-1',
+        'attempt-1',
+        'https://preview-0d010f14-bb2b-43bd-9345-4cb0bcacb893.thaonv.online',
+        false,
+        'SUCCESS'
+      )
+    );
+
+    await waitFor(() => {
+      expect(result.current.url).toBe(
+        'https://preview-0d010f14-bb2b-43bd-9345-4cb0bcacb893.thaonv.online'
+      );
+    });
+
+    expect(getAttemptLogs).not.toHaveBeenCalled();
     expect(result.current.externalPreview).toBe(true);
   });
 

@@ -50,6 +50,11 @@ interface PreviewLogSignal {
   signalKey: string;
 }
 
+interface PreviewLogSignalCandidate extends PreviewLogSignal {
+  createdAtMs: number;
+  loopback: boolean;
+}
+
 function getDismissedExternalPreviewStorageKey(attemptId: string): string {
   return `acpms:preview:dismissed-external-signal:${attemptId}`;
 }
@@ -360,8 +365,9 @@ export function extractPreviewUrlFromAttemptLogs(logs: AgentLog[]): string | und
 export function extractPreviewSignalFromAttemptLogs(
   logs: AgentLog[]
 ): PreviewLogSignal | undefined {
-  for (let index = logs.length - 1; index >= 0; index -= 1) {
-    const log = logs[index];
+  const candidates: PreviewLogSignalCandidate[] = [];
+
+  for (const log of logs) {
     const content = log?.content;
     if (typeof content !== 'string' || content.length === 0) {
       continue;
@@ -369,27 +375,54 @@ export function extractPreviewSignalFromAttemptLogs(
 
     const direct = extractPreviewUrlFromText(content);
     if (direct) {
-      return {
+      candidates.push({
         url: direct,
         signalKey: `${log.id}:${log.created_at}:${direct}`,
-      };
+        createdAtMs: Number.isFinite(Date.parse(log.created_at))
+          ? Date.parse(log.created_at)
+          : Number.NEGATIVE_INFINITY,
+        loopback: isLoopbackPreviewUrl(direct),
+      });
+      continue;
     }
 
     try {
       const parsed = JSON.parse(content) as unknown;
       const extracted = extractPreviewUrlFromStructuredLog(parsed);
       if (extracted) {
-        return {
+        candidates.push({
           url: extracted,
           signalKey: `${log.id}:${log.created_at}:${extracted}`,
-        };
+          createdAtMs: Number.isFinite(Date.parse(log.created_at))
+            ? Date.parse(log.created_at)
+            : Number.NEGATIVE_INFINITY,
+          loopback: isLoopbackPreviewUrl(extracted),
+        });
       }
     } catch {
       // Ignore plain-text logs that are not JSON.
     }
   }
 
-  return undefined;
+  candidates.sort((left, right) => {
+    if (left.createdAtMs !== right.createdAtMs) {
+      return right.createdAtMs - left.createdAtMs;
+    }
+    if (left.loopback !== right.loopback) {
+      return left.loopback ? 1 : -1;
+    }
+    return left.signalKey.localeCompare(right.signalKey);
+  });
+
+  const bestCandidate = candidates[0];
+  if (!bestCandidate) {
+    return undefined;
+  }
+
+  return {
+    url: bestCandidate.url,
+    signalKey: bestCandidate.signalKey,
+  };
 }
 
 function buildExternalPreviewState(
@@ -436,7 +469,8 @@ export function useDevServer(
   taskId: string,
   attemptId?: string,
   fallbackPreviewUrl?: string,
-  autoStartOnMount = false
+  autoStartOnMount = false,
+  attemptStatus?: string | null
 ): UseDevServerReturn {
   const initialDismissedSignal = readDismissedExternalPreviewSignal(attemptId);
   const [state, setState] = useState<DevServerState>({
@@ -457,6 +491,13 @@ export function useDevServer(
   const [hasHydrated, setHasHydrated] = useState(false);
   const [cloudflareReady, setCloudflareReady] = useState(true);
   const [missingCloudflareFields, setMissingCloudflareFields] = useState<string[]>([]);
+  const normalizedAttemptStatus = attemptStatus?.trim().toLowerCase();
+  const attemptIsActive =
+    normalizedAttemptStatus === 'running' || normalizedAttemptStatus === 'queued';
+  const attemptIsTerminal =
+    normalizedAttemptStatus === 'success' ||
+    normalizedAttemptStatus === 'failed' ||
+    normalizedAttemptStatus === 'cancelled';
 
   // Hydrate preview state from backend when task/attempt changes.
   useEffect(() => {
@@ -486,7 +527,10 @@ export function useDevServer(
     let cancelled = false;
     setIsLoading(true);
 
-    const logsPromise = getAttemptLogs(attemptId).catch(() => [] as AgentLog[]);
+    const shouldFetchLogSignals = !attemptIsTerminal || !fallbackPreviewUrl;
+    const logsPromise = shouldFetchLogSignals
+      ? getAttemptLogs(attemptId).catch(() => [] as AgentLog[])
+      : Promise.resolve([] as AgentLog[]);
 
     Promise.all([
       getPreviewReadiness(attemptId),
@@ -509,7 +553,8 @@ export function useDevServer(
                 signalKey: `fallback:${fallbackPreviewUrl}`,
               }
             : undefined;
-        const agentPreviewSignal = logPreviewSignal || fallbackPreviewSignal;
+        const agentPreviewSignal =
+          (attemptIsTerminal ? undefined : logPreviewSignal) || fallbackPreviewSignal;
         const previewSignalAvailable = control.preview_available || Boolean(preview);
 
         setState((prev) => {
@@ -600,12 +645,18 @@ export function useDevServer(
     return () => {
       cancelled = true;
     };
-  }, [taskId, attemptId, fallbackPreviewUrl]);
+  }, [
+    attemptIsActive,
+    attemptIsTerminal,
+    taskId,
+    attemptId,
+    fallbackPreviewUrl,
+  ]);
 
   // Poll attempt logs while the agent is still running so PREVIEW_TARGET can
   // surface without requiring a manual page refresh.
   useEffect(() => {
-    if (!attemptId) {
+    if (!attemptId || !attemptIsActive) {
       return;
     }
 
@@ -672,6 +723,7 @@ export function useDevServer(
       window.clearInterval(intervalId);
     };
   }, [
+    attemptIsActive,
     attemptId,
     state.previewId,
     state.status,
