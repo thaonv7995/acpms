@@ -4,6 +4,7 @@ pub mod approvals;
 pub mod auth;
 pub mod health;
 pub mod openclaw;
+pub mod openclaw_admin;
 pub mod project_assistant;
 pub mod project_documents;
 pub mod projects;
@@ -330,8 +331,7 @@ pub(crate) fn build_business_api_routes() -> Router<AppState> {
         )
         .route(
             "/tasks/:task_id/contexts/:context_id",
-            patch(task_contexts::update_task_context)
-                .delete(task_contexts::delete_task_context),
+            patch(task_contexts::update_task_context).delete(task_contexts::delete_task_context),
         )
         .route(
             "/tasks/:task_id/context-attachments/upload-url",
@@ -488,8 +488,11 @@ pub(crate) fn build_business_api_routes() -> Router<AppState> {
         .merge(templates::create_routes())
         // Deployment routes
         .merge(deployments::create_routes())
-        // Admin webhook routes
-        .nest("/admin", webhooks_admin::create_routes())
+        // Admin routes
+        .nest(
+            "/admin",
+            webhooks_admin::create_routes().merge(openclaw_admin::create_routes()),
+        )
         // Approval routes (SDK mode)
         .route(
             "/execution-processes/:id/approvals/pending",

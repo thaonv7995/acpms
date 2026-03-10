@@ -274,6 +274,15 @@ pub async fn create_test_app_state(pool: PgPool) -> AppState {
 /// Create test router
 pub async fn create_test_router() -> Router {
     let pool = setup_test_db().await;
+    let _ = sqlx::query("DELETE FROM openclaw_bootstrap_tokens")
+        .execute(&pool)
+        .await;
+    let _ = sqlx::query("DELETE FROM openclaw_client_keys")
+        .execute(&pool)
+        .await;
+    let _ = sqlx::query("DELETE FROM openclaw_clients")
+        .execute(&pool)
+        .await;
     let state = create_test_app_state(pool).await;
     create_router(state)
 }

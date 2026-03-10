@@ -1171,7 +1171,7 @@ pub fn build_openclaw_openapi_json() -> Value {
         info.insert(
             "description".to_string(),
             Value::String(
-                "Authenticated ACPMS gateway contract for OpenClaw. All `/api/openclaw/*` routes require `Authorization: Bearer <OPENCLAW_API_KEY>`. To retrieve a smaller contract, call `/api/openclaw/openapi.json` with `path`, `operation_id`, `tag`, and optional `method` query filters."
+                "Authenticated ACPMS gateway contract for OpenClaw. Runtime `/api/openclaw/*` routes use `Authorization: Bearer <OPENCLAW_API_KEY>` and, after enrollment, `X-OpenClaw-Client-Id: <OPENCLAW_CLIENT_ID>`. To retrieve a smaller contract, call `/api/openclaw/openapi.json` with `path`, `operation_id`, `tag`, and optional `method` query filters."
                     .to_string(),
             ),
         );

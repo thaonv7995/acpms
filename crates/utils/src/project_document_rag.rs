@@ -50,10 +50,12 @@ pub fn normalize_project_document_text(content_type: &str, bytes: &[u8]) -> Resu
     let normalized = text.replace("\r\n", "\n").replace('\r', "\n");
     let normalized_content_type = normalize_content_type(content_type);
     let normalized = match normalized_content_type.as_str() {
-        value if is_json_like_content_type(value) => serde_json::from_str::<serde_json::Value>(&normalized)
-            .ok()
-            .and_then(|value| serde_json::to_string_pretty(&value).ok())
-            .unwrap_or(normalized),
+        value if is_json_like_content_type(value) => {
+            serde_json::from_str::<serde_json::Value>(&normalized)
+                .ok()
+                .and_then(|value| serde_json::to_string_pretty(&value).ok())
+                .unwrap_or(normalized)
+        }
         _ => normalized,
     };
 

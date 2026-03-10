@@ -84,6 +84,9 @@ generate_prefixed_secret() {
 
 render_openclaw_bootstrap_prompt() {
   [ "${OPENCLAW_GATEWAY_ENABLED:-false}" = "true" ] || return 0
+  local raw_token="$1" expires_at="$2"
+  local enrollment_label="${3:-OpenClaw Initial Install}"
+  local suggested_display_name="${4:-OpenClaw Initial Install}"
   local public_base guide_url openapi_url events_url base_endpoint ws_base
   public_base="$(resolve_s3_public_base)"
   base_endpoint="${public_base}/api/openclaw/v1"
@@ -95,7 +98,7 @@ render_openclaw_bootstrap_prompt() {
     http://*) ws_base="ws://${public_base#http://}/api/openclaw/ws" ;;
     *) ws_base="${public_base}/api/openclaw/ws" ;;
   esac
-  OPENCLAW_PROMPT_FILE="$CONF_DIR/openclaw_bootstrap_prompt.txt"
+  OPENCLAW_PROMPT_FILE="${OPENCLAW_PROMPT_FILE:-$CONF_DIR/openclaw_bootstrap_prompt.txt}"
   OPENCLAW_READY_PROMPT="$(cat <<EOF
 You are being connected to an ACPMS (Agentic Coding Project Management System) instance.
 
@@ -116,39 +119,70 @@ ACPMS connection bundle:
 - API Key (Bearer): ${OPENCLAW_API_KEY}
 - Webhook Secret: ${OPENCLAW_WEBHOOK_SECRET} (optional)
 
+OpenClaw enrollment bundle:
+- Enrollment endpoint: ${public_base}/api/openclaw/bootstrap/complete
+- Enrollment label: ${enrollment_label}
+- Suggested display name: ${suggested_display_name}
+- Key generation: OpenClaw must generate and keep its own local Ed25519 keypair. ACPMS never generates or stores the private key.
+- Single-use bootstrap token: ${raw_token}
+- Token expires at: ${expires_at}
+
 Your required first actions:
-1. Store the API Key as the Bearer credential for ACPMS.
-2. Call the Guide Endpoint first with GET for basic bootstrap and treat its response as the authoritative runtime guide.
-3. Load the OpenAPI document.
-4. Open and maintain the Global Event SSE connection.
-5. Use only ACPMS OpenClaw routes.
+1. Store the API Key as the Bearer credential for ACPMS runtime traffic.
+2. Generate a local Ed25519 keypair for this OpenClaw installation before enrollment.
+   - Keep the private key only on the OpenClaw side.
+   - Never send the private key to ACPMS.
+   - Send only key_id, algorithm, and public_key in the enrollment request.
+3. Complete enrollment first by calling the Enrollment endpoint with Authorization: Bearer <bootstrap token>.
+4. Store the returned OPENCLAW_CLIENT_ID and treat the bootstrap token as consumed.
+5. Call the Guide Endpoint first with GET after enrollment and treat its response as the authoritative runtime guide.
+6. Load the OpenAPI document.
+7. Open and maintain the Global Event SSE connection.
+8. Use only ACPMS OpenClaw routes.
    - /api/openclaw/v1/*
    - /api/openclaw/ws/*
-6. Follow the ACPMS operating rules returned by the Guide Endpoint.
+9. For runtime ACPMS requests after enrollment, send both:
+   - Authorization: Bearer <OPENCLAW_API_KEY>
+   - X-OpenClaw-Client-Id: <OPENCLAW_CLIENT_ID>
+10. Follow the ACPMS operating rules returned by the Guide Endpoint.
+
+Enrollment example (curl):
+curl -sS \\
+  -X POST \\
+  -H "Authorization: Bearer ${raw_token}" \\
+  -H "Content-Type: application/json" \\
+  -d '{"display_name":"${suggested_display_name}","key_id":"key_2026_03","algorithm":"ed25519","public_key":"<OPENCLAW_PUBLIC_KEY>"}' \\
+  "${public_base}/api/openclaw/bootstrap/complete"
 
 Bootstrap example (curl):
 curl -sS \\
   -X GET \\
   -H "Authorization: Bearer ${OPENCLAW_API_KEY}" \\
+  -H "X-OpenClaw-Client-Id: <OPENCLAW_CLIENT_ID>" \\
   "${guide_url}"
 
 Human reporting rules:
 - report important status, analyses, plans, started attempts, completed attempts, failed attempts, blocked work, and approval requests
-- do not expose secrets, API keys, or webhook secrets in user-facing output
+- do not expose secrets, API keys, bootstrap tokens, or webhook secrets in user-facing output
 - distinguish clearly between:
   - what ACPMS currently says
   - what you recommend
   - what you already changed
 
 Do not ask the user to manually map these ACPMS credentials unless strictly necessary.
-Use the Guide Endpoint to bootstrap yourself automatically.
+Use the Guide Endpoint to bootstrap yourself automatically after enrollment.
 EOF
 )"
 }
 
+extract_bootstrap_token_from_prompt_text() {
+  local prompt_text="$1"
+  printf '%s\n' "$prompt_text" | sed -n 's/^- Single-use bootstrap token: //p' | head -n 1
+}
+
 write_openclaw_prompt_file() {
   [ "${OPENCLAW_GATEWAY_ENABLED:-false}" = "true" ] || return 0
-  render_openclaw_bootstrap_prompt
+  OPENCLAW_PROMPT_FILE="${OPENCLAW_PROMPT_FILE:-$CONF_DIR/openclaw_bootstrap_prompt.txt}"
   [ -n "${OPENCLAW_READY_PROMPT:-}" ] || return 0
   local tmp_file
   tmp_file="$(mktemp)"
@@ -188,7 +222,8 @@ prompt_openclaw_gateway() {
 
   [ -n "${OPENCLAW_API_KEY:-}" ] || OPENCLAW_API_KEY="$(generate_prefixed_secret "oc_live_")"
   [ -n "${OPENCLAW_WEBHOOK_SECRET:-}" ] || OPENCLAW_WEBHOOK_SECRET="$(generate_prefixed_secret "wh_sec_")"
-  render_openclaw_bootstrap_prompt
+  OPENCLAW_PROMPT_FILE="$CONF_DIR/openclaw_bootstrap_prompt.txt"
+  OPENCLAW_READY_PROMPT=""
 }
 
 print_success_report() {
@@ -208,9 +243,12 @@ print_success_report() {
   box_rule="${box_rule// /═}"
 
   if [ "${OPENCLAW_GATEWAY_ENABLED:-false}" = "true" ]; then
-    render_openclaw_bootstrap_prompt
     openclaw_base_endpoint="$(resolve_s3_public_base)/api/openclaw/v1"
-    openclaw_prompt_cmd="cat \"$OPENCLAW_PROMPT_FILE\""
+    if [ -f "${OPENCLAW_PROMPT_FILE:-}" ]; then
+      openclaw_prompt_cmd="cat \"$OPENCLAW_PROMPT_FILE\""
+    else
+      openclaw_prompt_cmd="Recover from Settings > OpenClaw Access"
+    fi
   fi
 
   printf "${C_GREEN}╔%s╗${C_RESET}\n" "$box_rule"
@@ -229,7 +267,11 @@ print_success_report() {
   printf "${C_GREEN}║${C_RESET}  %-${title_width}s${C_GREEN}║${C_RESET}\n" "• Settings → Agent CLI Provider: authenticate one provider"
   printf "${C_GREEN}║${C_RESET}  %-${title_width}s${C_GREEN}║${C_RESET}\n" "• Settings → GitLab: configure OAuth if using GitLab"
   if [ "${OPENCLAW_GATEWAY_ENABLED:-false}" = "true" ]; then
-    printf "${C_GREEN}║${C_RESET}  %-${title_width}s${C_GREEN}║${C_RESET}\n" "• OpenClaw: Copy the prompt from the file below and send it to OpenClaw"
+    if [ -f "${OPENCLAW_PROMPT_FILE:-}" ]; then
+      printf "${C_GREEN}║${C_RESET}  %-${title_width}s${C_GREEN}║${C_RESET}\n" "• OpenClaw: Copy the installer-generated bootstrap prompt from the file below"
+    else
+      printf "${C_GREEN}║${C_RESET}  %-${title_width}s${C_GREEN}║${C_RESET}\n" "• OpenClaw: Installer prompt was not generated; recover via Settings > OpenClaw Access"
+    fi
   fi
   printf "${C_GREEN}║${C_RESET}%-${box_inner_width}s${C_GREEN}║${C_RESET}\n" ""
   if [ "${OPENCLAW_GATEWAY_ENABLED:-false}" = "true" ]; then
@@ -1009,7 +1051,6 @@ OPENCLAW_API_KEY=${OPENCLAW_API_KEY:-}
 OPENCLAW_WEBHOOK_URL=${OPENCLAW_WEBHOOK_URL:-}
 OPENCLAW_WEBHOOK_SECRET=${OPENCLAW_WEBHOOK_SECRET:-}
 EOF
-  write_openclaw_prompt_file
 }
 
 resolve_s3_public_base() {
@@ -1062,6 +1103,134 @@ prompt_public_url() {
 
   base="$(resolve_s3_public_base)"
   log "Upload URL base set to: ${base}/s3"
+}
+
+wait_for_acpms_api() {
+  local api_base="${1:?api_base is required}"
+  local retries="${2:-24}"
+  local attempt=0
+
+  while [ "$attempt" -lt "$retries" ]; do
+    if curl -fsS --connect-timeout 2 -o /dev/null "${api_base}/health/ready" 2>/dev/null; then
+      return 0
+    fi
+    attempt=$((attempt + 1))
+    sleep 2
+  done
+
+  return 1
+}
+
+generate_openclaw_bootstrap_prompt_file() {
+  [ "${OPENCLAW_GATEWAY_ENABLED:-false}" = "true" ] || return 0
+
+  OPENCLAW_PROMPT_FILE="${OPENCLAW_PROMPT_FILE:-$CONF_DIR/openclaw_bootstrap_prompt.txt}"
+  local api_base="http://127.0.0.1:${ACPMS_PORT}"
+  local public_base prompt_host prompt_proto
+  local login_payload login_response access_token
+  local bootstrap_label bootstrap_display_name bootstrap_expires
+  local bootstrap_payload bootstrap_response prompt_text prompt_expires raw_bootstrap_token
+
+  if [ -z "${ACPMS_ADMIN_EMAIL:-}" ] || [ -z "${ACPMS_ADMIN_LOGIN_PASSWORD:-}" ]; then
+    log "Skipping automatic OpenClaw prompt generation because admin credentials are unavailable in installer context."
+    return 0
+  fi
+
+  if [ "${ACPMS_SERVER_STARTED:-0}" != "1" ]; then
+    log "ACPMS service was not started by installer; skipping automatic OpenClaw bootstrap prompt generation."
+    return 0
+  fi
+
+  if ! wait_for_acpms_api "$api_base" 30; then
+    log "ACPMS API did not become ready in time; skipping automatic OpenClaw bootstrap prompt generation."
+    return 0
+  fi
+
+  login_payload="$(jq -cn \
+    --arg email "$ACPMS_ADMIN_EMAIL" \
+    --arg password "$ACPMS_ADMIN_LOGIN_PASSWORD" \
+    '{email: $email, password: $password}')"
+
+  login_response="$(curl -fsS \
+    -X POST \
+    -H "Content-Type: application/json" \
+    -d "$login_payload" \
+    "${api_base}/api/v1/auth/login" 2>/dev/null)" || {
+      log "Failed to log in through ACPMS API; skipping automatic OpenClaw bootstrap prompt generation."
+      return 0
+    }
+
+  access_token="$(printf '%s' "$login_response" | jq -r '.data.access_token // empty')"
+  if [ -z "$access_token" ]; then
+    log "ACPMS login did not return an access token; skipping automatic OpenClaw bootstrap prompt generation."
+    return 0
+  fi
+
+  public_base="$(resolve_s3_public_base)"
+  case "$public_base" in
+    https://*)
+      prompt_host="${public_base#https://}"
+      prompt_proto="https"
+      ;;
+    http://*)
+      prompt_host="${public_base#http://}"
+      prompt_proto="http"
+      ;;
+    *)
+      prompt_host="$public_base"
+      prompt_proto="http"
+      ;;
+  esac
+
+  bootstrap_label="${OPENCLAW_BOOTSTRAP_LABEL:-OpenClaw Initial Install}"
+  bootstrap_display_name="${OPENCLAW_BOOTSTRAP_DISPLAY_NAME:-OpenClaw Initial Install}"
+  bootstrap_expires="${OPENCLAW_BOOTSTRAP_EXPIRES_IN_MINUTES:-15}"
+  case "$bootstrap_expires" in
+    ''|*[!0-9]*)
+      bootstrap_expires="15"
+      ;;
+  esac
+
+  bootstrap_payload="$(jq -cn \
+    --arg label "$bootstrap_label" \
+    --arg suggested_display_name "$bootstrap_display_name" \
+    --argjson expires_in_minutes "$bootstrap_expires" \
+    --arg source "install.sh" \
+    '{label: $label, expires_in_minutes: $expires_in_minutes, suggested_display_name: $suggested_display_name, metadata: {source: $source}}')"
+
+  bootstrap_response="$(curl -fsS \
+    -X POST \
+    -H "Authorization: Bearer ${access_token}" \
+    -H "Content-Type: application/json" \
+    -H "Host: ${prompt_host}" \
+    -H "X-Forwarded-Proto: ${prompt_proto}" \
+    -d "$bootstrap_payload" \
+    "${api_base}/api/v1/admin/openclaw/bootstrap-tokens" 2>/dev/null)" || {
+      log "Failed to generate OpenClaw bootstrap token through ACPMS API; skipping automatic prompt file generation."
+      return 0
+    }
+
+  prompt_text="$(printf '%s' "$bootstrap_response" | jq -r '.data.prompt_text // empty')"
+  prompt_expires="$(printf '%s' "$bootstrap_response" | jq -r '.data.expires_at // empty')"
+  if [ -z "$prompt_text" ]; then
+    log "ACPMS bootstrap token response did not include prompt_text; skipping automatic OpenClaw prompt file generation."
+    return 0
+  fi
+
+  raw_bootstrap_token="$(extract_bootstrap_token_from_prompt_text "$prompt_text")"
+  if [ -z "$raw_bootstrap_token" ]; then
+    log "Could not extract raw bootstrap token from ACPMS response; falling back to API-rendered prompt."
+    OPENCLAW_READY_PROMPT="$prompt_text"
+  else
+    render_openclaw_bootstrap_prompt \
+      "$raw_bootstrap_token" \
+      "${prompt_expires:-unknown}" \
+      "$bootstrap_label" \
+      "$bootstrap_display_name"
+  fi
+
+  write_openclaw_prompt_file
+  log "OpenClaw bootstrap prompt generated automatically and saved to $OPENCLAW_PROMPT_FILE"
 }
 
 # =============================================================================
@@ -1128,6 +1297,7 @@ create_admin() {
     ADMIN_PASSWORD="$pass" $BIN_PATH --create-admin "$email"
   fi
   ACPMS_ADMIN_EMAIL="$email"
+  ACPMS_ADMIN_LOGIN_PASSWORD="$pass"
   [ "$generated" = 1 ] && ACPMS_ADMIN_PASSWORD="$pass"
   log "Admin created: $email"
 
@@ -1154,6 +1324,7 @@ setup_linux_daemon() {
   if [ -z "${ACPMS_NONINTERACTIVE:-}" ]; then
     ask_yes "Install and start ACPMS as systemd service (acpms-server)? [Y/n]" "y" || {
       log "Skipped. Run manually: $BIN_PATH"
+      ACPMS_SERVER_STARTED=0
       return
     }
   fi
@@ -1229,6 +1400,7 @@ EOF
     $USE_SUDO systemctl daemon-reload
     $USE_SUDO systemctl enable acpms-server
     $USE_SUDO systemctl start acpms-server
+    ACPMS_SERVER_STARTED=1
     log "Service started. Check: systemctl status acpms-server"
   else
     log "No systemd. Creating and starting start-acpms.sh..."
@@ -1243,6 +1415,7 @@ echo "ACPMS started. PID: \$(cat $BASE_DIR/acpms.pid)"
 EOF
     $USE_SUDO chmod +x "$BASE_DIR/start-acpms.sh"
     $USE_SUDO "$BASE_DIR/start-acpms.sh" 2>/dev/null || log "Run manually: $BASE_DIR/start-acpms.sh"
+    ACPMS_SERVER_STARTED=1
   fi
 }
 
@@ -1250,7 +1423,7 @@ setup_macos_daemon() {
   if [ -z "${ACPMS_NONINTERACTIVE:-}" ]; then
     read -rp "Install as macOS background service (launchd)? [Y/n] " ans
     case "${ans:-y}" in
-      [Nn]*) log "Skipped. Run manually: $BIN_PATH"; return ;;
+      [Nn]*) log "Skipped. Run manually: $BIN_PATH"; ACPMS_SERVER_STARTED=0; return ;;
     esac
   fi
 
@@ -1300,6 +1473,7 @@ EOF
 EOF
   launchctl unload "$plist" 2>/dev/null || true
   launchctl load "$plist"
+  ACPMS_SERVER_STARTED=1
   log "Service installed. Log: $BASE_DIR/acpms.log"
 }
 
@@ -1354,6 +1528,7 @@ do_uninstall() {
 
 main_install() {
   log "ACPMS Installer - $REPO"
+  ACPMS_SERVER_STARTED=0
   if [ -z "${ACPMS_NONINTERACTIVE:-}" ]; then
     log "This script will check prerequisites (curl, jq, tar, Docker, Docker Compose, cloudflared, Node.js) and may install them if missing."
     log "On Linux you may be prompted for your password (sudo) to install packages and run the server."
@@ -1388,6 +1563,9 @@ main_install() {
   elif [ "$OS" = "darwin" ]; then
     setup_macos_daemon
   fi
+
+  generate_openclaw_bootstrap_prompt_file
+  unset ACPMS_ADMIN_LOGIN_PASSWORD
 
   # Final summary: banner + report
   print_success_banner

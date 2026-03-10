@@ -31,6 +31,9 @@ describe('CreateAttemptDialog repository access guard', () => {
         agent: {
           provider: 'openai-codex',
         },
+        openclaw: {
+          gatewayEnabled: true,
+        },
         cloudflare: {
           accountId: '',
           token: '',
@@ -127,6 +130,9 @@ describe('CreateAttemptDialog repository access guard', () => {
         },
         agent: {
           provider: 'openai-codex',
+        },
+        openclaw: {
+          gatewayEnabled: true,
         },
         cloudflare: {
           accountId: '',

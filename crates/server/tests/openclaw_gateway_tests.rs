@@ -5,8 +5,8 @@ use std::time::Duration;
 
 use acpms_db::models::{SystemRole, User};
 use acpms_executors::{AgentEvent, ApprovalRequestMessage, StatusManager, StatusMessage};
-use acpms_server::middleware::authenticate_openclaw_token;
-use acpms_services::NewOpenClawGatewayEvent;
+use acpms_server::middleware::authenticate_openclaw_token_with_client;
+use acpms_services::{NewOpenClawGatewayEvent, OpenClawAdminService};
 use axum::{
     body::{Body, Bytes},
     http::{header, Request, Response, StatusCode},
@@ -106,6 +106,31 @@ fn parse_sse_event_id(chunk: &str) -> i64 {
         .unwrap_or_else(|error| panic!("invalid SSE id in chunk: {error}; chunk: {chunk}"))
 }
 
+fn extract_bootstrap_token(prompt_text: &str) -> String {
+    prompt_text
+        .lines()
+        .find_map(|line| line.strip_prefix("- Single-use bootstrap token: "))
+        .map(str::trim)
+        .filter(|token| !token.is_empty())
+        .map(str::to_string)
+        .unwrap_or_else(|| panic!("missing bootstrap token in prompt: {prompt_text}"))
+}
+
+async fn clear_openclaw_registry(pool: &PgPool) {
+    sqlx::query("DELETE FROM openclaw_bootstrap_tokens")
+        .execute(pool)
+        .await
+        .expect("clear openclaw bootstrap tokens");
+    sqlx::query("DELETE FROM openclaw_client_keys")
+        .execute(pool)
+        .await
+        .expect("clear openclaw client keys");
+    sqlx::query("DELETE FROM openclaw_clients")
+        .execute(pool)
+        .await
+        .expect("clear openclaw clients");
+}
+
 #[tokio::test]
 async fn openclaw_guide_requires_valid_api_key() {
     let _guard = env_lock().lock().unwrap_or_else(|error| error.into_inner());
@@ -173,7 +198,7 @@ async fn openclaw_guide_returns_bootstrap_payload() {
     );
     assert_eq!(
         json["data"]["auth_rules"]["rest_auth_header"],
-        "Authorization: Bearer <OPENCLAW_API_KEY>"
+        "Authorization: Bearer <OPENCLAW_API_KEY> plus X-OpenClaw-Client-Id: <OPENCLAW_CLIENT_ID> after enrollment"
     );
     assert_eq!(json["data"]["handoff_contract"]["contract_version"], "v1");
     assert_eq!(
@@ -221,6 +246,173 @@ async fn openclaw_guide_accepts_get_method() {
         json["data"]["acpms_profile"]["guide_url"],
         "https://acpms.example.com/api/openclaw/guide-for-openclaw"
     );
+}
+
+#[tokio::test]
+async fn openclaw_bootstrap_complete_registers_client_and_runtime_requires_active_client_id() {
+    let _guard = env_lock().lock().unwrap_or_else(|error| error.into_inner());
+    configure_openclaw_env();
+    std::env::set_var("ACPMS_PUBLIC_URL", "https://acpms.example.com");
+    if !test_database_ready().await {
+        eprintln!("skipping openclaw gateway test because DATABASE_URL is not reachable");
+        return;
+    }
+
+    let pool = setup_test_db().await;
+    clear_openclaw_registry(&pool).await;
+
+    let bootstrap_prompt = OpenClawAdminService::new(pool.clone())
+        .create_bootstrap_token(
+            acpms_services::CreateOpenClawBootstrapTokenInput {
+                label: "OpenClaw Staging".to_string(),
+                expires_in_minutes: 15,
+                suggested_display_name: Some("Staging Runner".to_string()),
+                metadata: None,
+                created_by: None,
+            },
+            "https://acpms.example.com",
+            Some("oc_test_phase1_key"),
+            Some("wh_sec_test_only"),
+        )
+        .await
+        .expect("create bootstrap token");
+    let bootstrap_token = extract_bootstrap_token(&bootstrap_prompt.prompt_text);
+
+    let router = create_router(create_test_app_state(pool.clone()).await);
+    let (enroll_status, enroll_body) = make_request_with_string_headers(
+        &router,
+        "POST",
+        "/api/openclaw/bootstrap/complete",
+        Some(
+            r#"{
+              "display_name": "Staging Runner",
+              "key_id": "key_2026_03",
+              "algorithm": "ed25519",
+              "public_key": "ed25519-pub-test-001"
+            }"#,
+        ),
+        vec![
+            ("content-type", "application/json".to_string()),
+            ("authorization", format!("Bearer {bootstrap_token}")),
+        ],
+    )
+    .await;
+
+    assert_eq!(enroll_status, StatusCode::OK, "{enroll_body}");
+    let enroll_json: Value = serde_json::from_str(&enroll_body).expect("valid json");
+    let client_id = enroll_json["data"]["client_id"]
+        .as_str()
+        .expect("client id")
+        .to_string();
+    assert_eq!(enroll_json["data"]["display_name"], "Staging Runner");
+    assert_eq!(enroll_json["data"]["key_id"], "key_2026_03");
+
+    let auth_header = ("authorization", "Bearer oc_test_phase1_key".to_string());
+
+    let (legacy_status, legacy_body) = make_request_with_string_headers(
+        &router,
+        "GET",
+        "/api/openclaw/v1/projects",
+        None,
+        vec![auth_header.clone()],
+    )
+    .await;
+    assert_eq!(legacy_status, StatusCode::UNAUTHORIZED, "{legacy_body}");
+
+    let (registered_status, registered_body) = make_request_with_string_headers(
+        &router,
+        "GET",
+        "/api/openclaw/v1/projects",
+        None,
+        vec![
+            auth_header.clone(),
+            ("x-openclaw-client-id", client_id.clone()),
+        ],
+    )
+    .await;
+    assert_eq!(registered_status, StatusCode::OK, "{registered_body}");
+
+    OpenClawAdminService::new(pool.clone())
+        .disable_client(&client_id)
+        .await
+        .expect("disable openclaw client");
+
+    let (disabled_status, disabled_body) = make_request_with_string_headers(
+        &router,
+        "GET",
+        "/api/openclaw/v1/projects",
+        None,
+        vec![auth_header, ("x-openclaw-client-id", client_id)],
+    )
+    .await;
+    assert_eq!(disabled_status, StatusCode::FORBIDDEN, "{disabled_body}");
+    clear_openclaw_registry(&pool).await;
+}
+
+#[tokio::test]
+async fn openclaw_bootstrap_tokens_are_single_use() {
+    let _guard = env_lock().lock().unwrap_or_else(|error| error.into_inner());
+    configure_openclaw_env();
+    std::env::set_var("ACPMS_PUBLIC_URL", "https://acpms.example.com");
+    if !test_database_ready().await {
+        eprintln!("skipping openclaw gateway test because DATABASE_URL is not reachable");
+        return;
+    }
+
+    let pool = setup_test_db().await;
+    clear_openclaw_registry(&pool).await;
+
+    let bootstrap_prompt = OpenClawAdminService::new(pool.clone())
+        .create_bootstrap_token(
+            acpms_services::CreateOpenClawBootstrapTokenInput {
+                label: "OpenClaw Laptop".to_string(),
+                expires_in_minutes: 15,
+                suggested_display_name: Some("Laptop Runner".to_string()),
+                metadata: None,
+                created_by: None,
+            },
+            "https://acpms.example.com",
+            Some("oc_test_phase1_key"),
+            Some("wh_sec_test_only"),
+        )
+        .await
+        .expect("create bootstrap token");
+    let bootstrap_token = extract_bootstrap_token(&bootstrap_prompt.prompt_text);
+    let router = create_router(create_test_app_state(pool.clone()).await);
+
+    let request_body = r#"{
+      "display_name": "Laptop Runner",
+      "key_id": "key_2026_04",
+      "algorithm": "ed25519",
+      "public_key": "ed25519-pub-test-002"
+    }"#;
+
+    let (first_status, first_body) = make_request_with_string_headers(
+        &router,
+        "POST",
+        "/api/openclaw/bootstrap/complete",
+        Some(request_body),
+        vec![
+            ("content-type", "application/json".to_string()),
+            ("authorization", format!("Bearer {bootstrap_token}")),
+        ],
+    )
+    .await;
+    assert_eq!(first_status, StatusCode::OK, "{first_body}");
+
+    let (second_status, second_body) = make_request_with_string_headers(
+        &router,
+        "POST",
+        "/api/openclaw/bootstrap/complete",
+        Some(request_body),
+        vec![
+            ("content-type", "application/json".to_string()),
+            ("authorization", format!("Bearer {bootstrap_token}")),
+        ],
+    )
+    .await;
+    assert_eq!(second_status, StatusCode::UNAUTHORIZED, "{second_body}");
+    clear_openclaw_registry(&pool).await;
 }
 
 #[tokio::test]
@@ -288,6 +480,7 @@ async fn openclaw_can_list_tasks_without_project_id_as_system_admin() {
     }
 
     let pool = setup_test_db().await;
+    clear_openclaw_registry(&pool).await;
     let (user_id, _) = create_test_user(&pool, None, None, None).await;
     let project_id = create_test_project(&pool, user_id, Some("OpenClaw Task Visibility")).await;
     let task_id = create_test_task(&pool, project_id, user_id, Some("OpenClaw Visible Task")).await;
@@ -392,7 +585,8 @@ async fn openclaw_auth_uses_dedicated_service_principal() {
     let (admin_user_id, _) = create_test_admin(&pool).await;
 
     let state = create_test_app_state(pool.clone()).await;
-    let auth_user = authenticate_openclaw_token(&state, "oc_test_phase1_key")
+    let auth_user =
+        authenticate_openclaw_token_with_client(&state, "oc_test_phase1_key", None, None, None)
         .await
         .expect("authenticate openclaw token");
 
@@ -435,6 +629,7 @@ async fn openclaw_event_stream_returns_machine_readable_cursor_expired() {
     }
 
     let pool = setup_test_db().await;
+    clear_openclaw_registry(&pool).await;
     sqlx::query("DELETE FROM openclaw_gateway_events")
         .execute(&pool)
         .await
@@ -1266,16 +1461,22 @@ async fn openclaw_ws_routes_require_openclaw_auth() {
     }
 
     let router = create_test_router().await;
+    let ws_headers = vec![
+        ("connection", "Upgrade".to_string()),
+        ("upgrade", "websocket".to_string()),
+        ("sec-websocket-version", "13".to_string()),
+        ("sec-websocket-key", "dGhlIHNhbXBsZSBub25jZQ==".to_string()),
+    ];
     let (status, body) = make_request_with_string_headers(
         &router,
         "GET",
         "/api/openclaw/ws/agent-activity/status",
         None,
-        vec![],
+        ws_headers.clone(),
     )
     .await;
 
-    assert_eq!(status, StatusCode::UNAUTHORIZED, "{body}");
+    assert_eq!(status, StatusCode::UPGRADE_REQUIRED, "{body}");
 
     let (approvals_status, approvals_body) = make_request_with_string_headers(
         &router,
@@ -1285,13 +1486,13 @@ async fn openclaw_ws_routes_require_openclaw_auth() {
             uuid::Uuid::new_v4()
         ),
         None,
-        vec![],
+        ws_headers,
     )
     .await;
 
     assert_eq!(
         approvals_status,
-        StatusCode::UNAUTHORIZED,
+        StatusCode::UPGRADE_REQUIRED,
         "{approvals_body}"
     );
 }

@@ -34,7 +34,10 @@ use crate::{
     AppState,
 };
 use acpms_db::models::{Task, TaskStatus};
-use acpms_services::{CreateTaskContextInput, TaskContextService, TaskService};
+use acpms_services::{
+    ConsumeOpenClawBootstrapTokenInput, CreateTaskContextInput, OpenClawAdminService,
+    OpenClawAdminServiceError, TaskContextService, TaskService,
+};
 
 const OPENCLAW_HANDOFF_CONTRACT_VERSION: &str = "v1";
 const OPENCLAW_CONNECTION_BUNDLE_FIELDS: &[&str] = &[
@@ -208,6 +211,51 @@ pub struct OpenClawCursorExpiredApiResponseDoc {
 }
 
 #[derive(Debug, Deserialize, ToSchema, Validate)]
+pub struct OpenClawBootstrapCompleteRequest {
+    #[validate(length(
+        min = 1,
+        max = 255,
+        message = "Display name must be between 1 and 255 characters"
+    ))]
+    pub display_name: Option<String>,
+    #[validate(length(
+        min = 1,
+        max = 128,
+        message = "Key ID must be between 1 and 128 characters"
+    ))]
+    pub key_id: String,
+    #[validate(length(
+        min = 1,
+        max = 64,
+        message = "Algorithm must be between 1 and 64 characters"
+    ))]
+    pub algorithm: Option<String>,
+    #[validate(length(
+        min = 1,
+        max = 8192,
+        message = "Public key must be between 1 and 8192 characters"
+    ))]
+    pub public_key: String,
+    pub metadata: Option<Value>,
+}
+
+#[derive(Debug, Serialize, ToSchema)]
+pub struct OpenClawBootstrapCompleteResponse {
+    pub client_id: String,
+    pub display_name: String,
+    pub key_id: String,
+    pub key_fingerprint: String,
+    pub status: String,
+    pub auth_header: String,
+    pub client_id_header: String,
+    pub base_endpoint_url: String,
+    pub openapi_url: String,
+    pub guide_url: String,
+    pub events_stream_url: String,
+    pub websocket_base_url: String,
+}
+
+#[derive(Debug, Deserialize, ToSchema, Validate)]
 pub struct OpenClawCreateTaskContextRequest {
     #[validate(length(max = 255, message = "Title must not exceed 255 characters"))]
     pub title: Option<String>,
@@ -264,6 +312,32 @@ fn header_value(headers: &HeaderMap, name: &str) -> Option<String> {
         .get(name)
         .and_then(|value| value.to_str().ok())
         .map(|value| value.trim().to_string())
+        .filter(|value| !value.is_empty())
+}
+
+fn extract_authorization_bearer(headers: &HeaderMap) -> Result<String, ApiError> {
+    let value = headers
+        .get(axum::http::header::AUTHORIZATION)
+        .ok_or(ApiError::Unauthorized)?
+        .to_str()
+        .map_err(|_| ApiError::Unauthorized)?;
+
+    let token = value
+        .strip_prefix("Bearer ")
+        .or_else(|| value.strip_prefix("bearer "))
+        .ok_or(ApiError::Unauthorized)?
+        .trim();
+
+    if token.is_empty() {
+        return Err(ApiError::Unauthorized);
+    }
+
+    Ok(token.to_string())
+}
+
+fn parse_forwarded_for_ip(headers: &HeaderMap) -> Option<String> {
+    header_value(headers, "x-forwarded-for")
+        .and_then(|value| value.split(',').next().map(str::trim).map(str::to_string))
         .filter(|value| !value.is_empty())
 }
 
@@ -336,7 +410,7 @@ fn build_instruction_prompt(
         .unwrap_or_default();
 
     format!(
-        "You are OpenClaw connected to ACPMS (Agentic Coding Project Management System) as a trusted Super Admin integration.\n\nYour role:\n- Operate ACPMS through its OpenClaw gateway as an automation and control plane.\n- Behave as an operations assistant for the primary human user.\n- Load ACPMS context before proposing or executing work.\n- Analyze user requirements by combining them with ACPMS context such as projects, tasks, requirements, sprint state, attempt history, and architecture metadata.\n- Turn approved solutions into ACPMS actions such as creating requirements, creating tasks, and starting task attempts.\n- Report meaningful status, risk, and completion updates back to the primary user.\n\nACPMS connection rules:\n- Base API: {base_endpoint_url}\n- OpenAPI spec: {openapi_url}\n- Bootstrap guide: {guide_url}\n- Global event stream: {events_stream_url}\n- WebSocket base: {websocket_base_url}\n- Always authenticate with: Authorization: Bearer <OPENCLAW_API_KEY>\n- Use only /api/openclaw/v1/* and /api/openclaw/ws/* for ACPMS integration traffic.\n- Treat ACPMS as the source of truth.\n\nBootstrap workflow:\n1. Call the bootstrap guide and treat it as the authoritative runtime guide.\n2. Load the OpenAPI contract from the OpenClaw gateway.\n3. Open and maintain the global event SSE connection.\n4. Use ACPMS context before mutation.\n5. Report material actions, failures, blockers, and approvals to the primary user.\n\nOperating rules:\n- Default mode is analyze_then_confirm.\n- Read and analyze freely, but confirm before destructive or high-impact actions unless autonomous mode was explicitly enabled.\n- Distinguish clearly between ACPMS facts, your recommendation, and any ACPMS changes you already made.\n- Never expose secrets, bearer tokens, or webhook secrets in user-facing messages.\n\nReporting rules:\n- Report what the user asked.\n- Report what ACPMS context you checked.\n- Report what conclusion you reached.\n- Report what ACPMS action you took, if any.\n- Report current status and next step.\n- Report immediately on attempt start, completion, failure, needs input, approval requirement, or deployment risk.\n{channels_text}\n{user_hint}\n{timezone_hint}\n{language_hint}",
+        "You are OpenClaw connected to ACPMS (Agentic Coding Project Management System) as a trusted Super Admin integration.\n\nYour role:\n- Operate ACPMS through its OpenClaw gateway as an automation and control plane.\n- Behave as an operations assistant for the primary human user.\n- Load ACPMS context before proposing or executing work.\n- Analyze user requirements by combining them with ACPMS context such as projects, tasks, requirements, sprint state, attempt history, and architecture metadata.\n- Turn approved solutions into ACPMS actions such as creating requirements, creating tasks, and starting task attempts.\n- Report meaningful status, risk, and completion updates back to the primary user.\n\nACPMS connection rules:\n- Base API: {base_endpoint_url}\n- OpenAPI spec: {openapi_url}\n- Bootstrap guide: {guide_url}\n- Global event stream: {events_stream_url}\n- WebSocket base: {websocket_base_url}\n- Runtime auth after enrollment: Authorization: Bearer <OPENCLAW_API_KEY> and X-OpenClaw-Client-Id: <OPENCLAW_CLIENT_ID>\n- Use only /api/openclaw/v1/* and /api/openclaw/ws/* for ACPMS integration traffic.\n- Treat ACPMS as the source of truth.\n\nBootstrap workflow:\n1. Complete enrollment with the single-use bootstrap token to obtain OPENCLAW_CLIENT_ID.\n2. Call the bootstrap guide and treat it as the authoritative runtime guide.\n3. Load the OpenAPI contract from the OpenClaw gateway.\n4. Open and maintain the global event SSE connection.\n5. Use ACPMS context before mutation.\n6. Report material actions, failures, blockers, and approvals to the primary user.\n\nOperating rules:\n- Default mode is analyze_then_confirm.\n- Read and analyze freely, but confirm before destructive or high-impact actions unless autonomous mode was explicitly enabled.\n- Distinguish clearly between ACPMS facts, your recommendation, and any ACPMS changes you already made.\n- Never expose secrets, bearer tokens, or webhook secrets in user-facing messages.\n\nReporting rules:\n- Report what the user asked.\n- Report what ACPMS context you checked.\n- Report what conclusion you reached.\n- Report what ACPMS action you took, if any.\n- Report current status and next step.\n- Report immediately on attempt start, completion, failure, needs input, approval requirement, or deployment risk.\n{channels_text}\n{user_hint}\n{timezone_hint}\n{language_hint}",
         base_endpoint_url = profile.base_endpoint_url,
         openapi_url = profile.openapi_url,
         guide_url = profile.guide_url,
@@ -465,7 +539,8 @@ fn build_openclaw_guide_response(
             ],
         },
         auth_rules: OpenClawAuthRules {
-            rest_auth_header: "Authorization: Bearer <OPENCLAW_API_KEY>".to_string(),
+            rest_auth_header:
+                "Authorization: Bearer <OPENCLAW_API_KEY> plus X-OpenClaw-Client-Id: <OPENCLAW_CLIENT_ID> after enrollment".to_string(),
             event_stream_resume: "Reconnect with Last-Event-ID or ?after=<event_id> when supported"
                 .to_string(),
             webhook_signature_header: "X-Agentic-Signature".to_string(),
@@ -550,6 +625,52 @@ pub async fn openapi_json(
     Query(query): Query<OpenClawOpenApiQuery>,
 ) -> Json<Value> {
     Json(build_filtered_openclaw_openapi_json(&query))
+}
+
+pub async fn complete_bootstrap(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+    ValidatedJson(payload): ValidatedJson<OpenClawBootstrapCompleteRequest>,
+) -> ApiResult<Json<ApiResponse<OpenClawBootstrapCompleteResponse>>> {
+    if !state.openclaw_gateway.enabled {
+        return Err(ApiError::Forbidden(
+            "OpenClaw gateway is disabled".to_string(),
+        ));
+    }
+
+    let bootstrap_token = extract_authorization_bearer(&headers)?;
+    let base_url = infer_public_base_url(&headers);
+    let enrollment = OpenClawAdminService::new(state.db.clone())
+        .consume_bootstrap_token(ConsumeOpenClawBootstrapTokenInput {
+            raw_token: bootstrap_token,
+            display_name: payload.display_name,
+            key_id: payload.key_id,
+            algorithm: payload.algorithm,
+            public_key: payload.public_key,
+            metadata: payload.metadata,
+            last_seen_ip: parse_forwarded_for_ip(&headers),
+            last_seen_user_agent: header_value(&headers, "user-agent"),
+        })
+        .await
+        .map_err(map_bootstrap_enrollment_error)?;
+
+    Ok(Json(ApiResponse::success(
+        OpenClawBootstrapCompleteResponse {
+            client_id: enrollment.client_id,
+            display_name: enrollment.display_name,
+            key_id: enrollment.key_id,
+            key_fingerprint: enrollment.key_fingerprint,
+            status: enrollment.status,
+            auth_header: "Authorization: Bearer <OPENCLAW_API_KEY>".to_string(),
+            client_id_header: "X-OpenClaw-Client-Id: <OPENCLAW_CLIENT_ID>".to_string(),
+            base_endpoint_url: format!("{}/api/openclaw/v1", base_url),
+            openapi_url: format!("{}/api/openclaw/openapi.json", base_url),
+            guide_url: format!("{}/api/openclaw/guide-for-openclaw", base_url),
+            events_stream_url: format!("{}/api/openclaw/v1/events/stream", base_url),
+            websocket_base_url: to_websocket_base_url(&base_url),
+        },
+        "OpenClaw client enrolled successfully",
+    )))
 }
 
 pub async fn create_task_context_from_openclaw(
@@ -855,7 +976,7 @@ pub fn create_router(state: AppState) -> Router {
             post(create_task_context_from_openclaw),
         );
 
-    Router::new()
+    let protected_routes = Router::new()
         .route(
             "/guide-for-openclaw",
             get(guide_for_openclaw_get).post(guide_for_openclaw),
@@ -866,7 +987,21 @@ pub fn create_router(state: AppState) -> Router {
             state.clone(),
             crate::middleware::require_openclaw_auth,
         ))
+        .with_state(state.clone());
+
+    Router::new()
+        .route("/bootstrap/complete", post(complete_bootstrap))
+        .merge(protected_routes)
         .with_state(state)
+}
+
+fn map_bootstrap_enrollment_error(error: OpenClawAdminServiceError) -> ApiError {
+    match error {
+        OpenClawAdminServiceError::InvalidBootstrapToken => ApiError::Unauthorized,
+        OpenClawAdminServiceError::ClientNotFound(message) => ApiError::NotFound(message),
+        OpenClawAdminServiceError::RevokedClient(message) => ApiError::Conflict(message),
+        OpenClawAdminServiceError::Internal(_, message) => ApiError::Internal(message),
+    }
 }
 
 #[cfg(test)]

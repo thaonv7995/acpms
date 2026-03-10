@@ -46,3 +46,33 @@ These screens cover user entry, identity management, and system configuration.
         - `openai-codex`: `codex --version` works (CLI installed).
         - `gemini-cli`: `gemini --version` works (CLI installed).
     - **Normalization**: Aliases `codex`→`openai-codex`, `gemini`→`gemini-cli` applied on save.
+
+## 5. OpenClaw Access Management (Super Admin Only)
+- **Screen**: `SettingsPage.tsx`
+- **Entry Point**: A button such as `Manage OpenClaw` or `OpenClaw Access` in the super-admin settings area.
+- **UI Pattern**: Clicking the button opens a modal or popup for OpenClaw management.
+
+- **Action: View Enrolled OpenClaw Clients**
+    - **Backend**: Calls `GET /api/v1/admin/openclaw/clients`.
+    - **Effect**: Shows client name, `client_id`, status, enrolled time, last seen time, and key fingerprint summary.
+
+- **Action: Generate New Bootstrap Prompt**
+    - **Trigger**: Click `Add OpenClaw` or `Generate Bootstrap Prompt`.
+    - **Submission**: Calls `POST /api/v1/admin/openclaw/bootstrap-tokens`.
+    - **Effect**: Returns a single-use bootstrap token and a ready-to-send prompt that the admin can copy into another OpenClaw installation.
+    - **Important**: The prompt should be shown only at creation time because the raw bootstrap token is not stored for later retrieval.
+
+- **Action: Disable Client Access**
+    - **Trigger**: Click `Disable Access` on a client row.
+    - **Submission**: Calls `POST /api/v1/admin/openclaw/clients/{client_id}/disable`.
+    - **Effect**: Blocks runtime auth for that OpenClaw client without deleting the enrollment record.
+
+- **Action: Enable Client Access**
+    - **Trigger**: Click `Enable Access` on a disabled client row.
+    - **Submission**: Calls `POST /api/v1/admin/openclaw/clients/{client_id}/enable`.
+    - **Effect**: Re-enables runtime auth for that OpenClaw client.
+
+- **Action: Revoke Client**
+    - **Trigger**: Click `Revoke Client` from row actions or details view.
+    - **Submission**: Calls `POST /api/v1/admin/openclaw/clients/{client_id}/revoke`.
+    - **Effect**: Permanently blocks the enrolled client and its keys. Reconnecting generally requires a new bootstrap flow.

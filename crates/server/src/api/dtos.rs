@@ -306,7 +306,11 @@ impl From<TaskContextWithAttachments> for TaskContextDto {
     fn from(value: TaskContextWithAttachments) -> Self {
         Self::from_parts(
             value.context,
-            value.attachments.into_iter().map(TaskContextAttachmentDto::from).collect(),
+            value
+                .attachments
+                .into_iter()
+                .map(TaskContextAttachmentDto::from)
+                .collect(),
         )
     }
 }

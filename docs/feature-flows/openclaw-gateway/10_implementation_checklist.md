@@ -2,6 +2,12 @@
 
 ## 0. Current Status (2026-03-08)
 
+Auth-model note:
+
+* The checklist below reflects the currently implemented v1 API-key-based gateway.
+* The planned upgrade to single-use bootstrap tokens plus asymmetric runtime auth is specified in `13_auth_upgrade_bootstrap_tokens_and_asymmetric_client_proofs.md`.
+* The smaller implementation breakdown for the `Super Admin Settings -> OpenClaw Access` slice is specified in `14_super_admin_openclaw_access_management_breakdown.md`.
+
 Implementation status after the first code delivery:
 
 *   **Implemented**:

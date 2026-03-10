@@ -7,6 +7,7 @@ export interface SystemSettingsResponse {
     gitlab_pat_configured: boolean;
     gitlab_auto_sync: boolean;
     agent_cli_provider: string;
+    openclaw_gateway_enabled: boolean;
     cloudflare_account_id: string | null;
     cloudflare_api_token_configured: boolean;
     cloudflare_zone_id: string | null;
@@ -49,6 +50,9 @@ export interface Settings {
     agent: {
         provider: string;
     };
+    openclaw: {
+        gatewayEnabled: boolean;
+    };
     cloudflare: {
         accountId: string;
         token: string; // Masked or empty for display
@@ -78,6 +82,9 @@ function toSettings(response: SystemSettingsResponse): Settings {
         },
         agent: {
             provider: response.agent_cli_provider || 'claude-code',
+        },
+        openclaw: {
+            gatewayEnabled: response.openclaw_gateway_enabled,
         },
         cloudflare: {
             accountId: response.cloudflare_account_id || '',

@@ -27,7 +27,10 @@ pub struct CreateTaskContextRequest {
     pub title: Option<String>,
     #[validate(length(min = 1, max = 64, message = "Content type is required"))]
     pub content_type: String,
-    #[validate(length(max = 20000, message = "Context content must not exceed 20000 characters"))]
+    #[validate(length(
+        max = 20000,
+        message = "Context content must not exceed 20000 characters"
+    ))]
     pub raw_content: String,
     #[validate(length(min = 1, max = 32, message = "Source is required"))]
     pub source: String,
@@ -40,7 +43,10 @@ pub struct UpdateTaskContextRequest {
     pub title: Option<Option<String>>,
     #[validate(length(min = 1, max = 64, message = "Content type is required"))]
     pub content_type: Option<String>,
-    #[validate(length(max = 20000, message = "Context content must not exceed 20000 characters"))]
+    #[validate(length(
+        max = 20000,
+        message = "Context content must not exceed 20000 characters"
+    ))]
     pub raw_content: Option<String>,
     pub sort_order: Option<i32>,
 }
@@ -375,7 +381,8 @@ pub async fn create_task_context_attachment(
     Path((task_id, context_id)): Path<(Uuid, Uuid)>,
     ValidatedJson(req): ValidatedJson<CreateTaskContextAttachmentRequest>,
 ) -> ApiResult<Json<ApiResponse<TaskContextAttachmentDto>>> {
-    let task = fetch_task_for_permission(&pool, &auth_user, task_id, Permission::ModifyTask).await?;
+    let task =
+        fetch_task_for_permission(&pool, &auth_user, task_id, Permission::ModifyTask).await?;
 
     let prefix = format!("task-context-attachments/{}/{}/", task.project_id, task_id);
     if !req.storage_key.starts_with(&prefix) {

@@ -1,6 +1,7 @@
 use crate::api::AgentActivityStatusDto;
 use crate::middleware::{
-    authenticate_bearer_token, authenticate_openclaw_token, Permission, RbacChecker,
+    authenticate_bearer_token, authenticate_openclaw_token_with_client, Permission, RbacChecker,
+    OPENCLAW_CLIENT_ID_HEADER,
 };
 use crate::routes::agent::AgentAuthSessionDoc;
 use crate::services::agent_auth::AuthSessionStatus;
@@ -78,7 +79,19 @@ async fn authenticate_openclaw_ws_user(
     state: &AppState,
 ) -> Result<crate::middleware::AuthUser, ApiError> {
     let token = extract_ws_token(headers, auth_header)?;
-    authenticate_openclaw_token(state, &token).await
+    let client_id = headers
+        .get(OPENCLAW_CLIENT_ID_HEADER)
+        .and_then(|value| value.to_str().ok())
+        .map(str::trim)
+        .filter(|value| !value.is_empty());
+    let user_agent = headers
+        .get(header::USER_AGENT)
+        .and_then(|value| value.to_str().ok());
+    let forwarded_for = headers
+        .get("x-forwarded-for")
+        .and_then(|value| value.to_str().ok());
+    authenticate_openclaw_token_with_client(state, &token, client_id, user_agent, forwarded_for)
+        .await
 }
 
 async fn authorize_attempt_ws_access(
@@ -1051,8 +1064,7 @@ pub async fn openclaw_ws_handler(
     headers: HeaderMap,
     auth_header: Option<TypedHeader<Authorization<Bearer>>>,
 ) -> Result<impl IntoResponse, ApiError> {
-    let token = extract_ws_token(&headers, auth_header)?;
-    let auth_user = authenticate_openclaw_token(&state, &token).await?;
+    let auth_user = authenticate_openclaw_ws_user(&headers, auth_header, &state).await?;
     authorize_attempt_ws_access(&state, attempt_id, auth_user.id).await?;
 
     let ws = ws_upgrade_with_protocol(ws, &headers);
@@ -1611,9 +1623,7 @@ pub async fn openclaw_agent_activity_ws_handler(
     headers: HeaderMap,
     auth_header: Option<TypedHeader<Authorization<Bearer>>>,
 ) -> Result<impl IntoResponse, ApiError> {
-    let token = extract_ws_token(&headers, auth_header)?;
-
-    let auth_user = authenticate_openclaw_token(&state, &token).await?;
+    let auth_user = authenticate_openclaw_ws_user(&headers, auth_header, &state).await?;
     let user_id = auth_user.id;
     let is_admin = RbacChecker::is_system_admin(user_id, &state.db).await?;
 
@@ -2713,8 +2723,7 @@ pub async fn openclaw_project_ws_handler(
     headers: HeaderMap,
     auth_header: Option<TypedHeader<Authorization<Bearer>>>,
 ) -> Result<impl IntoResponse, ApiError> {
-    let token = extract_ws_token(&headers, auth_header)?;
-    let auth_user = authenticate_openclaw_token(&state, &token).await?;
+    let auth_user = authenticate_openclaw_ws_user(&headers, auth_header, &state).await?;
     authorize_project_ws_access(&state, project_id, auth_user.id).await?;
 
     let ws = ws_upgrade_with_protocol(ws, &headers);

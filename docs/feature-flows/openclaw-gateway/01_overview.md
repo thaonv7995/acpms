@@ -1,5 +1,7 @@
 # OpenClaw Gateway: 01 - Overview & Architecture
 
+Note: this document describes the current v1 gateway model. The planned auth hardening and multi-client enrollment model is specified in `13_auth_upgrade_bootstrap_tokens_and_asymmetric_client_proofs.md`.
+
 ## 1. Goal & Objectives
 
 The primary goal of the **OpenClaw Gateway** feature is to let `OpenClaw` operate Agentic-Coding as a remote **Super Admin** control plane.

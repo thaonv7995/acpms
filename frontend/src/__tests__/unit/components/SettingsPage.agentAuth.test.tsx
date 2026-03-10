@@ -14,6 +14,10 @@ vi.mock('../../../components/layout/AppShell', () => ({
   AppShell: ({ children }: { children: React.ReactNode }) => <div>{children}</div>,
 }));
 
+vi.mock('../../../components/modals/OpenClawAccessModal', () => ({
+  OpenClawAccessModal: () => null,
+}));
+
 vi.mock('../../../hooks/useSettings', () => ({
   useSettings: vi.fn(),
 }));
@@ -43,6 +47,9 @@ const baseSettings = {
   },
   agent: {
     provider: 'openai-codex',
+  },
+  openclaw: {
+    gatewayEnabled: true,
   },
   cloudflare: {
     accountId: '',

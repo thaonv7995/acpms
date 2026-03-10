@@ -1268,6 +1268,7 @@ pub struct SystemSettingsResponse {
     pub gitlab_pat_configured: bool, // Indicator that PAT is set (not the actual value)
     pub gitlab_auto_sync: bool,
     pub agent_cli_provider: String,
+    pub openclaw_gateway_enabled: bool,
     pub cloudflare_account_id: Option<String>,
     pub cloudflare_api_token_configured: bool,
     pub cloudflare_zone_id: Option<String>,
@@ -1298,6 +1299,15 @@ impl From<SystemSettings> for SystemSettingsResponse {
             gitlab_pat_configured: s.gitlab_pat_encrypted.is_some(),
             gitlab_auto_sync: s.gitlab_auto_sync,
             agent_cli_provider: s.agent_cli_provider,
+            openclaw_gateway_enabled: std::env::var("OPENCLAW_GATEWAY_ENABLED")
+                .ok()
+                .map(|value| {
+                    matches!(
+                        value.trim().to_ascii_lowercase().as_str(),
+                        "1" | "true" | "yes" | "on"
+                    )
+                })
+                .unwrap_or(false),
             cloudflare_account_id: s.cloudflare_account_id,
             cloudflare_api_token_configured: s.cloudflare_api_token_encrypted.is_some(),
             cloudflare_zone_id: s.cloudflare_zone_id,

@@ -266,7 +266,8 @@ impl TaskContextService {
             return Err(anyhow!("Task context not found"));
         }
 
-        self.sync_task_attachment_count_in_tx(&mut tx, task_id).await?;
+        self.sync_task_attachment_count_in_tx(&mut tx, task_id)
+            .await?;
         tx.commit()
             .await
             .context("Failed to commit task context delete transaction")?;
@@ -313,7 +314,8 @@ impl TaskContextService {
         .await
         .context("Failed to create task context attachment")?;
 
-        self.sync_task_attachment_count_in_tx(&mut tx, task_id).await?;
+        self.sync_task_attachment_count_in_tx(&mut tx, task_id)
+            .await?;
         tx.commit()
             .await
             .context("Failed to commit task context attachment transaction")?;
@@ -357,7 +359,8 @@ impl TaskContextService {
             return Err(anyhow!("Task context attachment not found"));
         }
 
-        self.sync_task_attachment_count_in_tx(&mut tx, task_id).await?;
+        self.sync_task_attachment_count_in_tx(&mut tx, task_id)
+            .await?;
         tx.commit()
             .await
             .context("Failed to commit task context attachment delete transaction")?;
@@ -386,7 +389,8 @@ impl TaskContextService {
             .begin()
             .await
             .context("Failed to begin task attachment count sync transaction")?;
-        self.sync_task_attachment_count_in_tx(&mut tx, task_id).await?;
+        self.sync_task_attachment_count_in_tx(&mut tx, task_id)
+            .await?;
         tx.commit()
             .await
             .context("Failed to commit task attachment count sync transaction")?;

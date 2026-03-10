@@ -889,6 +889,7 @@ mod tests {
             gitlab_pat_configured: false,
             gitlab_auto_sync: false,
             agent_cli_provider: "openai-codex".to_string(),
+            openclaw_gateway_enabled: false,
             cloudflare_account_id: account_id.map(ToString::to_string),
             cloudflare_api_token_configured: token_configured,
             cloudflare_zone_id: zone_id.map(ToString::to_string),

@@ -67,6 +67,8 @@ vi.mock('../../../hooks/useSettings', () => ({
 
 vi.mock('../../../api/tasks', () => ({
   createTask: vi.fn(),
+  updateTaskMetadata: vi.fn().mockResolvedValue(undefined),
+  deleteTask: vi.fn().mockResolvedValue(undefined),
   getTaskAttachmentUploadUrl: vi.fn(),
 }));
 
@@ -165,6 +167,9 @@ describe('CreateTaskModal repository access guard', () => {
         },
         agent: {
           provider: 'openai-codex',
+        },
+        openclaw: {
+          gatewayEnabled: true,
         },
         cloudflare: {
           accountId: '',
@@ -362,6 +367,9 @@ describe('CreateTaskModal repository access guard', () => {
         },
         agent: {
           provider: 'openai-codex',
+        },
+        openclaw: {
+          gatewayEnabled: true,
         },
         cloudflare: {
           accountId: '',

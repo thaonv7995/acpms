@@ -1,5 +1,6 @@
 import { useState, useEffect, useRef } from 'react';
 import { AppShell } from '../components/layout/AppShell';
+import { OpenClawAccessModal } from '../components/modals/OpenClawAccessModal';
 import { useSettings } from '../hooks/useSettings';
 import { useToast } from '../hooks/useToast';
 import { Toast } from '../components/shared/Toast';
@@ -299,6 +300,7 @@ function SettingsGuideButton({
 export function SettingsPage() {
     const { settings, loading: settingsLoading, saving, save, testing, testGitLab } = useSettings();
     const { toasts, showToast, hideToast } = useToast();
+    const isOpenClawGatewayEnabled = settings?.openclaw.gatewayEnabled ?? false;
 
     // GitLab State
     const [gitlabUrl, setGitlabUrl] = useState('');
@@ -318,6 +320,7 @@ export function SettingsPage() {
     const [cloudflareCheckResult, setCloudflareCheckResult] =
         useState<CloudflareConnectionCheckResponse | null>(null);
     const [isCheckingCloudflare, setIsCheckingCloudflare] = useState(false);
+    const [showOpenClawAccessModal, setShowOpenClawAccessModal] = useState(false);
 
     // Worktrees Path & Agent Language State
     const [worktreesPath, setWorktreesPath] = useState('');
@@ -1077,50 +1080,45 @@ export function SettingsPage() {
 
                                 {gitlabCheckResult && (
                                     <div
-                                        className={`rounded-lg border px-4 py-3 ${
-                                            gitlabCheckResult.success
-                                                ? 'border-emerald-500/30 bg-emerald-500/10'
-                                                : 'border-rose-500/30 bg-rose-500/10'
-                                        }`}
+                                        className={`rounded-lg border px-4 py-3 ${gitlabCheckResult.success
+                                            ? 'border-emerald-500/30 bg-emerald-500/10'
+                                            : 'border-rose-500/30 bg-rose-500/10'
+                                            }`}
                                     >
                                         <div className="flex items-start justify-between gap-3">
                                             <div className="flex items-start gap-3">
                                                 <span
-                                                    className={`material-symbols-outlined ${
-                                                        gitlabCheckResult.success
-                                                            ? 'text-emerald-600 dark:text-emerald-400'
-                                                            : 'text-rose-600 dark:text-rose-400'
-                                                    }`}
+                                                    className={`material-symbols-outlined ${gitlabCheckResult.success
+                                                        ? 'text-emerald-600 dark:text-emerald-400'
+                                                        : 'text-rose-600 dark:text-rose-400'
+                                                        }`}
                                                 >
                                                     {gitlabCheckResult.success ? 'check_circle' : 'error'}
                                                 </span>
                                                 <div>
                                                     <p
-                                                        className={`text-sm font-semibold ${
-                                                            gitlabCheckResult.success
-                                                                ? 'text-emerald-800 dark:text-emerald-200'
-                                                                : 'text-rose-800 dark:text-rose-200'
-                                                        }`}
+                                                        className={`text-sm font-semibold ${gitlabCheckResult.success
+                                                            ? 'text-emerald-800 dark:text-emerald-200'
+                                                            : 'text-rose-800 dark:text-rose-200'
+                                                            }`}
                                                     >
                                                         {gitlabCheckResult.success ? 'Connection OK' : 'Connection Failed'}
                                                     </p>
                                                     <p
-                                                        className={`mt-1 text-sm ${
-                                                            gitlabCheckResult.success
-                                                                ? 'text-emerald-700 dark:text-emerald-100/90'
-                                                                : 'text-rose-700 dark:text-rose-100/90'
-                                                        }`}
+                                                        className={`mt-1 text-sm ${gitlabCheckResult.success
+                                                            ? 'text-emerald-700 dark:text-emerald-100/90'
+                                                            : 'text-rose-700 dark:text-rose-100/90'
+                                                            }`}
                                                     >
                                                         {gitlabCheckResult.message}
                                                     </p>
                                                 </div>
                                             </div>
                                             <span
-                                                className={`shrink-0 rounded-full px-2 py-1 text-xs font-bold uppercase ${
-                                                    gitlabCheckResult.success
-                                                        ? 'bg-emerald-500/15 text-emerald-700 dark:text-emerald-300'
-                                                        : 'bg-rose-500/15 text-rose-700 dark:text-rose-300'
-                                                }`}
+                                                className={`shrink-0 rounded-full px-2 py-1 text-xs font-bold uppercase ${gitlabCheckResult.success
+                                                    ? 'bg-emerald-500/15 text-emerald-700 dark:text-emerald-300'
+                                                    : 'bg-rose-500/15 text-rose-700 dark:text-rose-300'
+                                                    }`}
                                             >
                                                 Checked
                                             </span>
@@ -1458,23 +1456,21 @@ export function SettingsPage() {
 
                                 {cloudflareCheckResult && (
                                     <div
-                                        className={`rounded-lg border px-4 py-3 ${
-                                            cloudflareCheckResult.status === 'success'
-                                                ? 'border-emerald-500/30 bg-emerald-500/10'
-                                                : cloudflareCheckResult.status === 'warning'
-                                                    ? 'border-amber-500/30 bg-amber-500/10'
-                                                    : 'border-rose-500/30 bg-rose-500/10'
-                                        }`}
+                                        className={`rounded-lg border px-4 py-3 ${cloudflareCheckResult.status === 'success'
+                                            ? 'border-emerald-500/30 bg-emerald-500/10'
+                                            : cloudflareCheckResult.status === 'warning'
+                                                ? 'border-amber-500/30 bg-amber-500/10'
+                                                : 'border-rose-500/30 bg-rose-500/10'
+                                            }`}
                                     >
                                         <div className="flex items-start gap-3">
                                             <span
-                                                className={`material-symbols-outlined text-[18px] ${
-                                                    cloudflareCheckResult.status === 'success'
-                                                        ? 'text-emerald-400'
-                                                        : cloudflareCheckResult.status === 'warning'
-                                                            ? 'text-amber-400'
-                                                            : 'text-rose-400'
-                                                }`}
+                                                className={`material-symbols-outlined text-[18px] ${cloudflareCheckResult.status === 'success'
+                                                    ? 'text-emerald-400'
+                                                    : cloudflareCheckResult.status === 'warning'
+                                                        ? 'text-amber-400'
+                                                        : 'text-rose-400'
+                                                    }`}
                                             >
                                                 {cloudflareCheckResult.status === 'success'
                                                     ? 'check_circle'
@@ -1627,6 +1623,56 @@ export function SettingsPage() {
                         </div>
                     </section>
 
+                    {isOpenClawGatewayEnabled ? (
+                    <section className="flex flex-col gap-4">
+                        <div className="flex items-center justify-between border-b border-border pb-2">
+                            <div className="flex items-center gap-2">
+                                <span className="material-symbols-outlined text-primary">hub</span>
+                                <h3 className="text-card-foreground text-lg font-bold leading-tight">
+                                    OpenClaw Access
+                                </h3>
+                            </div>
+                        </div>
+
+                        <div className="flex flex-col md:flex-row items-stretch gap-6 rounded-xl bg-card p-6 shadow-sm border border-border">
+                            <div className="size-14 rounded-lg bg-primary/10 flex items-center justify-center flex-shrink-0">
+                                <span className="material-symbols-outlined text-primary text-3xl">
+                                    hub
+                                </span>
+                            </div>
+                            <div className="flex flex-1 flex-col gap-4 md:flex-row md:items-start md:justify-between">
+                                <div className="max-w-2xl">
+                                    <h4 className="text-card-foreground text-lg font-bold">
+                                        OpenClaw Clients
+                                    </h4>
+                                    <p className="mt-1 text-sm text-muted-foreground">
+                                        The installer creates the first OpenClaw bootstrap prompt
+                                        when gateway access is enabled. Use this panel to manage
+                                        enrolled clients and add additional OpenClaw installations
+                                        later without affecting existing clients.
+                                    </p>
+                                </div>
+                                <div className="flex items-start">
+                                    <button
+                                        type="button"
+                                        onClick={() => setShowOpenClawAccessModal(true)}
+                                        aria-label="Manage OpenClaw"
+                                        className="inline-flex items-center gap-2 rounded-lg bg-primary px-4 py-2 text-sm font-semibold text-primary-foreground transition-colors hover:bg-primary/90"
+                                    >
+                                        <span
+                                            aria-hidden="true"
+                                            className="material-symbols-outlined text-[18px]"
+                                        >
+                                            settings
+                                        </span>
+                                        Manage
+                                    </button>
+                                </div>
+                            </div>
+                        </div>
+                    </section>
+                    ) : null}
+
                 </div>
             </div>
 
@@ -1639,6 +1685,14 @@ export function SettingsPage() {
                     onClose={() => hideToast(toast.id)}
                 />
             ))}
+
+            {isOpenClawGatewayEnabled ? (
+                <OpenClawAccessModal
+                    isOpen={showOpenClawAccessModal}
+                    onClose={() => setShowOpenClawAccessModal(false)}
+                    showToast={showToast}
+                />
+            ) : null}
 
             <Dialog open={activeGuide !== null} onOpenChange={(open) => !open && setActiveGuide(null)}>
                 <DialogContent className="max-w-3xl p-0 overflow-hidden">

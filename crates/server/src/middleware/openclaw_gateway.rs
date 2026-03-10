@@ -15,12 +15,13 @@ use acpms_db::models::SystemRole;
 
 const OPENCLAW_SERVICE_USER_EMAIL: &str = "openclaw-gateway@acpms.local";
 const OPENCLAW_SERVICE_USER_NAME: &str = "OpenClaw Gateway";
+pub const OPENCLAW_CLIENT_ID_HEADER: &str = "x-openclaw-client-id";
 
 fn default_openclaw_service_user_id() -> Uuid {
     Uuid::from_u128(0x6a962b11c7df4b5d8f31e1cb7606aa10)
 }
 
-fn extract_bearer_token(headers: &HeaderMap) -> Result<&str, ApiError> {
+pub(crate) fn extract_bearer_token(headers: &HeaderMap) -> Result<&str, ApiError> {
     let value = headers
         .get(header::AUTHORIZATION)
         .ok_or(ApiError::Unauthorized)?
@@ -38,6 +39,22 @@ fn extract_bearer_token(headers: &HeaderMap) -> Result<&str, ApiError> {
     }
 
     Ok(token)
+}
+
+fn extract_client_id(headers: &HeaderMap) -> Option<&str> {
+    headers
+        .get(OPENCLAW_CLIENT_ID_HEADER)
+        .and_then(|value| value.to_str().ok())
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+}
+
+fn parse_forwarded_for_ip(forwarded_for: Option<&str>) -> Option<String> {
+    forwarded_for
+        .and_then(|value| value.split(',').next())
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+        .map(str::to_string)
 }
 
 fn ensure_gateway_enabled(config: &OpenClawGatewayConfig) -> Result<(), ApiError> {
@@ -112,9 +129,92 @@ async fn resolve_actor_user_id(state: &AppState) -> Result<Uuid, ApiError> {
     })
 }
 
-pub async fn authenticate_openclaw_token(
+#[derive(sqlx::FromRow)]
+struct OpenClawClientAuthRow {
+    client_id: String,
+    status: String,
+}
+
+async fn validate_registered_client(
+    state: &AppState,
+    client_id: Option<&str>,
+    user_agent: Option<&str>,
+    forwarded_for: Option<&str>,
+) -> Result<(), ApiError> {
+    let has_registered_clients = sqlx::query_scalar::<_, bool>(
+        r#"
+        SELECT EXISTS(SELECT 1 FROM openclaw_clients)
+        "#,
+    )
+    .fetch_one(&state.db)
+    .await
+    .map_err(ApiError::Database)?;
+
+    let Some(client_id) = client_id else {
+        if has_registered_clients {
+            return Err(ApiError::Unauthorized);
+        }
+
+        return Ok(());
+    };
+
+    let client = sqlx::query_as::<_, OpenClawClientAuthRow>(
+        r#"
+        SELECT client_id, status
+        FROM openclaw_clients
+        WHERE client_id = $1
+        "#,
+    )
+    .bind(client_id)
+    .fetch_optional(&state.db)
+    .await
+    .map_err(ApiError::Database)?
+    .ok_or(ApiError::Unauthorized)?;
+
+    match client.status.as_str() {
+        "active" => {}
+        "disabled" => {
+            return Err(ApiError::Forbidden(format!(
+                "OpenClaw client '{}' is disabled",
+                client.client_id
+            )));
+        }
+        "revoked" => {
+            return Err(ApiError::Forbidden(format!(
+                "OpenClaw client '{}' is revoked",
+                client.client_id
+            )));
+        }
+        _ => return Err(ApiError::Unauthorized),
+    }
+
+    sqlx::query(
+        r#"
+        UPDATE openclaw_clients
+        SET
+            last_seen_at = NOW(),
+            last_seen_ip = $2::inet,
+            last_seen_user_agent = $3,
+            updated_at = NOW()
+        WHERE client_id = $1
+        "#,
+    )
+    .bind(client.client_id)
+    .bind(parse_forwarded_for_ip(forwarded_for))
+    .bind(user_agent)
+    .execute(&state.db)
+    .await
+    .map_err(ApiError::Database)?;
+
+    Ok(())
+}
+
+pub async fn authenticate_openclaw_token_with_client(
     state: &AppState,
     token: &str,
+    client_id: Option<&str>,
+    user_agent: Option<&str>,
+    forwarded_for: Option<&str>,
 ) -> Result<AuthUser, ApiError> {
     if let Err(error) = ensure_gateway_enabled(&state.openclaw_gateway) {
         state
@@ -138,6 +238,21 @@ pub async fn authenticate_openclaw_token(
             .with_label_values(&["unauthorized"])
             .inc();
         return Err(ApiError::Unauthorized);
+    }
+
+    if let Err(error) =
+        validate_registered_client(state, client_id, user_agent, forwarded_for).await
+    {
+        state
+            .metrics
+            .openclaw_gateway_auth_total
+            .with_label_values(&[if matches!(error, ApiError::Forbidden(_)) {
+                "forbidden"
+            } else {
+                "unauthorized"
+            }])
+            .inc();
+        return Err(error);
     }
 
     let actor_user_id = match resolve_actor_user_id(state).await {
@@ -167,7 +282,20 @@ pub async fn authenticate_openclaw_request(
     headers: &HeaderMap,
 ) -> Result<AuthUser, ApiError> {
     let token = extract_bearer_token(headers)?;
-    authenticate_openclaw_token(state, token).await
+    let user_agent = headers
+        .get(header::USER_AGENT)
+        .and_then(|value| value.to_str().ok());
+    let forwarded_for = headers
+        .get("x-forwarded-for")
+        .and_then(|value| value.to_str().ok());
+    authenticate_openclaw_token_with_client(
+        state,
+        token,
+        extract_client_id(headers),
+        user_agent,
+        forwarded_for,
+    )
+    .await
 }
 
 pub async fn require_openclaw_auth(

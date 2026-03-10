@@ -190,9 +190,17 @@ impl ProjectDocumentService {
             .await?
             .ok_or(ProjectDocumentServiceError::NotFound)?;
 
-        let next_title = input.title.clone().unwrap_or_else(|| existing.title.clone());
-        self.ensure_title_available(project_id, &next_title, Some(&existing.filename), Some(document_id))
-            .await?;
+        let next_title = input
+            .title
+            .clone()
+            .unwrap_or_else(|| existing.title.clone());
+        self.ensure_title_available(
+            project_id,
+            &next_title,
+            Some(&existing.filename),
+            Some(document_id),
+        )
+        .await?;
 
         let next_document_kind = input
             .document_kind
@@ -206,10 +214,7 @@ impl ProjectDocumentService {
             .storage_key
             .clone()
             .unwrap_or_else(|| existing.storage_key.clone());
-        let next_checksum = input
-            .checksum
-            .clone()
-            .unwrap_or(existing.checksum.clone());
+        let next_checksum = input.checksum.clone().unwrap_or(existing.checksum.clone());
         let next_size_bytes = input.size_bytes.unwrap_or(existing.size_bytes);
 
         let content_changed = next_content_type != existing.content_type
@@ -327,7 +332,10 @@ impl ProjectDocumentService {
         .context("Failed to validate project document title")?;
 
         if let Some((_, existing_filename)) = conflict {
-            if filename.map(|candidate| candidate != existing_filename).unwrap_or(true) {
+            if filename
+                .map(|candidate| candidate != existing_filename)
+                .unwrap_or(true)
+            {
                 return Err(ProjectDocumentServiceError::TitleConflict);
             }
         }
