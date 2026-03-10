@@ -11,10 +11,47 @@ NC='\033[0m' # No Color
 
 echo -e "${GREEN}=== ACPMS API Integration Tests ===${NC}\n"
 
+PROJECT_ROOT="$(cd "$(dirname "$0")/../.." && pwd)"
+
+resolve_docker_postgres_port() {
+    docker port acpms-postgres 5432 2>/dev/null | awk -F: '/127\\.0\\.0\\.1/ {print $NF; exit}'
+}
+
+build_test_database_url() {
+    local base_url="$1"
+
+    case "$base_url" in
+        */acpms)
+            printf '%s/acpms_test' "${base_url%/acpms}"
+            ;;
+        *)
+            printf '%s' "$base_url"
+            ;;
+    esac
+}
+
 # Check if DATABASE_URL is set
 if [ -z "$DATABASE_URL" ]; then
-    echo -e "${YELLOW}DATABASE_URL not set, using default test database${NC}"
-    export DATABASE_URL="postgresql://postgres:postgres@localhost:5432/acpms_test"
+    if [ -f "$PROJECT_ROOT/.env" ]; then
+        set -a
+        . "$PROJECT_ROOT/.env"
+        set +a
+    fi
+
+    if [ -n "${DATABASE_URL:-}" ]; then
+        export DATABASE_URL="$(build_test_database_url "$DATABASE_URL")"
+        echo -e "${YELLOW}DATABASE_URL loaded from .env and switched to test database${NC}"
+    else
+        DB_PORT="$(resolve_docker_postgres_port || true)"
+        if [ -n "$DB_PORT" ]; then
+            export DATABASE_URL="postgresql://acpms_user:acpms_password@127.0.0.1:${DB_PORT}/acpms_test"
+            echo -e "${YELLOW}DATABASE_URL not set, using Docker PostgreSQL on localhost:${DB_PORT}${NC}"
+        else
+            echo -e "${RED}DATABASE_URL not set and Docker PostgreSQL port could not be determined${NC}"
+            echo -e "${YELLOW}Export DATABASE_URL explicitly or start Docker Postgres first${NC}"
+            exit 1
+        fi
+    fi
 fi
 
 echo -e "Database URL: ${DATABASE_URL}\n"

@@ -29,7 +29,9 @@ pub struct OpenClawAdminClientSummary {
     pub client_id: String,
     pub display_name: String,
     pub status: String,
+    pub kind: String,
     pub enrolled_at: DateTime<Utc>,
+    pub expires_at: Option<DateTime<Utc>>,
     pub last_seen_at: Option<DateTime<Utc>>,
     pub last_seen_ip: Option<String>,
     pub last_seen_user_agent: Option<String>,
@@ -108,12 +110,23 @@ struct OpenClawBootstrapTokenRow {
     metadata: Value,
 }
 
+#[derive(Debug, FromRow)]
+struct OpenClawPendingTokenRow {
+    id: Uuid,
+    label: String,
+    suggested_display_name: Option<String>,
+    expires_at: DateTime<Utc>,
+    created_at: DateTime<Utc>,
+}
+
 impl OpenClawAdminService {
     pub fn new(pool: PgPool) -> Self {
         Self { pool }
     }
 
     pub async fn list_clients(&self) -> ServiceResult<Vec<OpenClawAdminClientSummary>> {
+        self.expire_stale_bootstrap_tokens().await?;
+
         let rows = sqlx::query_as::<_, OpenClawClientRow>(
             r#"
             SELECT
@@ -133,7 +146,27 @@ impl OpenClawAdminService {
         .await
         .map_err(|error| Self::internal("load OpenClaw clients", error))?;
 
-        self.build_client_summaries(rows).await
+        let pending_rows = sqlx::query_as::<_, OpenClawPendingTokenRow>(
+            r#"
+            SELECT
+                id,
+                label,
+                suggested_display_name,
+                expires_at,
+                created_at
+            FROM openclaw_bootstrap_tokens
+            WHERE status = 'active'
+            ORDER BY created_at DESC
+            "#,
+        )
+        .fetch_all(&self.pool)
+        .await
+        .map_err(|error| Self::internal("load pending OpenClaw bootstrap tokens", error))?;
+
+        let mut summaries = self.build_client_summaries(rows).await?;
+        summaries.extend(pending_rows.into_iter().map(Self::build_pending_summary));
+        summaries.sort_by(|left, right| right.enrolled_at.cmp(&left.enrolled_at));
+        Ok(summaries)
     }
 
     pub async fn create_bootstrap_token(
@@ -376,6 +409,58 @@ impl OpenClawAdminService {
             .await
     }
 
+    pub async fn delete_client(
+        &self,
+        client_external_id: &str,
+    ) -> ServiceResult<OpenClawAdminClientSummary> {
+        if let Some(pending_token_id) = client_external_id.strip_prefix("pending:") {
+            let pending_token_id = Uuid::parse_str(pending_token_id).map_err(|_| {
+                OpenClawAdminServiceError::ClientNotFound(client_external_id.to_string())
+            })?;
+
+            let row = sqlx::query_as::<_, OpenClawPendingTokenRow>(
+                r#"
+                SELECT
+                    id,
+                    label,
+                    suggested_display_name,
+                    expires_at,
+                    created_at
+                FROM openclaw_bootstrap_tokens
+                WHERE id = $1
+                  AND status = 'active'
+                "#,
+            )
+            .bind(pending_token_id)
+            .fetch_optional(&self.pool)
+            .await
+            .map_err(|error| Self::internal("load pending OpenClaw bootstrap token", error))?
+            .ok_or_else(|| {
+                OpenClawAdminServiceError::ClientNotFound(client_external_id.to_string())
+            })?;
+
+            sqlx::query("DELETE FROM openclaw_bootstrap_tokens WHERE id = $1")
+                .bind(pending_token_id)
+                .execute(&self.pool)
+                .await
+                .map_err(|error| Self::internal("delete pending OpenClaw bootstrap token", error))?;
+
+            return Ok(Self::build_pending_summary(row));
+        }
+
+        let summary = self
+            .load_client_summary_by_external_id(client_external_id)
+            .await?;
+
+        sqlx::query("DELETE FROM openclaw_clients WHERE client_id = $1")
+            .bind(client_external_id)
+            .execute(&self.pool)
+            .await
+            .map_err(|error| Self::internal("delete OpenClaw client", error))?;
+
+        Ok(summary)
+    }
+
     async fn update_client_status(
         &self,
         client_external_id: &str,
@@ -529,7 +614,9 @@ impl OpenClawAdminService {
                 client_id: row.client_id,
                 display_name: row.display_name,
                 status: row.status,
+                kind: "enrolled".to_string(),
                 enrolled_at: row.enrolled_at,
+                expires_at: None,
                 last_seen_at: row.last_seen_at,
                 last_seen_ip: row.last_seen_ip,
                 last_seen_user_agent: row.last_seen_user_agent,
@@ -552,6 +639,27 @@ impl OpenClawAdminService {
         .map_err(|error| Self::internal("expire stale OpenClaw bootstrap tokens", error))?;
 
         Ok(())
+    }
+
+    fn build_pending_summary(row: OpenClawPendingTokenRow) -> OpenClawAdminClientSummary {
+        OpenClawAdminClientSummary {
+            client_id: format!("pending:{}", row.id),
+            display_name: row
+                .suggested_display_name
+                .as_deref()
+                .map(str::trim)
+                .filter(|value| !value.is_empty())
+                .unwrap_or(&row.label)
+                .to_string(),
+            status: "waiting_connection".to_string(),
+            kind: "pending".to_string(),
+            enrolled_at: row.created_at,
+            expires_at: Some(row.expires_at),
+            last_seen_at: None,
+            last_seen_ip: None,
+            last_seen_user_agent: None,
+            key_fingerprints: Vec::new(),
+        }
     }
 
     fn internal(context: &'static str, error: impl std::fmt::Display) -> OpenClawAdminServiceError {

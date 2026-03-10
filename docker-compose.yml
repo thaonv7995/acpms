@@ -9,7 +9,7 @@ services:
       POSTGRES_USER: acpms_user
       POSTGRES_PASSWORD: acpms_password
     ports:
-      - "5432:5432"
+      - "127.0.0.1:0:5432"
     volumes:
       - postgres_data:/var/lib/postgresql/data
     healthcheck:

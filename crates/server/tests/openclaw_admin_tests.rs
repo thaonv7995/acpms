@@ -20,8 +20,9 @@ fn env_lock() -> &'static Mutex<()> {
 }
 
 async fn test_database_ready() -> bool {
-    let database_url = std::env::var("DATABASE_URL")
-        .unwrap_or_else(|_| "postgresql://postgres:postgres@localhost:5432/acpms_test".to_string());
+    let Some(database_url) = helpers::resolve_test_database_url() else {
+        return false;
+    };
 
     tokio::time::timeout(Duration::from_secs(2), PgPool::connect(&database_url))
         .await
@@ -43,6 +44,10 @@ async fn openclaw_admin_can_list_clients() {
     let state = create_test_app_state(pool.clone()).await;
     let router = create_router(state);
 
+    sqlx::query("DELETE FROM openclaw_bootstrap_tokens")
+        .execute(&pool)
+        .await
+        .expect("clear bootstrap tokens");
     sqlx::query("DELETE FROM openclaw_client_keys")
         .execute(&pool)
         .await
@@ -102,6 +107,145 @@ async fn openclaw_admin_can_list_clients() {
     assert_eq!(clients[0]["client_id"], "oc_client_prod");
     assert_eq!(clients[0]["display_name"], "OpenClaw Production");
     assert_eq!(clients[0]["key_fingerprints"][0], "ed25519:ab12cd34");
+}
+
+#[tokio::test]
+async fn openclaw_admin_lists_pending_bootstrap_tokens_as_waiting_connections() {
+    let _guard = env_lock().lock().unwrap_or_else(|error| error.into_inner());
+    std::env::set_var("OPENCLAW_GATEWAY_ENABLED", "true");
+    if !test_database_ready().await {
+        eprintln!("skipping openclaw admin test because DATABASE_URL is not reachable");
+        return;
+    }
+
+    let pool = setup_test_db().await;
+    let state = create_test_app_state(pool.clone()).await;
+    let router = create_router(state);
+
+    sqlx::query("DELETE FROM openclaw_bootstrap_tokens")
+        .execute(&pool)
+        .await
+        .expect("clear bootstrap tokens");
+    sqlx::query("DELETE FROM openclaw_client_keys")
+        .execute(&pool)
+        .await
+        .expect("clear openclaw client keys");
+    sqlx::query("DELETE FROM openclaw_clients")
+        .execute(&pool)
+        .await
+        .expect("clear openclaw clients");
+
+    let (admin_id, _) = create_test_admin(&pool).await;
+    let admin_token = helpers::generate_test_token(admin_id);
+
+    sqlx::query(
+        r#"
+        INSERT INTO openclaw_bootstrap_tokens (
+            token_hash,
+            label,
+            suggested_display_name,
+            status,
+            expires_at
+        )
+        VALUES ($1, $2, $3, 'active', NOW() + INTERVAL '15 minutes')
+        "#,
+    )
+    .bind("hash_waiting_token")
+    .bind("OpenClaw Waiting")
+    .bind("OpenClaw Waiting")
+    .execute(&pool)
+    .await
+    .expect("insert waiting bootstrap token");
+
+    let (status, body): (StatusCode, String) = make_request_with_string_headers(
+        &router,
+        "GET",
+        "/api/v1/admin/openclaw/clients",
+        None,
+        vec![auth_header_bearer(&admin_token)],
+    )
+    .await;
+
+    assert_eq!(status, StatusCode::OK, "unexpected body: {body}");
+
+    let response: Value = serde_json::from_str(&body).expect("parse response");
+    let clients = response["data"]["clients"]
+        .as_array()
+        .expect("clients array");
+    assert_eq!(clients.len(), 1);
+    assert_eq!(clients[0]["display_name"], "OpenClaw Waiting");
+    assert_eq!(clients[0]["status"], "waiting_connection");
+    assert_eq!(clients[0]["kind"], "pending");
+    assert!(clients[0]["expires_at"].is_string());
+}
+
+#[tokio::test]
+async fn openclaw_admin_can_delete_waiting_installation() {
+    let _guard = env_lock().lock().unwrap_or_else(|error| error.into_inner());
+    std::env::set_var("OPENCLAW_GATEWAY_ENABLED", "true");
+    if !test_database_ready().await {
+        eprintln!("skipping openclaw admin test because DATABASE_URL is not reachable");
+        return;
+    }
+
+    let pool = setup_test_db().await;
+    let state = create_test_app_state(pool.clone()).await;
+    let router = create_router(state);
+
+    sqlx::query("DELETE FROM openclaw_bootstrap_tokens")
+        .execute(&pool)
+        .await
+        .expect("clear bootstrap tokens");
+
+    let (admin_id, _) = create_test_admin(&pool).await;
+    let admin_token = helpers::generate_test_token(admin_id);
+
+    let pending_id = sqlx::query_scalar::<_, Uuid>(
+        r#"
+        INSERT INTO openclaw_bootstrap_tokens (
+            token_hash,
+            label,
+            suggested_display_name,
+            status,
+            expires_at
+        )
+        VALUES ($1, $2, $3, 'active', NOW() + INTERVAL '15 minutes')
+        RETURNING id
+        "#,
+    )
+    .bind("hash_delete_waiting_token")
+    .bind("OpenClaw Delete Me")
+    .bind("OpenClaw Delete Me")
+    .fetch_one(&pool)
+    .await
+    .expect("insert waiting bootstrap token");
+
+    let path = format!("/api/v1/admin/openclaw/clients/pending:{pending_id}/delete");
+    let (status, body): (StatusCode, String) = make_request_with_string_headers(
+        &router,
+        "POST",
+        &path,
+        Some("{}"),
+        vec![
+            auth_header_bearer(&admin_token),
+            ("content-type", "application/json".to_string()),
+        ],
+    )
+    .await;
+
+    assert_eq!(status, StatusCode::OK, "unexpected body: {body}");
+
+    let response: Value = serde_json::from_str(&body).expect("parse response");
+    assert_eq!(response["data"]["deleted"]["status"], "waiting_connection");
+
+    let remaining = sqlx::query_scalar::<_, i64>(
+        "SELECT COUNT(*) FROM openclaw_bootstrap_tokens WHERE id = $1",
+    )
+    .bind(pending_id)
+    .fetch_one(&pool)
+    .await
+    .expect("count remaining bootstrap tokens");
+    assert_eq!(remaining, 0);
 }
 
 #[tokio::test]

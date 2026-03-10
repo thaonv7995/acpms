@@ -149,7 +149,7 @@ make setup && make infra-up && make migrate && make dev
 5. **Access**
   - Frontend: [http://localhost:5173](http://localhost:5173) (or [http://localhost:3000](http://localhost:3000) in single mode)
   - Backend API: [http://localhost:3000](http://localhost:3000)
-  - PostgreSQL: localhost:5432
+  - PostgreSQL: `make postgres-port` to see the published localhost port
 
 ### Development First Login (Admin)
 

@@ -32,11 +32,9 @@ tests/
 ### Setup Test Database
 
 ```bash
-# Tạo test database
-createdb acpms_test
-
-# Set environment variable
-export DATABASE_URL="postgresql://postgres:postgres@localhost:5432/acpms_test"
+# Resolve the published Postgres port first
+PGPORT=$(docker compose port postgres 5432 | awk -F: '/127\.0\.0\.1/ {print $NF; exit}')
+export DATABASE_URL="postgresql://acpms_user:acpms_password@127.0.0.1:${PGPORT}/acpms_test"
 ```
 
 ### Chạy tất cả tests

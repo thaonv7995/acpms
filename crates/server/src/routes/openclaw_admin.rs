@@ -36,6 +36,10 @@ pub fn create_routes() -> Router<AppState> {
             "/openclaw/clients/:client_id/revoke",
             post(revoke_openclaw_client),
         )
+        .route(
+            "/openclaw/clients/:client_id/delete",
+            post(delete_openclaw_client),
+        )
 }
 
 fn ensure_openclaw_gateway_enabled(state: &AppState) -> Result<(), ApiError> {
@@ -56,6 +60,11 @@ struct OpenClawClientsResponse {
 #[derive(Debug, Serialize)]
 struct OpenClawClientMutationResponse {
     client: OpenClawAdminClientSummary,
+}
+
+#[derive(Debug, Serialize)]
+struct OpenClawClientDeleteResponse {
+    deleted: OpenClawAdminClientSummary,
 }
 
 #[derive(Debug, Deserialize)]
@@ -159,6 +168,26 @@ async fn revoke_openclaw_client(
     Path(client_id): Path<String>,
 ) -> Result<Json<ApiResponse<OpenClawClientMutationResponse>>, ApiError> {
     mutate_client_status(auth_user, state, &client_id, ClientMutationKind::Revoke).await
+}
+
+async fn delete_openclaw_client(
+    auth_user: AuthUser,
+    State(state): State<AppState>,
+    Path(client_id): Path<String>,
+) -> Result<Json<ApiResponse<OpenClawClientDeleteResponse>>, ApiError> {
+    RbacChecker::check_system_admin(auth_user.id, &state.db).await?;
+    ensure_openclaw_gateway_enabled(&state)?;
+
+    let service = OpenClawAdminService::new(state.db.clone());
+    let deleted = service
+        .delete_client(&client_id)
+        .await
+        .map_err(map_admin_service_error)?;
+
+    Ok(Json(ApiResponse::success(
+        OpenClawClientDeleteResponse { deleted },
+        "OpenClaw installation deleted successfully",
+    )))
 }
 
 enum ClientMutationKind {

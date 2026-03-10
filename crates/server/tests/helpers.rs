@@ -20,7 +20,7 @@ use axum::{
 };
 use serde_json::Value;
 use sqlx::PgPool;
-use std::sync::Arc;
+use std::{process::Command, sync::Arc};
 use tokio::sync::broadcast;
 use tower::ServiceExt;
 use uuid::Uuid;
@@ -35,10 +35,47 @@ use acpms_server::state::{AppState, OpenClawGatewayConfig};
 // Re-export for convenience
 pub use acpms_server::routes::create_router;
 
+fn build_test_database_url(base_url: &str) -> String {
+    if let Some(prefix) = base_url.strip_suffix("/acpms") {
+        format!("{prefix}/acpms_test")
+    } else {
+        base_url.to_string()
+    }
+}
+
+fn resolve_docker_postgres_port() -> Option<String> {
+    let output = Command::new("docker")
+        .args(["port", "acpms-postgres", "5432"])
+        .output()
+        .ok()?;
+    if !output.status.success() {
+        return None;
+    }
+
+    String::from_utf8(output.stdout)
+        .ok()?
+        .lines()
+        .find_map(|line| line.strip_prefix("127.0.0.1:"))
+        .map(str::trim)
+        .filter(|port| !port.is_empty())
+        .map(ToOwned::to_owned)
+}
+
+pub fn resolve_test_database_url() -> Option<String> {
+    dotenvy::dotenv().ok();
+
+    if let Ok(database_url) = std::env::var("DATABASE_URL") {
+        return Some(build_test_database_url(&database_url));
+    }
+
+    resolve_docker_postgres_port()
+        .map(|port| format!("postgresql://acpms_user:acpms_password@127.0.0.1:{port}/acpms_test"))
+}
+
 /// Setup test database connection
 pub async fn setup_test_db() -> PgPool {
-    let database_url = std::env::var("DATABASE_URL")
-        .unwrap_or_else(|_| "postgresql://postgres:postgres@localhost:5432/acpms_test".to_string());
+    let database_url = resolve_test_database_url()
+        .expect("DATABASE_URL is not set and Docker PostgreSQL port could not be determined");
 
     // Set default test env vars if not already set
     if std::env::var("ENCRYPTION_KEY").is_err() {

@@ -20,6 +20,7 @@ FRONTEND_DIR="$PROJECT_ROOT/frontend"
 FRONTEND_DIST="$FRONTEND_DIR/dist"
 SKILLS_DIR="$PROJECT_ROOT/.acpms/skills"
 BACKEND_RELEASE_BIN="$PROJECT_ROOT/target/release/acpms-server"
+MAPPED_PG_PORT=""
 
 SINGLE_MODE=0
 PARITY_MODE=0
@@ -71,6 +72,31 @@ require_command() {
         print_error "Install: $install_hint"
         exit 1
     fi
+}
+
+get_mapped_postgres_port() {
+    docker port acpms-postgres 5432 2>/dev/null | awk -F: 'NR == 1 {print $NF; exit}'
+}
+
+postgres_container_uses_expected_port_binding() {
+    docker port acpms-postgres 5432 2>/dev/null | grep -q '^127\.0\.0\.1:'
+}
+
+prepare_postgres_runtime() {
+    local retries=0
+
+    while [ "$retries" -lt 10 ]; do
+        MAPPED_PG_PORT="$(get_mapped_postgres_port || true)"
+        if [ -n "$MAPPED_PG_PORT" ]; then
+            export DATABASE_URL="postgres://acpms_user:acpms_password@127.0.0.1:${MAPPED_PG_PORT}/acpms"
+            return 0
+        fi
+        retries=$((retries + 1))
+        sleep 1
+    done
+
+    print_error "Could not determine the published PostgreSQL port"
+    return 1
 }
 
 detect_compose_cmd() {
@@ -134,6 +160,11 @@ remove_stale_containers() {
 
 ensure_infra_running() {
     local needs_start=0
+
+    if docker inspect acpms-postgres >/dev/null 2>&1 && ! postgres_container_uses_expected_port_binding; then
+        print_warning "PostgreSQL container is using a stale port mapping; recreating it"
+        docker rm -f acpms-postgres >/dev/null 2>&1 || true
+    fi
 
     if ! is_service_running "postgres"; then
         print_warning "PostgreSQL is not running"
@@ -331,6 +362,7 @@ start_dev_servers() {
                 LC_ALL="${LC_ALL:-C.UTF-8}" \
                 PATH="$parity_path" \
                 APP_ENV=production \
+                DATABASE_URL="$DATABASE_URL" \
                 ACPMS_FRONTEND_DIR="$FRONTEND_DIST" \
                 ACPMS_SKILLS_DIR="$SKILLS_DIR" \
                 "$BACKEND_RELEASE_BIN"
@@ -410,6 +442,9 @@ main() {
     ensure_infra_running
     wait_for_service_ready "postgres"
     wait_for_service_ready "minio"
+    prepare_postgres_runtime
+
+    print_info "PostgreSQL GUI port: localhost:$MAPPED_PG_PORT"
 
     if [ "$SINGLE_MODE" -eq 1 ]; then
         build_frontend_for_single_mode

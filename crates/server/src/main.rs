@@ -853,7 +853,7 @@ mod tests {
         SystemSettingsService,
     };
     use sqlx::PgPool;
-    use std::sync::Arc;
+    use std::{process::Command, sync::Arc};
     use tokio::fs;
     use tokio::sync::RwLock;
     use uuid::Uuid;
@@ -894,12 +894,48 @@ mod tests {
         }
     }
 
+    fn build_test_database_url(base_url: &str) -> String {
+        if let Some(prefix) = base_url.strip_suffix("/acpms") {
+            format!("{prefix}/acpms_test")
+        } else {
+            base_url.to_string()
+        }
+    }
+
+    fn resolve_docker_postgres_port() -> Option<String> {
+        let output = Command::new("docker")
+            .args(["port", "acpms-postgres", "5432"])
+            .output()
+            .ok()?;
+        if !output.status.success() {
+            return None;
+        }
+
+        String::from_utf8(output.stdout)
+            .ok()?
+            .lines()
+            .find_map(|line| line.strip_prefix("127.0.0.1:"))
+            .map(str::trim)
+            .filter(|port| !port.is_empty())
+            .map(ToOwned::to_owned)
+    }
+
+    fn resolve_test_database_url() -> Option<String> {
+        dotenvy::dotenv().ok();
+
+        if let Ok(database_url) = std::env::var("DATABASE_URL") {
+            return Some(build_test_database_url(&database_url));
+        }
+
+        resolve_docker_postgres_port().map(|port| {
+            format!("postgresql://acpms_user:acpms_password@127.0.0.1:{port}/acpms_test")
+        })
+    }
+
     async fn setup_test_db() -> PgPool {
         ensure_test_env_defaults();
-        dotenvy::dotenv().ok();
-        let database_url = std::env::var("DATABASE_URL").unwrap_or_else(|_| {
-            "postgresql://postgres:postgres@localhost:5432/acpms_test".to_string()
-        });
+        let database_url = resolve_test_database_url()
+            .expect("DATABASE_URL is not set and Docker PostgreSQL port could not be determined");
         let pool = PgPool::connect(&database_url)
             .await
             .expect("Failed to connect to test database");

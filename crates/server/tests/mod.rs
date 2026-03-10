@@ -23,10 +23,11 @@
 //! Tests require a test database. Set `DATABASE_URL` environment variable:
 //!
 //! ```bash
-//! export DATABASE_URL="postgresql://postgres:postgres@localhost:5432/acpms_test"
+//! PGPORT=$(docker compose port postgres 5432 | awk -F: '/127\.0\.0\.1/ {print $NF; exit}')
+//! export DATABASE_URL="postgresql://acpms_user:acpms_password@127.0.0.1:${PGPORT}/acpms_test"
 //! ```
 //!
-//! Or use default: `postgresql://postgres:postgres@localhost:5432/acpms_test`
+//! Or export a DSN that points to your published PostgreSQL port.
 
 pub mod agent_activity_tests;
 pub mod auth_tests;

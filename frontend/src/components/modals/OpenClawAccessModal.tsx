@@ -16,13 +16,13 @@ interface OpenClawAccessModalProps {
     showToast: (message: string, type?: 'success' | 'error' | 'info') => void;
 }
 
-type StatusFilter = 'all' | 'active' | 'disabled' | 'revoked';
+type StatusFilter = 'all' | 'active' | 'disabled' | 'revoked' | 'waiting_connection';
 
 type PendingClientAction =
     | {
           clientId: string;
           clientName: string;
-          action: 'disable' | 'revoke';
+          action: 'disable' | 'delete';
           title: string;
           message: string;
           confirmText: string;
@@ -107,9 +107,16 @@ function statusPillClasses(status: string): string {
             return 'bg-amber-500/15 text-amber-700 dark:text-amber-300 border-amber-500/25';
         case 'revoked':
             return 'bg-rose-500/15 text-rose-700 dark:text-rose-300 border-rose-500/25';
+        case 'waiting_connection':
+            return 'bg-sky-500/15 text-sky-700 dark:text-sky-300 border-sky-500/25';
         default:
             return 'bg-muted text-muted-foreground border-border';
     }
+}
+
+function formatStatusLabel(status: string): string {
+    if (status === 'waiting_connection') return 'waiting connection';
+    return status.replace(/_/g, ' ');
 }
 
 function resolveErrorMessage(error: unknown, fallback: string): string {
@@ -131,19 +138,18 @@ export function OpenClawAccessModal({
         creatingPrompt,
         activeClientMutationId,
         generateBootstrapPrompt,
+        deleteClient,
         disableClient,
         enableClient,
-        revokeClient,
         clearLatestPrompt,
     } = useOpenClawAccess(isOpen);
 
     const [label, setLabel] = useState('');
-    const [displayName, setDisplayName] = useState('');
     const [expiresInMinutes, setExpiresInMinutes] = useState(15);
     const [copiedPrompt, setCopiedPrompt] = useState(false);
-    const [displayNameDirty, setDisplayNameDirty] = useState(false);
     const [searchQuery, setSearchQuery] = useState('');
     const [statusFilter, setStatusFilter] = useState<StatusFilter>('all');
+    const [isAddPanelOpen, setIsAddPanelOpen] = useState(false);
     const [pendingAction, setPendingAction] = useState<PendingClientAction>(null);
 
     const sortedClients = useMemo(
@@ -159,7 +165,10 @@ export function OpenClawAccessModal({
         const active = sortedClients.filter((client) => client.status === 'active').length;
         const disabled = sortedClients.filter((client) => client.status === 'disabled').length;
         const revoked = sortedClients.filter((client) => client.status === 'revoked').length;
-        return { total, active, disabled, revoked };
+        const waiting = sortedClients.filter(
+            (client) => client.status === 'waiting_connection'
+        ).length;
+        return { total, active, disabled, revoked, waiting };
     }, [sortedClients]);
 
     const filteredClients = useMemo(() => {
@@ -187,26 +196,22 @@ export function OpenClawAccessModal({
     }, [searchQuery, sortedClients, statusFilter]);
 
     useEffect(() => {
-        if (!displayNameDirty) {
-            setDisplayName(label);
-        }
-    }, [displayNameDirty, label]);
-
-    useEffect(() => {
         if (!isOpen) {
             setPendingAction(null);
             setSearchQuery('');
             setStatusFilter('all');
+            setIsAddPanelOpen(false);
         }
     }, [isOpen]);
 
+    useEffect(() => {
+        if (latestPrompt) {
+            setIsAddPanelOpen(true);
+        }
+    }, [latestPrompt]);
+
     const handleLabelChange = (value: string) => {
         setLabel(value);
-    };
-
-    const handleDisplayNameChange = (value: string) => {
-        setDisplayName(value);
-        setDisplayNameDirty(value.trim().length > 0);
     };
 
     const handleGeneratePrompt = async () => {
@@ -220,7 +225,7 @@ export function OpenClawAccessModal({
             await generateBootstrapPrompt({
                 label: trimmedLabel,
                 expires_in_minutes: expiresInMinutes,
-                suggested_display_name: displayName.trim() || undefined,
+                suggested_display_name: trimmedLabel,
             });
             setCopiedPrompt(false);
             showToast('Bootstrap prompt generated successfully.', 'success');
@@ -235,6 +240,12 @@ export function OpenClawAccessModal({
     const handleResetPrompt = () => {
         clearLatestPrompt();
         setCopiedPrompt(false);
+    };
+
+    const handleDoneWithPrompt = () => {
+        clearLatestPrompt();
+        setCopiedPrompt(false);
+        setIsAddPanelOpen(false);
     };
 
     const handleCopyPrompt = async () => {
@@ -271,16 +282,19 @@ export function OpenClawAccessModal({
         }
     };
 
-    const handleRevokeClient = async (clientId: string) => {
+    const handleDeleteClient = async (clientId: string) => {
         const client = sortedClients.find((entry) => entry.client_id === clientId);
+        const isPendingEnrollment =
+            client?.kind === 'pending' || client?.status === 'waiting_connection';
         setPendingAction({
             clientId,
             clientName: client?.display_name ?? clientId,
-            action: 'revoke',
-            title: 'Revoke client?',
-            message:
-                'Revoking permanently blocks this installation and should only be used when the client must never reconnect with its current identity.',
-            confirmText: 'Revoke Client',
+            action: 'delete',
+            title: 'Delete installation?',
+            message: isPendingEnrollment
+                ? 'This will remove the waiting installation and invalidate its bootstrap token so it can no longer enroll.'
+                : 'This will permanently remove the installation from ACPMS. Existing runtime traffic from this client identity will stop working.',
+            confirmText: 'Delete Installation',
             confirmVariant: 'danger',
         });
     };
@@ -293,8 +307,8 @@ export function OpenClawAccessModal({
                 await disableClient(pendingAction.clientId);
                 showToast(`${pendingAction.clientName} disabled.`, 'success');
             } else {
-                await revokeClient(pendingAction.clientId);
-                showToast(`${pendingAction.clientName} revoked.`, 'success');
+                await deleteClient(pendingAction.clientId);
+                showToast(`${pendingAction.clientName} deleted.`, 'success');
             }
             setPendingAction(null);
         } catch (error) {
@@ -303,7 +317,7 @@ export function OpenClawAccessModal({
                     error,
                     pendingAction.action === 'disable'
                         ? 'Failed to disable OpenClaw client.'
-                        : 'Failed to revoke OpenClaw client.'
+                        : 'Failed to delete OpenClaw installation.'
                 ),
                 'error'
             );
@@ -318,7 +332,7 @@ export function OpenClawAccessModal({
                     if (!open) onClose();
                 }}
             >
-                <DialogContent className="max-w-6xl p-0 overflow-hidden">
+                <DialogContent className="max-w-6xl max-h-[92vh] overflow-y-auto p-0">
                     <div className="flex flex-col">
                         <div className="border-b border-border bg-gradient-to-r from-primary/[0.08] via-primary/[0.03] to-transparent px-6 py-5">
                             <DialogHeader className="space-y-2">
@@ -337,12 +351,12 @@ export function OpenClawAccessModal({
                             </DialogHeader>
                         </div>
 
-                        <div className="grid grid-cols-2 gap-3 border-b border-border bg-muted/20 px-6 py-4 lg:grid-cols-4">
+                        <div className="grid grid-cols-2 gap-3 border-b border-border bg-muted/20 px-6 py-4 lg:grid-cols-5">
                             {[
                                 {
                                     label: 'Total installations',
                                     value: clientStats.total,
-                                    hint: 'Tracked OpenClaw clients',
+                                    hint: 'Tracked installs and pending connections',
                                 },
                                 {
                                     label: 'Active',
@@ -358,6 +372,11 @@ export function OpenClawAccessModal({
                                     label: 'Revoked',
                                     value: clientStats.revoked,
                                     hint: 'Permanently blocked',
+                                },
+                                {
+                                    label: 'Waiting',
+                                    value: clientStats.waiting,
+                                    hint: 'Prompt issued, awaiting enrollment',
                                 },
                             ].map((stat) => (
                                 <div
@@ -375,7 +394,12 @@ export function OpenClawAccessModal({
                             ))}
                         </div>
 
-                        <div className="grid grid-cols-1 gap-6 p-6 lg:grid-cols-[1.25fr_0.75fr]">
+                        <div
+                            data-testid="openclaw-content-grid"
+                            className={`grid grid-cols-1 gap-6 p-6 transition-all duration-300 ${
+                                isAddPanelOpen ? 'lg:grid-cols-3' : 'lg:grid-cols-1'
+                            }`}
+                        >
                             <section className="flex min-h-[420px] flex-col gap-4 rounded-xl border border-border bg-card p-5">
                                 <div className="flex items-start justify-between gap-4 border-b border-border pb-3">
                                     <div>
@@ -383,14 +407,31 @@ export function OpenClawAccessModal({
                                             OpenClaw installations
                                         </h3>
                                         <p className="text-sm text-muted-foreground">
-                                            View enrolled clients, confirm they have checked in, and
-                                            disable, enable, or revoke individual access.
+                                            View enrolled clients, track pending connections, and
+                                            manage individual access.
                                         </p>
                                     </div>
-                                    <span className="rounded-full border border-border bg-muted px-3 py-1 text-xs font-semibold uppercase tracking-wide text-muted-foreground">
-                                        {sortedClients.length} installation
-                                        {sortedClients.length === 1 ? '' : 's'}
-                                    </span>
+                                    <div className="flex flex-wrap items-center justify-end gap-2">
+                                        <span className="rounded-full border border-border bg-muted px-3 py-1 text-xs font-semibold uppercase tracking-wide text-muted-foreground">
+                                            {sortedClients.length} installation
+                                            {sortedClients.length === 1 ? '' : 's'}
+                                        </span>
+                                        <button
+                                            type="button"
+                                            onClick={() =>
+                                                setIsAddPanelOpen((current) => !current)
+                                            }
+                                            className={`rounded-lg px-3 py-2 text-xs font-semibold transition-colors ${
+                                                isAddPanelOpen
+                                                    ? 'border border-border bg-background text-card-foreground hover:bg-muted'
+                                                    : 'bg-primary text-primary-foreground hover:bg-primary/90'
+                                            }`}
+                                        >
+                                            {isAddPanelOpen
+                                                ? 'Hide add panel'
+                                                : 'Add another installation'}
+                                        </button>
+                                    </div>
                                 </div>
 
                                 {loading ? (
@@ -404,12 +445,12 @@ export function OpenClawAccessModal({
                                 ) : sortedClients.length === 0 ? (
                                     <div className="rounded-xl border border-dashed border-border bg-muted/20 px-5 py-8">
                                         <p className="text-sm font-semibold text-card-foreground">
-                                            No enrolled installations yet
+                                            No installations or pending connections yet
                                         </p>
                                         <p className="mt-2 text-sm text-muted-foreground">
                                             When you need to add another OpenClaw machine after the
-                                            installer flow, generate a one-time bootstrap prompt on
-                                            the right.
+                                            installer flow, open the add panel above and generate a
+                                            one-time bootstrap prompt.
                                         </p>
                                         <ol className="mt-4 space-y-2 text-sm text-muted-foreground">
                                             <li>1. Create a one-time prompt for the new installation.</li>
@@ -454,6 +495,9 @@ export function OpenClawAccessModal({
                                                     <option value="active">Active</option>
                                                     <option value="disabled">Disabled</option>
                                                     <option value="revoked">Revoked</option>
+                                                    <option value="waiting_connection">
+                                                        Waiting connection
+                                                    </option>
                                                 </select>
                                             </label>
 
@@ -477,7 +521,7 @@ export function OpenClawAccessModal({
                                                 </p>
                                                 <p className="mt-2 text-sm text-muted-foreground">
                                                     Adjust the search query or switch the status filter
-                                                    back to see more enrolled OpenClaw clients.
+                                                    back to see more OpenClaw installations.
                                                 </p>
                                             </div>
                                         ) : (
@@ -485,7 +529,17 @@ export function OpenClawAccessModal({
                                                 {filteredClients.map((client) => {
                                                     const actionLoading =
                                                         activeClientMutationId === client.client_id;
-                                                    const health = getClientHealth(client.last_seen_at);
+                                                    const isPendingEnrollment =
+                                                        client.kind === 'pending' ||
+                                                        client.status === 'waiting_connection';
+                                                    const health = isPendingEnrollment
+                                                        ? {
+                                                              label: 'Awaiting enrollment',
+                                                              detail: 'Awaiting first enrollment',
+                                                              classes:
+                                                                  'border-sky-500/25 bg-sky-500/10 text-sky-700 dark:text-sky-300',
+                                                          }
+                                                        : getClientHealth(client.last_seen_at);
 
                                                     return (
                                                         <div
@@ -501,7 +555,7 @@ export function OpenClawAccessModal({
                                                                         <span
                                                                             className={`rounded-full border px-2.5 py-1 text-[11px] font-semibold uppercase tracking-wide ${statusPillClasses(client.status)}`}
                                                                         >
-                                                                            {client.status}
+                                                                            {formatStatusLabel(client.status)}
                                                                         </span>
                                                                         <span
                                                                             className={`rounded-full border px-2.5 py-1 text-[11px] font-semibold ${health.classes}`}
@@ -510,96 +564,122 @@ export function OpenClawAccessModal({
                                                                         </span>
                                                                     </div>
                                                                     <p className="mt-1 break-all font-mono text-[11px] text-muted-foreground">
-                                                                        {client.client_id}
+                                                                        {isPendingEnrollment
+                                                                            ? 'Awaiting first enrollment'
+                                                                            : client.client_id}
                                                                     </p>
-                                                                    <div className="mt-3 grid grid-cols-1 gap-2 text-xs text-muted-foreground md:grid-cols-2">
-                                                                        <p>
-                                                                            <span className="font-semibold text-card-foreground">
-                                                                                Enrolled:
-                                                                            </span>{' '}
-                                                                            {formatDateTime(client.enrolled_at)}
-                                                                        </p>
-                                                                        <p>
-                                                                            <span className="font-semibold text-card-foreground">
-                                                                                Last seen:
-                                                                            </span>{' '}
-                                                                            {formatDateTime(client.last_seen_at)}
-                                                                            <span className="ml-2 text-[11px] text-muted-foreground">
-                                                                                ({health.detail})
-                                                                            </span>
-                                                                        </p>
-                                                                        <p className="break-all">
-                                                                            <span className="font-semibold text-card-foreground">
-                                                                                Last IP:
-                                                                            </span>{' '}
-                                                                            {client.last_seen_ip || 'Unknown'}
-                                                                        </p>
-                                                                        <div>
-                                                                            <span className="font-semibold text-card-foreground">
-                                                                                Key fingerprints:
-                                                                            </span>{' '}
-                                                                            {client.key_fingerprints.length > 0 ? (
-                                                                                <div className="mt-1 flex flex-wrap gap-1.5">
-                                                                                    {client.key_fingerprints.map(
-                                                                                        (fingerprint) => (
-                                                                                            <span
-                                                                                                key={fingerprint}
-                                                                                                className="rounded-full border border-border bg-muted px-2 py-1 font-mono text-[11px] text-card-foreground"
-                                                                                            >
-                                                                                                {compactFingerprint(
-                                                                                                    fingerprint
-                                                                                                )}
-                                                                                            </span>
-                                                                                        )
-                                                                                    )}
-                                                                                </div>
-                                                                            ) : (
-                                                                                'None yet'
-                                                                            )}
+                                                                    {isPendingEnrollment ? (
+                                                                        <div className="mt-3 grid grid-cols-1 gap-2 text-xs text-muted-foreground md:grid-cols-2">
+                                                                            <p>
+                                                                                <span className="font-semibold text-card-foreground">
+                                                                                    Prompt issued:
+                                                                                </span>{' '}
+                                                                                {formatDateTime(client.enrolled_at)}
+                                                                            </p>
+                                                                            <p>
+                                                                                <span className="font-semibold text-card-foreground">
+                                                                                    Expires:
+                                                                                </span>{' '}
+                                                                                {formatDateTime(
+                                                                                    client.expires_at
+                                                                                )}
+                                                                            </p>
+                                                                            <p className="md:col-span-2">
+                                                                                <span className="font-semibold text-card-foreground">
+                                                                                    State:
+                                                                                </span>{' '}
+                                                                                {health.detail}
+                                                                            </p>
                                                                         </div>
-                                                                    </div>
+                                                                    ) : (
+                                                                        <div className="mt-3 grid grid-cols-1 gap-2 text-xs text-muted-foreground md:grid-cols-2">
+                                                                            <p>
+                                                                                <span className="font-semibold text-card-foreground">
+                                                                                    Enrolled:
+                                                                                </span>{' '}
+                                                                                {formatDateTime(client.enrolled_at)}
+                                                                            </p>
+                                                                            <p>
+                                                                                <span className="font-semibold text-card-foreground">
+                                                                                    Last seen:
+                                                                                </span>{' '}
+                                                                                {formatDateTime(client.last_seen_at)}
+                                                                                <span className="ml-2 text-[11px] text-muted-foreground">
+                                                                                    ({health.detail})
+                                                                                </span>
+                                                                            </p>
+                                                                            <p className="break-all">
+                                                                                <span className="font-semibold text-card-foreground">
+                                                                                    Last IP:
+                                                                                </span>{' '}
+                                                                                {client.last_seen_ip || 'Unknown'}
+                                                                            </p>
+                                                                            <div>
+                                                                                <span className="font-semibold text-card-foreground">
+                                                                                    Key fingerprints:
+                                                                                </span>{' '}
+                                                                                {client.key_fingerprints.length > 0 ? (
+                                                                                    <div className="mt-1 flex flex-wrap gap-1.5">
+                                                                                        {client.key_fingerprints.map(
+                                                                                            (fingerprint) => (
+                                                                                                <span
+                                                                                                    key={fingerprint}
+                                                                                                    className="rounded-full border border-border bg-muted px-2 py-1 font-mono text-[11px] text-card-foreground"
+                                                                                                >
+                                                                                                    {compactFingerprint(
+                                                                                                        fingerprint
+                                                                                                    )}
+                                                                                                </span>
+                                                                                            )
+                                                                                        )}
+                                                                                    </div>
+                                                                                ) : (
+                                                                                    'None yet'
+                                                                                )}
+                                                                            </div>
+                                                                        </div>
+                                                                    )}
                                                                 </div>
 
                                                                 <div className="flex flex-wrap gap-2 xl:justify-end">
-                                                                    {client.status === 'active' ? (
-                                                                        <button
-                                                                            type="button"
-                                                                            onClick={() =>
-                                                                                handleDisableClient(
-                                                                                    client.client_id
-                                                                                )
-                                                                            }
-                                                                            disabled={actionLoading}
-                                                                            className="rounded-lg border border-amber-500/25 bg-amber-500/10 px-3 py-2 text-xs font-semibold text-amber-700 transition-colors hover:bg-amber-500/15 disabled:cursor-not-allowed disabled:opacity-50 dark:text-amber-300"
-                                                                        >
-                                                                            Disable Access
-                                                                        </button>
-                                                                    ) : client.status === 'disabled' ? (
-                                                                        <button
-                                                                            type="button"
-                                                                            onClick={() =>
-                                                                                handleEnableClient(
-                                                                                    client.client_id
-                                                                                )
-                                                                            }
-                                                                            disabled={actionLoading}
-                                                                            className="rounded-lg border border-emerald-500/25 bg-emerald-500/10 px-3 py-2 text-xs font-semibold text-emerald-700 transition-colors hover:bg-emerald-500/15 disabled:cursor-not-allowed disabled:opacity-50 dark:text-emerald-300"
-                                                                        >
-                                                                            Enable Access
-                                                                        </button>
-                                                                    ) : null}
+                                                                    {isPendingEnrollment ? null : client.status === 'active' ? (
+                                                                            <button
+                                                                                type="button"
+                                                                                onClick={() =>
+                                                                                    handleDisableClient(
+                                                                                        client.client_id
+                                                                                    )
+                                                                                }
+                                                                                disabled={actionLoading}
+                                                                                className="rounded-lg border border-amber-500/25 bg-amber-500/10 px-3 py-2 text-xs font-semibold text-amber-700 transition-colors hover:bg-amber-500/15 disabled:cursor-not-allowed disabled:opacity-50 dark:text-amber-300"
+                                                                            >
+                                                                                Disable Access
+                                                                            </button>
+                                                                        ) : client.status === 'disabled' ? (
+                                                                            <button
+                                                                                type="button"
+                                                                                onClick={() =>
+                                                                                    handleEnableClient(
+                                                                                        client.client_id
+                                                                                    )
+                                                                                }
+                                                                                disabled={actionLoading}
+                                                                                className="rounded-lg border border-emerald-500/25 bg-emerald-500/10 px-3 py-2 text-xs font-semibold text-emerald-700 transition-colors hover:bg-emerald-500/15 disabled:cursor-not-allowed disabled:opacity-50 dark:text-emerald-300"
+                                                                            >
+                                                                                Enable Access
+                                                                            </button>
+                                                                        ) : null}
                                                                     <button
                                                                         type="button"
                                                                         onClick={() =>
-                                                                            handleRevokeClient(client.client_id)
+                                                                            handleDeleteClient(
+                                                                                client.client_id
+                                                                            )
                                                                         }
-                                                                        disabled={
-                                                                            actionLoading ||
-                                                                            client.status === 'revoked'
-                                                                        }
+                                                                        disabled={actionLoading}
                                                                         className="rounded-lg border border-rose-500/25 bg-rose-500/10 px-3 py-2 text-xs font-semibold text-rose-700 transition-colors hover:bg-rose-500/15 disabled:cursor-not-allowed disabled:opacity-50 dark:text-rose-300"
                                                                     >
-                                                                        Revoke Client
+                                                                        Delete Installation
                                                                     </button>
                                                                 </div>
                                                             </div>
@@ -612,7 +692,11 @@ export function OpenClawAccessModal({
                                 )}
                             </section>
 
-                            <section className="flex flex-col gap-4 rounded-xl border border-border bg-card p-5">
+                            {isAddPanelOpen ? (
+                                <section
+                                    data-testid="openclaw-add-panel"
+                                    className="flex flex-col gap-4 rounded-xl border border-border bg-card p-5 lg:col-span-2"
+                                >
                                 <div className="border-b border-border pb-3">
                                     <h3 className="text-base font-semibold text-card-foreground">
                                         Add another installation
@@ -624,15 +708,12 @@ export function OpenClawAccessModal({
                                 </div>
 
                                 <div className="rounded-xl border border-border bg-muted/20 p-4">
-                                    <p className="text-xs font-semibold uppercase tracking-[0.12em] text-muted-foreground">
-                                        Step 1
-                                    </p>
-                                    <h4 className="mt-1 text-sm font-semibold text-card-foreground">
+                                    <h4 className="text-sm font-semibold text-card-foreground">
                                         Describe the new installation
                                     </h4>
                                     <p className="mt-1 text-sm text-muted-foreground">
-                                        Give the install an internal label, choose the display name
-                                        admins will see later, and set a short-lived expiry.
+                                        Give the install one clear label. ACPMS will reuse it in
+                                        the installations list after enrollment.
                                     </p>
                                 </div>
 
@@ -653,27 +734,8 @@ export function OpenClawAccessModal({
                                             className="rounded-lg border border-border bg-muted px-3 py-2.5 text-sm text-card-foreground focus:border-primary focus:outline-none focus:ring-1 focus:ring-primary"
                                         />
                                         <span className="text-xs text-muted-foreground">
-                                            Used for bootstrap token tracking and admin audit logs.
-                                        </span>
-                                    </label>
-
-                                    <label htmlFor="openclaw-bootstrap-display-name" className="flex flex-col gap-1.5">
-                                        <span className="text-xs font-semibold uppercase tracking-wide text-muted-foreground">
-                                            Display name
-                                        </span>
-                                        <input
-                                            id="openclaw-bootstrap-display-name"
-                                            aria-label="Display name"
-                                            type="text"
-                                            value={displayName}
-                                            onChange={(event) =>
-                                                handleDisplayNameChange(event.target.value)
-                                            }
-                                            placeholder="OpenClaw Staging"
-                                            className="rounded-lg border border-border bg-muted px-3 py-2.5 text-sm text-card-foreground focus:border-primary focus:outline-none focus:ring-1 focus:ring-primary"
-                                        />
-                                        <span className="text-xs text-muted-foreground">
-                                            This appears in the installations list after enrollment.
+                                            Used for bootstrap token tracking, audit logs, and the
+                                            final installation name after enrollment.
                                         </span>
                                     </label>
 
@@ -715,10 +777,7 @@ export function OpenClawAccessModal({
                                 {latestPrompt ? (
                                     <div className="rounded-xl border border-primary/15 bg-primary/[0.04] p-4">
                                         <div className="rounded-xl border border-primary/10 bg-background/70 p-4">
-                                            <p className="text-xs font-semibold uppercase tracking-[0.12em] text-primary">
-                                                Step 2
-                                            </p>
-                                            <h4 className="mt-1 text-sm font-semibold text-card-foreground">
+                                            <h4 className="text-sm font-semibold text-card-foreground">
                                                 Send the prompt to the new installation
                                             </h4>
                                             <p className="mt-1 text-sm text-muted-foreground">
@@ -765,7 +824,7 @@ export function OpenClawAccessModal({
                                             </button>
                                             <button
                                                 type="button"
-                                                onClick={onClose}
+                                                onClick={handleDoneWithPrompt}
                                                 className="rounded-lg border border-border px-3 py-2 text-xs font-semibold text-card-foreground transition-colors hover:bg-muted"
                                             >
                                                 Done
@@ -778,7 +837,8 @@ export function OpenClawAccessModal({
                                         OpenClaw installation outside the installer flow.
                                     </div>
                                 )}
-                            </section>
+                                </section>
+                            ) : null}
                         </div>
                     </div>
                     <ConfirmModal

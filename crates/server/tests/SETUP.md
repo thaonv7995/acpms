@@ -21,7 +21,8 @@ psql -U postgres -c "CREATE DATABASE acpms_test;"
 ### 2. Set Environment Variables
 
 ```bash
-export DATABASE_URL="postgresql://postgres:postgres@localhost:5432/acpms_test"
+PGPORT=$(docker compose port postgres 5432 | awk -F: '/127\.0\.0\.1/ {print $NF; exit}')
+export DATABASE_URL="postgresql://acpms_user:acpms_password@127.0.0.1:${PGPORT}/acpms_test"
 export ENCRYPTION_KEY="AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA="
 export JWT_SECRET="test-jwt-secret-key-for-testing-only"
 
@@ -45,7 +46,8 @@ Nếu bạn muốn compile mà không cần database connection:
 
 ```bash
 # Set DATABASE_URL và chạy
-export DATABASE_URL="postgresql://postgres:postgres@localhost:5432/acpms_test"
+PGPORT=$(docker compose port postgres 5432 | awk -F: '/127\.0\.0\.1/ {print $NF; exit}')
+export DATABASE_URL="postgresql://acpms_user:acpms_password@127.0.0.1:${PGPORT}/acpms_test"
 cargo sqlx prepare --workspace
 ```
 
@@ -82,7 +84,7 @@ cargo test --package acpms-server -- --ignored health_tests::
 
 - Kiểm tra PostgreSQL đang chạy: `pg_isready`
 - Kiểm tra password trong `DATABASE_URL` có đúng không
-- Thử với user khác: `postgresql://your_user:your_password@localhost:5432/acpms_test`
+- Thử với user khác trên published port hiện tại của Docker Postgres
 
 ### Error: database does not exist
 

@@ -28,8 +28,9 @@ fn env_lock() -> &'static Mutex<()> {
 }
 
 async fn test_database_ready() -> bool {
-    let database_url = std::env::var("DATABASE_URL")
-        .unwrap_or_else(|_| "postgresql://postgres:postgres@localhost:5432/acpms_test".to_string());
+    let Some(database_url) = helpers::resolve_test_database_url() else {
+        return false;
+    };
 
     tokio::time::timeout(Duration::from_secs(2), PgPool::connect(&database_url))
         .await

@@ -53,10 +53,10 @@
 ### To Verify Tests Can Run:
 ```bash
 # 1. Setup database
-createdb acpms_test
+PGPORT=$(docker compose port postgres 5432 | awk -F: '/127\.0\.0\.1/ {print $NF; exit}')
 
 # 2. Set environment variables
-export DATABASE_URL="postgresql://postgres:postgres@localhost:5432/acpms_test"
+export DATABASE_URL="postgresql://acpms_user:acpms_password@127.0.0.1:${PGPORT}/acpms_test"
 export ENCRYPTION_KEY="AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA="
 export JWT_SECRET="test-jwt-secret-key-for-testing-only"
 

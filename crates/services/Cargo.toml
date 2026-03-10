@@ -55,3 +55,4 @@ aws-sdk-s3 = { workspace = true }
 tokio = { workspace = true }
 tokio-stream = { workspace = true, features = ["sync"] }
 futures = "0.3"
+dotenvy.workspace = true

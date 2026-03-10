@@ -11,6 +11,25 @@ NC='\033[0m'
 
 echo -e "${GREEN}=== Setting up test database and running tests ===${NC}\n"
 
+PROJECT_ROOT="$(cd "$(dirname "$0")/../.." && pwd)"
+
+resolve_docker_postgres_port() {
+    docker port acpms-postgres 5432 2>/dev/null | awk -F: '/127\\.0\\.0\\.1/ {print $NF; exit}'
+}
+
+build_test_database_url() {
+    local base_url="$1"
+
+    case "$base_url" in
+        */acpms)
+            printf '%s/acpms_test' "${base_url%/acpms}"
+            ;;
+        *)
+            printf '%s' "$base_url"
+            ;;
+    esac
+}
+
 # Detect PostgreSQL installation
 PSQL_CMD=""
 if command -v psql &> /dev/null; then
@@ -32,25 +51,57 @@ DB_URL=""
 DB_USER=""
 DB_PASSWORD=""
 
+if [ -z "${DATABASE_URL:-}" ] && [ -f "$PROJECT_ROOT/.env" ]; then
+    set -a
+    . "$PROJECT_ROOT/.env"
+    set +a
+fi
+
+if [ -n "${DATABASE_URL:-}" ]; then
+    DB_URL="$(build_test_database_url "$DATABASE_URL")"
+    DB_USER="$(printf '%s' "$DB_URL" | sed -n 's#.*://\([^:/]*\).*#\1#p')"
+    DB_PASSWORD="$(printf '%s' "$DB_URL" | sed -n 's#.*://[^:]*:\([^@]*\)@.*#\1#p')"
+fi
+
+if [ -z "$DB_URL" ]; then
+    DYNAMIC_PORT="$(resolve_docker_postgres_port || true)"
+    if [ -n "$DYNAMIC_PORT" ]; then
+        DB_URL="postgresql://acpms_user:acpms_password@127.0.0.1:${DYNAMIC_PORT}/acpms_test"
+        DB_USER="acpms_user"
+        DB_PASSWORD="acpms_password"
+    fi
+fi
+
 # Try common connection strings
-for user in "postgres" "$(whoami)"; do
-    for pass in "postgres" ""; do
-        if [ -z "$pass" ]; then
-            test_url="postgresql://${user}@localhost:5432/postgres"
-        else
-            test_url="postgresql://${user}:${pass}@localhost:5432/postgres"
-        fi
-        
-        echo -e "${YELLOW}Trying: $test_url${NC}"
-        if PGPASSWORD="$pass" $PSQL_CMD "$test_url" -c "SELECT 1;" &>/dev/null; then
-            DB_URL="$test_url"
-            DB_USER="$user"
-            DB_PASSWORD="$pass"
-            echo -e "${GREEN}✅ Connection successful!${NC}\n"
-            break 2
-        fi
+if [ -n "$DB_URL" ]; then
+    echo -e "${YELLOW}Trying: $DB_URL${NC}"
+    if PGPASSWORD="$DB_PASSWORD" $PSQL_CMD "$DB_URL" -c "SELECT 1;" &>/dev/null; then
+        echo -e "${GREEN}✅ Connection successful!${NC}\n"
+    else
+        DB_URL=""
+    fi
+fi
+
+if [ -z "$DB_URL" ]; then
+    for user in "postgres" "$(whoami)"; do
+        for pass in "postgres" ""; do
+            if [ -z "$pass" ]; then
+                test_url="postgresql://${user}@localhost:5432/postgres"
+            else
+                test_url="postgresql://${user}:${pass}@localhost:5432/postgres"
+            fi
+
+            echo -e "${YELLOW}Trying: $test_url${NC}"
+            if PGPASSWORD="$pass" $PSQL_CMD "$test_url" -c "SELECT 1;" &>/dev/null; then
+                DB_URL="$test_url"
+                DB_USER="$user"
+                DB_PASSWORD="$pass"
+                echo -e "${GREEN}✅ Connection successful!${NC}\n"
+                break 2
+            fi
+        done
     done
-done
+fi
 
 if [ -z "$DB_URL" ]; then
     echo -e "${RED}Error: Could not connect to PostgreSQL.${NC}"
@@ -61,7 +112,7 @@ fi
 
 # Extract database name from URL or use default
 DB_NAME="acpms_test"
-TEST_DB_URL="${DB_URL/postgres/$DB_NAME}"
+TEST_DB_URL="${DB_URL%/*}/$DB_NAME"
 
 # Create test database
 echo -e "${YELLOW}Creating test database: $DB_NAME${NC}"

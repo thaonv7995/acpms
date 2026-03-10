@@ -4,7 +4,9 @@ export interface OpenClawClientSummary {
     client_id: string;
     display_name: string;
     status: 'active' | 'disabled' | 'revoked' | string;
+    kind: 'enrolled' | 'pending' | string;
     enrolled_at: string;
+    expires_at: string | null;
     last_seen_at: string | null;
     last_seen_ip: string | null;
     last_seen_user_agent: string | null;
@@ -31,6 +33,10 @@ export interface OpenClawBootstrapPromptResponse {
 
 export interface OpenClawClientMutationResponse {
     client: OpenClawClientSummary;
+}
+
+export interface OpenClawClientDeleteResponse {
+    deleted: OpenClawClientSummary;
 }
 
 export async function listOpenClawClients(): Promise<OpenClawClientsResponse> {
@@ -69,6 +75,15 @@ export async function revokeOpenClawClient(
 ): Promise<OpenClawClientMutationResponse> {
     return apiPost<OpenClawClientMutationResponse>(
         `/api/v1/admin/openclaw/clients/${encodeURIComponent(clientId)}/revoke`,
+        {}
+    );
+}
+
+export async function deleteOpenClawClient(
+    clientId: string
+): Promise<OpenClawClientDeleteResponse> {
+    return apiPost<OpenClawClientDeleteResponse>(
+        `/api/v1/admin/openclaw/clients/${encodeURIComponent(clientId)}/delete`,
         {}
     );
 }

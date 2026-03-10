@@ -25,7 +25,9 @@ describe('OpenClawAccessModal', () => {
                     client_id: 'oc_client_prod',
                     display_name: 'OpenClaw Production',
                     status: 'active',
+                    kind: 'enrolled',
                     enrolled_at: '2026-03-10T10:00:00Z',
+                    expires_at: null,
                     last_seen_at: new Date(Date.now() - 5 * 60 * 1000).toISOString(),
                     last_seen_ip: '203.0.113.10',
                     last_seen_user_agent: 'OpenClaw/1.0.0',
@@ -35,7 +37,9 @@ describe('OpenClawAccessModal', () => {
                     client_id: 'oc_client_disabled',
                     display_name: 'OpenClaw Staging',
                     status: 'disabled',
+                    kind: 'enrolled',
                     enrolled_at: '2026-03-09T10:00:00Z',
+                    expires_at: null,
                     last_seen_at: null,
                     last_seen_ip: null,
                     last_seen_user_agent: null,
@@ -60,6 +64,7 @@ describe('OpenClawAccessModal', () => {
                 prompt_text: 'single-use bootstrap prompt',
                 token_preview: 'oc_boot_abcd****',
             }),
+            deleteClient: vi.fn().mockResolvedValue(undefined),
             disableClient: vi.fn().mockResolvedValue(undefined),
             enableClient: vi.fn().mockResolvedValue(undefined),
             revokeClient: vi.fn().mockResolvedValue(undefined),
@@ -80,6 +85,7 @@ describe('OpenClawAccessModal', () => {
         expect(screen.getByText('Live now')).toBeTruthy();
         expect(screen.getByText('Never seen')).toBeTruthy();
         expect(screen.getByDisplayValue('single-use bootstrap prompt')).toBeTruthy();
+        expect(screen.queryByText('Step 2')).toBeNull();
         expect(screen.getByRole('button', { name: 'Copy Prompt' })).toBeTruthy();
     });
 
@@ -100,6 +106,64 @@ describe('OpenClawAccessModal', () => {
         });
 
         expect(screen.getByText('No installations match the current filters.')).toBeTruthy();
+    });
+
+    it('renders waiting connection entries without enrolled-client actions', () => {
+        vi.mocked(useOpenClawAccess).mockReturnValue({
+            ...baseHookReturn,
+            clients: [
+                {
+                    client_id: 'pending:token-1',
+                    display_name: 'OpenClaw QA',
+                    status: 'waiting_connection',
+                    kind: 'pending',
+                    enrolled_at: '2026-03-10T10:05:00Z',
+                    expires_at: '2026-03-10T10:20:00Z',
+                    last_seen_at: null,
+                    last_seen_ip: null,
+                    last_seen_user_agent: null,
+                    key_fingerprints: [],
+                },
+            ],
+            latestPrompt: null,
+        });
+
+        render(
+            <OpenClawAccessModal isOpen onClose={vi.fn()} showToast={showToast} />
+        );
+
+        expect(screen.getByText('OpenClaw QA')).toBeTruthy();
+        expect(screen.getByText('waiting connection')).toBeTruthy();
+        expect(screen.getAllByText('Awaiting first enrollment').length).toBeGreaterThan(0);
+        expect(screen.queryByRole('button', { name: 'Disable Access' })).toBeNull();
+        expect(screen.getByRole('button', { name: 'Delete Installation' })).toBeTruthy();
+    });
+
+    it('keeps the add installation panel collapsed until the user opens it', () => {
+        vi.mocked(useOpenClawAccess).mockReturnValue({
+            ...baseHookReturn,
+            latestPrompt: null,
+        });
+
+        render(
+            <OpenClawAccessModal isOpen onClose={vi.fn()} showToast={showToast} />
+        );
+
+        expect(screen.getByRole('button', { name: 'Add another installation' })).toBeTruthy();
+        expect(screen.queryByText('Describe the new installation')).toBeNull();
+
+        fireEvent.click(screen.getByRole('button', { name: 'Add another installation' }));
+
+        expect(screen.getByText('Describe the new installation')).toBeTruthy();
+        expect(screen.queryByText('Step 1')).toBeNull();
+        expect(screen.queryByLabelText('Display name')).toBeNull();
+        expect(screen.getByRole('button', { name: 'Hide add panel' })).toBeTruthy();
+        expect(screen.getByTestId('openclaw-content-grid').className).toContain(
+            'lg:grid-cols-3'
+        );
+        expect(screen.getByTestId('openclaw-add-panel').className).toContain(
+            'lg:col-span-2'
+        );
     });
 
     it('generates a bootstrap prompt from form input', async () => {
@@ -176,5 +240,26 @@ describe('OpenClawAccessModal', () => {
         fireEvent.click(screen.getByRole('button', { name: 'Generate Another' }));
 
         expect(clearLatestPrompt).toHaveBeenCalledTimes(1);
+    });
+
+    it('keeps the modal open and returns to the installations list when done is pressed', () => {
+        const onClose = vi.fn();
+        const clearLatestPrompt = vi.fn();
+
+        vi.mocked(useOpenClawAccess).mockReturnValue({
+            ...baseHookReturn,
+            clearLatestPrompt,
+        });
+
+        render(
+            <OpenClawAccessModal isOpen onClose={onClose} showToast={showToast} />
+        );
+
+        fireEvent.click(screen.getByRole('button', { name: 'Done' }));
+
+        expect(onClose).not.toHaveBeenCalled();
+        expect(clearLatestPrompt).toHaveBeenCalledTimes(1);
+        expect(screen.queryByDisplayValue('single-use bootstrap prompt')).toBeNull();
+        expect(screen.getByRole('button', { name: 'Add another installation' })).toBeTruthy();
     });
 });

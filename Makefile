@@ -1,7 +1,7 @@
 # ACPMS - Agentic Coding Project Management System
 # Single entry point for dev, build, deploy. Run: make help
 
-.PHONY: help setup dev infra-up infra-down migrate build test health clean deploy
+.PHONY: help setup dev infra-up infra-down postgres-port sync-db-url migrate build test health clean deploy
 
 # Detect docker compose command
 COMPOSE := $(shell docker compose version >/dev/null 2>&1 && echo "docker compose" || echo "docker-compose")
@@ -15,6 +15,7 @@ help:
 	@echo "  make dev        - Start dev (infra + backend + frontend)"
 	@echo "  make infra-up   - Start PostgreSQL + MinIO"
 	@echo "  make infra-down - Stop Docker services"
+	@echo "  make postgres-port - Print the published PostgreSQL port"
 	@echo "  make migrate    - Run database migrations"
 	@echo ""
 	@echo "Build & Test:"
@@ -30,7 +31,7 @@ help:
 
 # --- Setup ---
 setup:
-	@[ -f .env ] || (cp .env.example .env && echo "Created .env - edit DATABASE_URL (use localhost when running from host)")
+	@[ -f .env ] || (cp .env.example .env && echo "Created .env - make infra-up will sync DATABASE_URL to the published PostgreSQL port")
 	@[ -f frontend/.env.development.local ] || (echo "VITE_API_URL=http://localhost:3000" > frontend/.env.development.local && echo "Created frontend/.env.development.local")
 	@cd frontend && npm install
 	@echo "Setup done. Run: make infra-up && make migrate && make dev"
@@ -44,13 +45,34 @@ infra-up:
 	@echo "Waiting for services..."
 	@sleep 5
 	@$(COMPOSE) ps
+	@$(MAKE) --no-print-directory sync-db-url
 
 infra-down:
 	@$(COMPOSE) down
 
+postgres-port:
+	@PORT=`$(COMPOSE) port postgres 5432 2>/dev/null | awk -F: '/127\\.0\\.0\\.1/ {print $$NF; exit}'`; \
+	if [ -z "$$PORT" ]; then \
+		echo "Could not determine PostgreSQL published port"; \
+		exit 1; \
+	fi; \
+	echo "$$PORT"
+
+sync-db-url:
+	@[ -f .env ] || cp .env.example .env
+	@PORT=`$(COMPOSE) port postgres 5432 2>/dev/null | awk -F: '/127\\.0\\.0\\.1/ {print $$NF; exit}'`; \
+	if [ -z "$$PORT" ]; then \
+		echo "Could not determine PostgreSQL published port"; \
+		exit 1; \
+	fi; \
+	TMP_FILE=$$(mktemp); \
+	awk -v url="postgres://acpms_user:acpms_password@127.0.0.1:$$PORT/acpms" 'BEGIN { updated = 0 } /^DATABASE_URL=/ { print "DATABASE_URL=" url; updated = 1; next } { print } END { if (!updated) print "DATABASE_URL=" url }' .env > "$$TMP_FILE"; \
+	mv "$$TMP_FILE" .env; \
+	echo "Synced DATABASE_URL to localhost:$$PORT"
+
 migrate:
 	@(command -v sqlx >/dev/null || cargo install sqlx-cli --no-default-features --features postgres)
-	@cd crates/db && sqlx migrate run
+	@set -a; [ -f .env ] && . ./.env; set +a; cd crates/db && sqlx migrate run
 
 # --- Build ---
 build: build-backend build-frontend

@@ -231,6 +231,7 @@ print_success_report() {
   local email="${ACPMS_ADMIN_EMAIL:-${ADMIN_EMAIL:-see above}}"
   local has_pass="${ACPMS_ADMIN_PASSWORD:+yes}"
   local openclaw_base_endpoint="" openclaw_prompt_cmd=""
+  local postgres_port="${ACPMS_POSTGRES_PORT:-unknown}"
   local box_inner_width=88
   local title_width=$((box_inner_width - 2))
   local label_width=15
@@ -256,6 +257,7 @@ print_success_report() {
   printf "${C_GREEN}╠%s╣${C_RESET}\n" "$box_rule"
   printf "${C_GREEN}║${C_RESET}%-${box_inner_width}s${C_GREEN}║${C_RESET}\n" ""
   printf "${C_GREEN}║${C_RESET}  ${C_CYAN}%-${label_width}s${C_RESET}  ${C_BOLD}%-${value_width}s${C_RESET}  ${C_GREEN}║${C_RESET}\n" "Access URL" "$url"
+  printf "${C_GREEN}║${C_RESET}  ${C_CYAN}%-${label_width}s${C_RESET}  %-${value_width}s  ${C_GREEN}║${C_RESET}\n" "Postgres port" "$postgres_port"
   printf "${C_GREEN}║${C_RESET}  ${C_CYAN}%-${label_width}s${C_RESET}  %-${value_width}s  ${C_GREEN}║${C_RESET}\n" "Admin email" "$email"
   [ -n "$has_pass" ] && printf "${C_GREEN}║${C_RESET}  ${C_CYAN}%-${label_width}s${C_RESET}  ${C_YELLOW}%-${password_width}s${C_RESET} ${C_DIM}%-${password_note_width}s${C_RESET}  ${C_GREEN}║${C_RESET}\n" "Admin password" "${ACPMS_ADMIN_PASSWORD}" "(save it; not shown again)"
   printf "${C_GREEN}║${C_RESET}  ${C_CYAN}%-${label_width}s${C_RESET}  %-${value_width}s  ${C_GREEN}║${C_RESET}\n" "Config" "$ENV_FILE"
@@ -427,6 +429,29 @@ check_docker_compose() {
   esac
 }
 
+get_mapped_postgres_port() {
+  docker port acpms-postgres 5432 2>/dev/null | awk -F: 'NR == 1 {print $NF; exit}'
+}
+
+postgres_container_uses_expected_port_binding() {
+  docker port acpms-postgres 5432 2>/dev/null | grep -q '^127\.0\.0\.1:'
+}
+
+resolve_mapped_postgres_port() {
+  local retries=0
+  local postgres_port=""
+  while [ $retries -lt 12 ]; do
+    postgres_port="$(get_mapped_postgres_port || true)"
+    if [ -n "$postgres_port" ]; then
+      printf '%s' "$postgres_port"
+      return 0
+    fi
+    retries=$((retries + 1))
+    sleep 1
+  done
+  return 1
+}
+
 # Check cloudflared (recommended for Cloudflare tunnel previews) - auto-install official binary
 check_cloudflared() {
   if command -v cloudflared >/dev/null 2>&1; then
@@ -514,9 +539,15 @@ check_cloudflared() {
 # Uses CONF_DIR and project name "acpms" so uninstall can run: docker compose -f $CONF_DIR/docker-compose.yml -p acpms down -v
 check_services() {
   local missing=()
+  local postgres_port=""
+  if docker inspect acpms-postgres >/dev/null 2>&1 && ! postgres_container_uses_expected_port_binding; then
+    log "Postgres container is using a stale port mapping; recreating it."
+    docker rm -f acpms-postgres 2>/dev/null || true
+  fi
   if docker ps --format '{{.Names}}' 2>/dev/null | grep -q '^acpms-postgres$'; then
-    : # postgres OK
-  elif ! (command -v nc >/dev/null 2>&1 && nc -z 127.0.0.1 5432 2>/dev/null); then
+    postgres_port="$(resolve_mapped_postgres_port || true)"
+    [ -n "$postgres_port" ] || missing+=("Postgres")
+  else
     missing+=("Postgres")
   fi
 
@@ -527,7 +558,9 @@ check_services() {
   fi
 
   if [ ${#missing[@]} -eq 0 ]; then
+    ACPMS_POSTGRES_PORT="$postgres_port"
     log "Postgres and MinIO already running."
+    log "Postgres published on 127.0.0.1:${ACPMS_POSTGRES_PORT}"
     return
   fi
 
@@ -574,7 +607,10 @@ check_services() {
   while [ $retries -lt 12 ]; do
     if docker ps --format '{{.Names}}' 2>/dev/null | grep -q '^acpms-postgres$' && \
        docker ps --format '{{.Names}}' 2>/dev/null | grep -q '^acpms-minio$'; then
+      ACPMS_POSTGRES_PORT="$(resolve_mapped_postgres_port || true)"
+      [ -n "$ACPMS_POSTGRES_PORT" ] || die "Postgres started but published port could not be determined"
       log "Postgres and MinIO are running."
+      log "Postgres published on 127.0.0.1:${ACPMS_POSTGRES_PORT}"
       return
     fi
     retries=$((retries + 1))
@@ -973,6 +1009,7 @@ generate_env() {
   # Public URL for presigned S3 (upload/avatar): must be reachable from browser
   # (e.g. https://app.auxbase.space). Accepts ACPMS_PUBLIC_URL with or without /s3.
   local s3_public_base
+  local postgres_port="${ACPMS_POSTGRES_PORT:-}"
   s3_public_base="$(resolve_s3_public_base)"
   if [ -z "${ACPMS_PUBLIC_URL:-}" ] && [ -z "${ACPMS_DOMAIN:-}" ]; then
     log "ACPMS_PUBLIC_URL/ACPMS_DOMAIN not set; using local mode for presigned upload URLs."
@@ -1008,6 +1045,11 @@ generate_env() {
     err "Neither claude nor npx found. Claude provider auth will fail. Install: curl -fsSL https://claude.ai/install.sh | bash  OR  Node.js with npx."
   fi
 
+  if [ -z "$postgres_port" ]; then
+    postgres_port="$(resolve_mapped_postgres_port || true)"
+  fi
+  [ -n "$postgres_port" ] || die "Could not determine the published PostgreSQL port"
+
   log "Generating $ENV_FILE..."
   $USE_SUDO mkdir -p "$(dirname "$ENV_FILE")"
   $USE_SUDO tee "$ENV_FILE" >/dev/null << EOF
@@ -1020,8 +1062,8 @@ ACPMS_SKILLS_DIR=$SKILLS_DIR
 # Worktrees (cloned repos for agent). Default: home/Projects
 WORKTREES_PATH=$worktrees_path
 
-# Database (Docker Compose: postgres)
-DATABASE_URL=postgres://acpms_user:acpms_password@127.0.0.1:5432/acpms
+# Database (Docker Compose: postgres on a dynamic localhost port)
+DATABASE_URL=postgres://acpms_user:acpms_password@127.0.0.1:${postgres_port}/acpms
 
 # Auth & secrets (required)
 JWT_SECRET=$jwt_secret
