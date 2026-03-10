@@ -14,8 +14,8 @@ async fn test_list_users() {
     let state = create_test_app_state(pool.clone()).await;
     let router = create_router(state);
 
-    let (user_id, _) = create_test_user(&pool, None, None, None).await;
-    let token = generate_test_token(user_id);
+    let (admin_id, _) = create_test_admin(&pool).await;
+    let token = generate_test_token(admin_id);
 
     let (status, body): (axum::http::StatusCode, String) = make_request_with_string_headers(
         &router,
@@ -33,8 +33,9 @@ async fn test_list_users() {
 
     assert!(response["success"].as_bool().unwrap());
     assert!(response["data"].is_array());
+    assert_eq!(response["metadata"]["page_size"].as_u64(), Some(10));
 
-    cleanup_test_data(&pool, user_id, None).await;
+    cleanup_test_data(&pool, admin_id, None).await;
 }
 
 #[tokio::test]
@@ -46,9 +47,29 @@ async fn test_list_users_excludes_openclaw_service_account() {
 
     let (admin_id, _) = create_test_admin(&pool).await;
     let admin_token = generate_test_token(admin_id);
+    let marker = format!("openclaw-visible-{}", uuid::Uuid::new_v4().simple());
+    let visible_email = format!("{marker}@example.com");
+    let visible_name = format!("OpenClaw Visible {marker}");
     let (visible_user_id, _) =
-        create_test_user(&pool, Some("visible@example.com"), None, None).await;
+        create_test_user(&pool, Some(visible_email.as_str()), None, None).await;
     let hidden_user_id = uuid::Uuid::new_v4();
+
+    sqlx::query(
+        r#"
+        UPDATE users
+        SET name = $2
+        WHERE id = $1
+        "#,
+    )
+    .bind(visible_user_id)
+    .bind(&visible_name)
+    .execute(&pool)
+    .await
+    .expect("rename visible test user");
+
+    let _ = sqlx::query("DELETE FROM users WHERE email = 'openclaw-gateway@acpms.local'")
+        .execute(&pool)
+        .await;
 
     sqlx::query(
         r#"
@@ -67,7 +88,7 @@ async fn test_list_users_excludes_openclaw_service_account() {
     let (status, body): (axum::http::StatusCode, String) = make_request_with_string_headers(
         &router,
         "GET",
-        "/api/v1/users",
+        "/api/v1/users?search=openclaw&limit=100",
         None,
         vec![auth_header_bearer(&admin_token)],
     )
@@ -81,7 +102,7 @@ async fn test_list_users_excludes_openclaw_service_account() {
 
     assert!(users
         .iter()
-        .any(|user| user["email"].as_str() == Some("visible@example.com")));
+        .any(|user| user["email"].as_str() == Some(visible_email.as_str())));
     assert!(users
         .iter()
         .all(|user| user["email"].as_str() != Some("openclaw-gateway@acpms.local")));
@@ -91,6 +112,109 @@ async fn test_list_users_excludes_openclaw_service_account() {
         .execute(&pool)
         .await;
     cleanup_test_data(&pool, visible_user_id, None).await;
+    cleanup_test_data(&pool, admin_id, None).await;
+}
+
+#[tokio::test]
+#[ignore = "requires test database"]
+async fn test_list_users_supports_offset_pagination() {
+    let pool = setup_test_db().await;
+    let state = create_test_app_state(pool.clone()).await;
+    let router = create_router(state);
+
+    let (admin_id, _) = create_test_admin(&pool).await;
+    let admin_token = generate_test_token(admin_id);
+    let marker = format!("paginated-{}", uuid::Uuid::new_v4().simple());
+    let admin_name = format!("{marker}-admin");
+    let user_names = [
+        format!("{marker}-user-a"),
+        format!("{marker}-user-b"),
+        format!("{marker}-user-c"),
+        format!("{marker}-user-d"),
+    ];
+    let user_emails = [
+        format!("{marker}-user-a@example.com"),
+        format!("{marker}-user-b@example.com"),
+        format!("{marker}-user-c@example.com"),
+        format!("{marker}-user-d@example.com"),
+    ];
+    let mut created_user_ids = Vec::new();
+
+    sqlx::query(
+        r#"
+        UPDATE users
+        SET name = $2
+        WHERE id = $1
+        "#,
+    )
+    .bind(admin_id)
+    .bind(&admin_name)
+    .execute(&pool)
+    .await
+    .expect("rename admin user");
+
+    for (email, name) in user_emails.iter().zip(user_names.iter()) {
+        let (user_id, _) = create_test_user(&pool, Some(email.as_str()), None, None).await;
+        created_user_ids.push(user_id);
+        sqlx::query(
+            r#"
+            UPDATE users
+            SET name = $2
+            WHERE id = $1
+            "#,
+        )
+        .bind(user_id)
+        .bind(name)
+        .execute(&pool)
+        .await
+        .expect("rename seeded user");
+    }
+
+    let (status, body): (axum::http::StatusCode, String) = make_request_with_string_headers(
+        &router,
+        "GET",
+        &format!("/api/v1/users?page=2&limit=2&search={marker}"),
+        None,
+        vec![auth_header_bearer(&admin_token)],
+    )
+    .await;
+
+    assert_eq!(status, 200, "Expected 200 OK, got {}: {}", status, body);
+
+    let response: serde_json::Value =
+        serde_json::from_str(&body).expect("Failed to parse response");
+    let users = response["data"].as_array().expect("users array");
+    let metadata = response["metadata"].as_object().expect("metadata object");
+
+    assert_eq!(users.len(), 2);
+    assert_eq!(users[0]["name"].as_str(), Some(user_names[1].as_str()));
+    assert_eq!(users[1]["name"].as_str(), Some(user_names[2].as_str()));
+    assert_eq!(
+        metadata.get("page").and_then(|value| value.as_u64()),
+        Some(2)
+    );
+    assert_eq!(
+        metadata.get("page_size").and_then(|value| value.as_u64()),
+        Some(2)
+    );
+    assert_eq!(
+        metadata.get("total_count").and_then(|value| value.as_u64()),
+        Some(5)
+    );
+    assert_eq!(
+        metadata.get("total_pages").and_then(|value| value.as_u64()),
+        Some(3)
+    );
+    assert_eq!(
+        metadata.get("has_more").and_then(|value| value.as_bool()),
+        Some(true)
+    );
+    for user_id in created_user_ids {
+        let _ = sqlx::query("DELETE FROM users WHERE id = $1")
+            .bind(user_id)
+            .execute(&pool)
+            .await;
+    }
     cleanup_test_data(&pool, admin_id, None).await;
 }
 

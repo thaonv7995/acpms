@@ -587,8 +587,8 @@ async fn openclaw_auth_uses_dedicated_service_principal() {
     let state = create_test_app_state(pool.clone()).await;
     let auth_user =
         authenticate_openclaw_token_with_client(&state, "oc_test_phase1_key", None, None, None)
-        .await
-        .expect("authenticate openclaw token");
+            .await
+            .expect("authenticate openclaw token");
 
     let service_user = sqlx::query_as::<_, User>(
         r#"

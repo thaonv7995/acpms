@@ -1,6 +1,6 @@
 import { useState, useEffect, useMemo } from 'react';
 import { AppShell } from '../components/layout/AppShell';
-import { useUsers } from '../hooks/useUsers';
+import { USER_MANAGEMENT_PAGE_SIZE, useUsers } from '../hooks/useUsers';
 import { useDebouncedValue } from '../hooks/useDebouncedValue';
 import { EditUserModal } from '../components/modals/EditUserModal';
 import { DeleteUserDialog } from '../components/modals/DeleteUserDialog';
@@ -13,9 +13,24 @@ import type { SystemRole, UserStatus, User } from '../types/user';
 import { logger } from '@/lib/logger';
 
 export function UserManagementPage() {
-    const { users, stats, loading, error, filterByRole, filterByStatus, search, refreshUsers } = useUsers();
+    const {
+        users,
+        stats,
+        loading,
+        error,
+        filterByRole,
+        filterByStatus,
+        search,
+        refreshUsers,
+        page,
+        setPage,
+        totalPages,
+        totalCount,
+    } = useUsers();
     const [searchInput, setSearchInput] = useState('');
     const debouncedSearch = useDebouncedValue(searchInput, 300);
+    const pageStart = users.length === 0 ? 0 : (page - 1) * USER_MANAGEMENT_PAGE_SIZE + 1;
+    const pageEnd = users.length === 0 ? 0 : pageStart + users.length - 1;
 
     // Current user context
     const currentUser = useMemo(() => getCurrentUser(), []);
@@ -357,11 +372,24 @@ export function UserManagementPage() {
                         {/* Pagination */}
                         <div className="px-6 py-4 border-t border-border bg-muted/50 flex items-center justify-between">
                             <span className="text-sm text-muted-foreground">
-                                Showing <span className="text-card-foreground font-bold">{users.length > 0 ? 1 : 0}</span> to <span className="text-card-foreground font-bold">{users.length}</span> of <span className="text-card-foreground font-bold">{stats?.total || 0}</span> users
+                                Showing <span className="text-card-foreground font-bold">{pageStart}</span> to <span className="text-card-foreground font-bold">{pageEnd}</span> of <span className="text-card-foreground font-bold">{totalCount}</span> users
                             </span>
-                            <div className="flex gap-2">
-                                <button disabled className="px-4 py-2 bg-card border border-border rounded-lg text-sm text-muted-foreground hover:text-card-foreground hover:border-border/80 transition-colors disabled:opacity-50">Previous</button>
-                                <button disabled className="px-4 py-2 bg-card border border-border rounded-lg text-sm text-muted-foreground hover:text-card-foreground hover:border-border/80 transition-colors disabled:opacity-50">Next</button>
+                            <div className="flex items-center gap-2">
+                                <span className="text-xs text-muted-foreground">Page {page} / {totalPages}</span>
+                                <button
+                                    disabled={page <= 1}
+                                    onClick={() => setPage(page - 1)}
+                                    className="px-4 py-2 bg-card border border-border rounded-lg text-sm text-muted-foreground hover:text-card-foreground hover:border-border/80 transition-colors disabled:opacity-50"
+                                >
+                                    Previous
+                                </button>
+                                <button
+                                    disabled={page >= totalPages}
+                                    onClick={() => setPage(page + 1)}
+                                    className="px-4 py-2 bg-card border border-border rounded-lg text-sm text-muted-foreground hover:text-card-foreground hover:border-border/80 transition-colors disabled:opacity-50"
+                                >
+                                    Next
+                                </button>
                             </div>
                         </div>
                     </div>

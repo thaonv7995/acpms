@@ -1,9 +1,9 @@
 use acpms_db::models::SystemRole;
-use axum::extract::{Json, Path, State};
+use axum::extract::{Json, Path, Query, State};
 use axum::http::StatusCode;
 use serde::Deserialize;
 use std::time::Duration;
-use utoipa::ToSchema;
+use utoipa::{IntoParams, ToSchema};
 use uuid::Uuid;
 use validator::Validate;
 
@@ -11,6 +11,7 @@ use crate::api::{ApiResponse, UserDto};
 use crate::error::{ApiError, ApiResult};
 use crate::middleware::{AuthUser, RbacChecker, ValidatedJson};
 use crate::AppState;
+use acpms_services::{UserDirectoryStats, UserListStatus};
 use serde::Serialize;
 use validator::ValidationError;
 
@@ -123,6 +124,36 @@ pub struct CreateUserRequest {
     pub global_roles: Option<Vec<SystemRole>>,
 }
 
+#[derive(Debug, Deserialize, Serialize, ToSchema)]
+#[serde(rename_all = "snake_case")]
+pub enum UserStatusQuery {
+    Active,
+    Inactive,
+    Pending,
+}
+
+impl From<UserStatusQuery> for UserListStatus {
+    fn from(value: UserStatusQuery) -> Self {
+        match value {
+            UserStatusQuery::Active => UserListStatus::Active,
+            UserStatusQuery::Inactive => UserListStatus::Inactive,
+            UserStatusQuery::Pending => UserListStatus::Pending,
+        }
+    }
+}
+
+#[derive(Debug, Deserialize, IntoParams)]
+pub struct UsersQuery {
+    /// Max results per page (default: 10, max: 100)
+    pub limit: Option<u32>,
+    /// Page number (1-based)
+    pub page: Option<u32>,
+    /// Case-insensitive search across name and email
+    pub search: Option<String>,
+    pub role: Option<SystemRole>,
+    pub status: Option<UserStatusQuery>,
+}
+
 #[derive(Debug, Deserialize, ToSchema, Validate)]
 pub struct GetUploadUrlRequest {
     pub filename: String,
@@ -139,6 +170,7 @@ pub struct UploadUrlResponse {
     get,
     path = "/api/v1/users",
     tag = "Users",
+    params(UsersQuery),
     security(("bearer_auth" = [])),
     responses(
         (status = 200, description = "List all users", body = UserListResponse)
@@ -147,12 +179,36 @@ pub struct UploadUrlResponse {
 pub async fn list_users(
     auth_user: AuthUser,
     State(state): State<AppState>,
+    Query(query): Query<UsersQuery>,
 ) -> ApiResult<Json<ApiResponse<Vec<UserDto>>>> {
     RbacChecker::check_system_admin(auth_user.id, &state.db).await?;
 
+    let page_size = query.limit.unwrap_or(10).clamp(1, 100);
+    let page_num = query.page.unwrap_or(1).max(1);
+    let offset = i64::from((page_num - 1) * page_size);
+    let role_filter = query.role;
+    let status_filter = query.status.map(Into::into);
+    let search_ref = query.search.as_deref();
+
     let users = state
         .user_service
-        .get_all_users()
+        .get_users_page(
+            i64::from(page_size),
+            offset,
+            search_ref,
+            role_filter,
+            status_filter,
+        )
+        .await
+        .map_err(ApiError::Database)?;
+    let total_count = state
+        .user_service
+        .count_users(search_ref, role_filter, status_filter)
+        .await
+        .map_err(ApiError::Database)?;
+    let stats = state
+        .user_service
+        .get_user_directory_stats()
         .await
         .map_err(ApiError::Database)?;
 
@@ -164,9 +220,47 @@ pub async fn list_users(
             convert_avatar_to_url(dto.avatar_url.clone(), &state.storage_service).await;
     }
 
-    let response = ApiResponse::success(dtos, "Users retrieved successfully");
+    let total_pages = if total_count == 0 {
+        1
+    } else {
+        ((total_count as f64) / (page_size as f64)).ceil() as i64
+    };
+    let has_more = i64::from(page_num) < total_pages;
+
+    let mut response = ApiResponse::success(dtos, "Users retrieved successfully");
+    response.metadata = Some(build_user_list_metadata(
+        page_num,
+        page_size,
+        total_count,
+        total_pages,
+        has_more,
+        stats,
+    ));
 
     Ok(Json(response))
+}
+
+fn build_user_list_metadata(
+    page: u32,
+    page_size: u32,
+    total_count: i64,
+    total_pages: i64,
+    has_more: bool,
+    stats: UserDirectoryStats,
+) -> serde_json::Value {
+    serde_json::json!({
+        "page": page,
+        "page_size": page_size,
+        "total_count": total_count,
+        "total_pages": total_pages,
+        "has_more": has_more,
+        "stats": {
+            "total": stats.total,
+            "active": stats.active,
+            "agents_paired": stats.agents_paired,
+            "pending": stats.pending,
+        }
+    })
 }
 
 #[utoipa::path(

@@ -4,6 +4,31 @@ use uuid::Uuid;
 
 pub const OPENCLAW_SERVICE_USER_EMAIL: &str = "openclaw-gateway@acpms.local";
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum UserListStatus {
+    Active,
+    Inactive,
+    Pending,
+}
+
+impl UserListStatus {
+    fn as_str(self) -> &'static str {
+        match self {
+            Self::Active => "active",
+            Self::Inactive => "inactive",
+            Self::Pending => "pending",
+        }
+    }
+}
+
+#[derive(Debug, Clone, Copy)]
+pub struct UserDirectoryStats {
+    pub total: i64,
+    pub active: i64,
+    pub agents_paired: i64,
+    pub pending: i64,
+}
+
 pub fn is_hidden_user_email(email: &str) -> bool {
     email.eq_ignore_ascii_case(OPENCLAW_SERVICE_USER_EMAIL)
 }
@@ -42,6 +67,147 @@ impl UserService {
         .await?;
 
         Ok(users)
+    }
+
+    pub async fn get_users_page(
+        &self,
+        limit: i64,
+        offset: i64,
+        search: Option<&str>,
+        role: Option<SystemRole>,
+        status: Option<UserListStatus>,
+    ) -> Result<Vec<User>, sqlx::Error> {
+        let bounded_limit = limit.clamp(1, 100);
+        let valid_offset = offset.max(0);
+        let search_pattern = search
+            .map(str::trim)
+            .filter(|value| !value.is_empty())
+            .map(|value| format!("%{}%", value.to_lowercase()));
+        let status_filter = status.map(UserListStatus::as_str);
+
+        let users = sqlx::query_as::<_, User>(
+            r#"
+            SELECT
+                id,
+                email,
+                name,
+                avatar_url,
+                gitlab_id,
+                gitlab_username,
+                password_hash,
+                global_roles,
+                created_at,
+                updated_at
+            FROM users
+            WHERE LOWER(email) <> LOWER($1)
+              AND (
+                $2::text IS NULL
+                OR LOWER(name) LIKE $2
+                OR LOWER(email) LIKE $2
+              )
+              AND (
+                $3::system_role IS NULL
+                OR $3 = ANY(global_roles)
+              )
+              AND (
+                $4::text IS NULL
+                OR ($4 = 'active' AND updated_at >= NOW() - INTERVAL '7 days')
+                OR (
+                    $4 = 'inactive'
+                    AND updated_at < NOW() - INTERVAL '7 days'
+                    AND updated_at >= NOW() - INTERVAL '30 days'
+                )
+                OR ($4 = 'pending' AND updated_at < NOW() - INTERVAL '30 days')
+              )
+            ORDER BY name ASC, id ASC
+            LIMIT $5 OFFSET $6
+            "#,
+        )
+        .bind(OPENCLAW_SERVICE_USER_EMAIL)
+        .bind(search_pattern)
+        .bind(role)
+        .bind(status_filter)
+        .bind(bounded_limit)
+        .bind(valid_offset)
+        .fetch_all(&self.pool)
+        .await?;
+
+        Ok(users)
+    }
+
+    pub async fn count_users(
+        &self,
+        search: Option<&str>,
+        role: Option<SystemRole>,
+        status: Option<UserListStatus>,
+    ) -> Result<i64, sqlx::Error> {
+        let search_pattern = search
+            .map(str::trim)
+            .filter(|value| !value.is_empty())
+            .map(|value| format!("%{}%", value.to_lowercase()));
+        let status_filter = status.map(UserListStatus::as_str);
+
+        let count = sqlx::query_scalar::<_, i64>(
+            r#"
+            SELECT COUNT(*)
+            FROM users
+            WHERE LOWER(email) <> LOWER($1)
+              AND (
+                $2::text IS NULL
+                OR LOWER(name) LIKE $2
+                OR LOWER(email) LIKE $2
+              )
+              AND (
+                $3::system_role IS NULL
+                OR $3 = ANY(global_roles)
+              )
+              AND (
+                $4::text IS NULL
+                OR ($4 = 'active' AND updated_at >= NOW() - INTERVAL '7 days')
+                OR (
+                    $4 = 'inactive'
+                    AND updated_at < NOW() - INTERVAL '7 days'
+                    AND updated_at >= NOW() - INTERVAL '30 days'
+                )
+                OR ($4 = 'pending' AND updated_at < NOW() - INTERVAL '30 days')
+              )
+            "#,
+        )
+        .bind(OPENCLAW_SERVICE_USER_EMAIL)
+        .bind(search_pattern)
+        .bind(role)
+        .bind(status_filter)
+        .fetch_one(&self.pool)
+        .await?;
+
+        Ok(count)
+    }
+
+    pub async fn get_user_directory_stats(&self) -> Result<UserDirectoryStats, sqlx::Error> {
+        let row = sqlx::query_as::<_, (i64, i64, i64)>(
+            r#"
+            SELECT
+                COUNT(*) AS total,
+                COUNT(*) FILTER (
+                    WHERE updated_at >= NOW() - INTERVAL '7 days'
+                ) AS active,
+                COUNT(*) FILTER (
+                    WHERE updated_at < NOW() - INTERVAL '30 days'
+                ) AS pending
+            FROM users
+            WHERE LOWER(email) <> LOWER($1)
+            "#,
+        )
+        .bind(OPENCLAW_SERVICE_USER_EMAIL)
+        .fetch_one(&self.pool)
+        .await?;
+
+        Ok(UserDirectoryStats {
+            total: row.0,
+            active: row.1,
+            agents_paired: 0,
+            pending: row.2,
+        })
     }
 
     pub async fn get_user_by_id(&self, id: Uuid) -> Result<Option<User>, sqlx::Error> {

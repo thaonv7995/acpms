@@ -131,7 +131,10 @@ pub use task_context::{
 };
 pub use token_blacklist_service::TokenBlacklistService;
 pub use token_refresh_service::RefreshTokenService;
-pub use user::{is_hidden_user_email, UserService, OPENCLAW_SERVICE_USER_EMAIL};
+pub use user::{
+    is_hidden_user_email, UserDirectoryStats, UserListStatus, UserService,
+    OPENCLAW_SERVICE_USER_EMAIL,
+};
 pub use webhook_event_handlers::WebhookEventHandlers;
 pub use webhook_manager::WebhookManager;
 pub use webhook_manager_admin::{FailedWebhookEvent, WebhookAdminService, WebhookStats};
