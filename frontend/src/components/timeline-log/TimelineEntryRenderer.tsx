@@ -210,6 +210,12 @@ function getLinesRemovedFromAction(actionType: ToolActionPayload): number {
   return 0;
 }
 
+export function getToolDiffTargetId(toolCall: ToolCallEntry): string | null {
+  if (toolCall.diffId) return toolCall.diffId;
+  const filePath = toolCall.actionType?.file_path || toolCall.actionType?.path;
+  return filePath ? `file:${filePath}` : null;
+}
+
 function formatToolSummary(toolCall: ToolCallEntry): string {
   const action = toolCall.actionType?.action || 'tool';
   const actionPayload = toolCall.actionType as ToolActionPayload;
@@ -576,7 +582,7 @@ function ToolCallRows({
   };
 
   const toolHeaderRight =
-    statusBadge || (toolCall.diffId && onViewDiff) ? (
+    statusBadge || (getToolDiffTargetId(toolCall) && onViewDiff) ? (
       <div className="flex items-center gap-2">
         {statusBadge ? (
           <span
@@ -591,12 +597,12 @@ function ToolCallRows({
             {statusBadge.label}
           </span>
         ) : null}
-        {toolCall.diffId && onViewDiff ? (
+        {getToolDiffTargetId(toolCall) && onViewDiff ? (
           <button
             onClick={(event) => {
               event.stopPropagation();
               onViewDiff(
-                toolCall.diffId!,
+                getToolDiffTargetId(toolCall)!,
                 toolCall.actionType?.file_path || toolCall.actionType?.path
               );
             }}
@@ -776,10 +782,10 @@ function ToolCallRows({
             linesAdded={getLinesFromAction(actionType)}
             linesRemoved={getLinesRemovedFromAction(actionType)}
             onViewDiff={
-              toolCall.diffId && onViewDiff
+              getToolDiffTargetId(toolCall) && onViewDiff
                 ? () =>
                     onViewDiff(
-                      toolCall.diffId!,
+                      getToolDiffTargetId(toolCall)!,
                       actionType.file_path || actionType.path
                     )
                 : undefined
@@ -797,10 +803,10 @@ function ToolCallRows({
             actionType={action}
             toolName={toolCall.toolName}
             onViewContent={
-              toolCall.diffId && onViewDiff
+              getToolDiffTargetId(toolCall) && onViewDiff
                 ? () =>
                     onViewDiff(
-                      toolCall.diffId!,
+                      getToolDiffTargetId(toolCall)!,
                       toolCall.actionType?.file_path || toolCall.actionType?.path
                     )
                 : undefined

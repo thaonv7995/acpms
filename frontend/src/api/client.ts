@@ -26,8 +26,15 @@ export function getWsBaseUrl(): string {
 const TOKEN_KEY = 'acpms_token';
 const REFRESH_TOKEN_KEY = 'acpms_refresh_token';
 const CURRENT_USER_KEY = 'acpms_current_user';
+const ACCESS_TOKEN_REFRESH_BUFFER_SECONDS = 60;
 
-let refreshInFlight: Promise<string | null> | null = null;
+type RefreshAccessTokenResult =
+  | { status: 'success'; accessToken: string }
+  | { status: 'missing_refresh_token' }
+  | { status: 'invalid_refresh_token' }
+  | { status: 'transient_error' };
+
+let refreshInFlight: Promise<RefreshAccessTokenResult> | null = null;
 
 export interface ApiResponse<T> {
   success: boolean;
@@ -92,26 +99,77 @@ function isRefreshEligiblePath(path: string): boolean {
   return !path.startsWith('/api/v1/auth/');
 }
 
-async function refreshAccessToken(): Promise<string | null> {
+function decodeJwtPayload(token: string): Record<string, unknown> | null {
+  const [, payload] = token.split('.');
+  if (!payload || typeof atob !== 'function') return null;
+
+  try {
+    const normalized = payload.replace(/-/g, '+').replace(/_/g, '/');
+    const padded = normalized.padEnd(normalized.length + ((4 - normalized.length % 4) % 4), '=');
+    return JSON.parse(atob(padded)) as Record<string, unknown>;
+  } catch {
+    return null;
+  }
+}
+
+function getJwtExpiration(token: string): number | null {
+  const payload = decodeJwtPayload(token);
+  const exp = payload?.exp;
+  return typeof exp === 'number' ? exp : null;
+}
+
+function isTokenExpiringSoon(token: string, bufferSeconds = ACCESS_TOKEN_REFRESH_BUFFER_SECONDS): boolean {
+  const exp = getJwtExpiration(token);
+  if (!exp) return false;
+
+  const nowSeconds = Math.floor(Date.now() / 1000);
+  return exp <= nowSeconds + bufferSeconds;
+}
+
+function shouldInvalidateSession(refreshResult: RefreshAccessTokenResult): boolean {
+  return (
+    refreshResult.status === 'missing_refresh_token' ||
+    refreshResult.status === 'invalid_refresh_token'
+  );
+}
+
+function invalidateSession(): never {
+  clearTokens();
+  redirectToLogin();
+  throw new ApiError(401, 'Unauthorized', '4010');
+}
+
+async function refreshAccessToken(): Promise<RefreshAccessTokenResult> {
   const refreshToken = getRefreshToken();
-  if (!refreshToken) return null;
+  if (!refreshToken) return { status: 'missing_refresh_token' };
 
-  const response = await fetch(`${API_BASE_URL}/api/v1/auth/refresh`, {
-    method: 'POST',
-    headers: {
-      'Content-Type': 'application/json',
-    },
-    body: JSON.stringify({
-      refresh_token: refreshToken,
-    }),
-  });
+  let response: Response;
+  try {
+    response = await fetch(`${API_BASE_URL}/api/v1/auth/refresh`, {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+      },
+      body: JSON.stringify({
+        refresh_token: refreshToken,
+      }),
+    });
+  } catch {
+    return { status: 'transient_error' };
+  }
 
-  if (!response.ok) return null;
+  if (response.status === 401 || response.status === 403) {
+    return { status: 'invalid_refresh_token' };
+  }
+
+  if (!response.ok) {
+    return { status: 'transient_error' };
+  }
 
   try {
     const body = (await response.json()) as ApiResponse<RefreshTokenResponseData>;
     if (!body?.success || !body?.data?.access_token) {
-      return null;
+      return { status: 'transient_error' };
     }
 
     setAccessToken(body.data.access_token);
@@ -119,13 +177,13 @@ async function refreshAccessToken(): Promise<string | null> {
       setRefreshToken(body.data.refresh_token);
     }
 
-    return body.data.access_token;
+    return { status: 'success', accessToken: body.data.access_token };
   } catch {
-    return null;
+    return { status: 'transient_error' };
   }
 }
 
-async function getOrRefreshAccessToken(): Promise<string | null> {
+async function getOrRefreshAccessToken(): Promise<RefreshAccessTokenResult> {
   if (!refreshInFlight) {
     refreshInFlight = refreshAccessToken().finally(() => {
       refreshInFlight = null;
@@ -145,8 +203,17 @@ export async function authenticatedFetch(
   path: string,
   options?: RequestInit
 ): Promise<Response> {
-  const token = getAccessToken();
+  let token = getAccessToken();
   const url = `${API_BASE_URL}${path}`;
+
+  if (token && isRefreshEligiblePath(path) && isTokenExpiringSoon(token)) {
+    const refreshResult = await getOrRefreshAccessToken();
+    if (refreshResult.status === 'success') {
+      token = refreshResult.accessToken;
+    } else if (shouldInvalidateSession(refreshResult)) {
+      invalidateSession();
+    }
+  }
 
   const headers: Record<string, string> = {
     'Content-Type': 'application/json',
@@ -165,11 +232,11 @@ export async function authenticatedFetch(
   // Handle 401 Unauthorized
   if (response.status === 401) {
     if (isRefreshEligiblePath(path)) {
-      const newAccessToken = await getOrRefreshAccessToken();
-      if (newAccessToken) {
+      const refreshResult = await getOrRefreshAccessToken();
+      if (refreshResult.status === 'success') {
         const retryHeaders: Record<string, string> = {
           ...headers,
-          Authorization: `Bearer ${newAccessToken}`,
+          Authorization: `Bearer ${refreshResult.accessToken}`,
         };
 
         const retryResponse = await fetch(url, {
@@ -180,12 +247,12 @@ export async function authenticatedFetch(
         if (retryResponse.status !== 401) {
           return retryResponse;
         }
+      } else if (refreshResult.status === 'transient_error') {
+        throw new ApiError(401, 'Session refresh failed. Please try again.', 'AUTH_REFRESH_FAILED');
       }
     }
 
-    clearTokens();
-    redirectToLogin();
-    throw new ApiError(401, 'Unauthorized', '4010');
+    invalidateSession();
   }
 
   return response;

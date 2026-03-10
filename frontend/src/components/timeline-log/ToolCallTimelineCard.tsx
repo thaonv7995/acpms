@@ -21,6 +21,11 @@ export function ToolCallTimelineCard({ toolCall, onViewDiff }: ToolCallTimelineC
   const [expanded, setExpanded] = useState(false);
   const Icon = getActionIcon(toolCall.actionType.action);
   const label = getActionLabel(toolCall.actionType.action);
+  const diffTargetId =
+    toolCall.diffId ||
+    (toolCall.actionType.file_path || toolCall.actionType.path
+      ? `file:${toolCall.actionType.file_path || toolCall.actionType.path}`
+      : null);
 
   // Get target path/file
   const target =
@@ -128,11 +133,11 @@ export function ToolCallTimelineCard({ toolCall, onViewDiff }: ToolCallTimelineC
           </div>
 
           {/* View Diff button (if diff available) */}
-          {toolCall.diffId && onViewDiff && (
+          {diffTargetId && onViewDiff && (
             <button
               onClick={(e) => {
                 e.stopPropagation();
-                onViewDiff(toolCall.diffId!);
+                onViewDiff(diffTargetId);
               }}
               className="flex-shrink-0 text-xs text-primary hover:text-primary/80 hover:underline font-medium transition-colors px-2 py-1 rounded hover:bg-primary/10"
               title="View file changes"

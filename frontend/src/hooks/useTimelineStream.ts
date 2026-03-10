@@ -433,15 +433,15 @@ export function useTimelineStream(
     .map((query) => (query.error instanceof Error ? query.error.message : null))
     .find((message): message is string => Boolean(message)) || null;
   const attemptStatusHint = processAttemptStatus ?? attempt?.status?.toLowerCase();
-  const shouldPollDiffs =
-    attemptStatusHint === 'running' ||
-    attemptStatusHint === 'queued' ||
-    connectionState === 'live' ||
-    connectionState === 'reconnecting' ||
-    connectionState === 'stale';
+  const shouldFetchTimelineDiffMetadata =
+    attemptStatusHint === 'success' ||
+    attemptStatusHint === 'failed' ||
+    attemptStatusHint === 'cancelled';
 
   // Fetch file diffs for this attempt
-  const { diffs } = useAttemptDiffs(attemptId, { enablePolling: shouldPollDiffs });
+  const { diffs } = useAttemptDiffs(attemptId, {
+    enabled: shouldFetchTimelineDiffMetadata,
+  });
 
   // Return early if no attemptId
   const hasAttemptId = !!attemptId;

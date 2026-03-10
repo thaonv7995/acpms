@@ -3,9 +3,22 @@ import {
   authenticatedFetch,
   clearTokens,
   getAccessToken,
+  getRefreshToken,
   setAccessToken,
   setRefreshToken,
 } from '@/api/client';
+
+function toBase64Url(value: string): string {
+  return btoa(value).replace(/\+/g, '-').replace(/\//g, '_').replace(/=+$/g, '');
+}
+
+function makeJwtWithExp(exp: number): string {
+  return [
+    toBase64Url(JSON.stringify({ alg: 'HS256', typ: 'JWT' })),
+    toBase64Url(JSON.stringify({ exp })),
+    'signature',
+  ].join('.');
+}
 
 describe('authenticatedFetch token refresh flow', () => {
   beforeEach(() => {
@@ -118,5 +131,67 @@ describe('authenticatedFetch token refresh flow', () => {
     );
     expect(refreshCalls).toHaveLength(1);
   });
-});
 
+  it('refreshes access token proactively before it expires', async () => {
+    const expiringSoonToken = makeJwtWithExp(Math.floor(Date.now() / 1000) + 30);
+    setAccessToken(expiringSoonToken);
+    setRefreshToken('refresh-token');
+
+    const fetchMock = vi
+      .fn()
+      // proactive refresh
+      .mockResolvedValueOnce(
+        new Response(
+          JSON.stringify({
+            success: true,
+            code: '2000',
+            message: 'Token refreshed successfully',
+            data: {
+              access_token: 'new-token',
+              expires_in: 1800,
+            },
+          }),
+          {
+            status: 200,
+            headers: { 'Content-Type': 'application/json' },
+          }
+        )
+      )
+      // original request with fresh token
+      .mockResolvedValueOnce(new Response('{}', { status: 200 }));
+
+    vi.stubGlobal('fetch', fetchMock);
+
+    const response = await authenticatedFetch('/api/v1/projects');
+
+    expect(response.status).toBe(200);
+    expect(fetchMock).toHaveBeenCalledTimes(2);
+    expect(String(fetchMock.mock.calls[0][0])).toContain('/api/v1/auth/refresh');
+
+    const [, requestOptions] = fetchMock.mock.calls[1];
+    expect(requestOptions.headers.Authorization).toBe('Bearer new-token');
+    expect(getAccessToken()).toBe('new-token');
+  });
+
+  it('does not clear tokens when refresh fails transiently', async () => {
+    setAccessToken('expired-token');
+    setRefreshToken('refresh-token');
+
+    const fetchMock = vi
+      .fn()
+      // protected request -> 401
+      .mockResolvedValueOnce(new Response('{}', { status: 401 }))
+      // refresh request -> temporary server failure
+      .mockResolvedValueOnce(new Response('{}', { status: 500 }));
+
+    vi.stubGlobal('fetch', fetchMock);
+
+    await expect(authenticatedFetch('/api/v1/projects')).rejects.toMatchObject({
+      status: 401,
+      code: 'AUTH_REFRESH_FAILED',
+    });
+
+    expect(getAccessToken()).toBe('expired-token');
+    expect(getRefreshToken()).toBe('refresh-token');
+  });
+});

@@ -13,6 +13,7 @@ import { logger } from '@/lib/logger';
 const LIVE_DIFF_POLL_INTERVAL_MS = 4000;
 
 interface UseAttemptDiffsOptions {
+  enabled?: boolean;
   enablePolling?: boolean;
 }
 
@@ -46,10 +47,11 @@ export function useAttemptDiffs(
   const [diffs, setDiffs] = useState<FileDiffSummary[]>([]);
   const [isLoading, setIsLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const enabled = options.enabled ?? true;
   const enablePolling = options.enablePolling ?? false;
 
   useEffect(() => {
-    if (!attemptId) {
+    if (!enabled || !attemptId) {
       setDiffs([]);
       setError(null);
       setIsLoading(false);
@@ -107,7 +109,7 @@ export function useAttemptDiffs(
         window.clearInterval(pollId);
       }
     };
-  }, [attemptId, enablePolling]);
+  }, [attemptId, enabled, enablePolling]);
 
   return { diffs, isLoading, error };
 }

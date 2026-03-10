@@ -40,7 +40,7 @@ where
 {
     // Verify JWT and extract claims
     let claims = acpms_services::verify_jwt(token).map_err(|e| {
-        tracing::debug!("JWT verification failed: {:?}", e);
+        tracing::debug!(error = %e, "JWT verification failed");
         ApiError::Unauthorized
     })?;
 

@@ -47,4 +47,15 @@ describe('useAttemptDiffs', () => {
     expect(getAttemptDiff).toHaveBeenCalledTimes(1);
     expect(getAttemptDiffSummary).not.toHaveBeenCalled();
   });
+
+  it('does not fetch anything when disabled', async () => {
+    renderHook(() =>
+      useAttemptDiffs('attempt-1', { enabled: false, enablePolling: true })
+    );
+
+    await waitFor(() => {
+      expect(getAttemptDiff).not.toHaveBeenCalled();
+      expect(getAttemptDiffSummary).not.toHaveBeenCalled();
+    });
+  });
 });
