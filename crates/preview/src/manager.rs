@@ -79,6 +79,27 @@ enum PreviewExposureMode {
     },
 }
 
+#[derive(Debug, Clone)]
+struct AttemptPreviewRuntimeControlMetadata {
+    controllable: bool,
+    runtime_type: Option<String>,
+    container_name: Option<String>,
+    compose_project_name: Option<String>,
+}
+
+#[derive(Debug, Clone)]
+struct AttemptPreviewCloudflareCleanupMetadata {
+    tunnel_id: Option<String>,
+    dns_record_id: Option<String>,
+    zone_id: Option<String>,
+}
+
+#[derive(Debug, Clone)]
+struct ExpiredAttemptPreviewCleanupCandidate {
+    attempt_id: Uuid,
+    metadata: Value,
+}
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum PreviewSourceKind {
     Worktree,
@@ -516,24 +537,29 @@ impl PreviewManager {
         dns_record_id: Option<String>,
         zone_id_override: Option<String>,
     ) {
-        let tunnel_id = tunnel_id
-            .as_deref()
-            .map(str::trim)
-            .filter(|value| !value.is_empty())
-            .map(ToString::to_string);
-        let dns_record_id = dns_record_id
-            .as_deref()
-            .map(str::trim)
-            .filter(|value| !value.is_empty())
-            .map(ToString::to_string);
-        let zone_id_override = zone_id_override
-            .as_deref()
-            .map(str::trim)
-            .filter(|value| !value.is_empty())
-            .map(ToString::to_string);
+        let _ = self
+            .cleanup_cloudflare_resources_with_client(
+                None,
+                tunnel_id,
+                dns_record_id,
+                zone_id_override,
+            )
+            .await;
+    }
+
+    async fn cleanup_cloudflare_resources_with_client(
+        &self,
+        cloudflare_override: Option<&CloudflareClient>,
+        tunnel_id: Option<String>,
+        dns_record_id: Option<String>,
+        zone_id_override: Option<String>,
+    ) -> bool {
+        let tunnel_id = normalize_optional_metadata_string(tunnel_id);
+        let dns_record_id = normalize_optional_metadata_string(dns_record_id);
+        let zone_id_override = normalize_optional_metadata_string(zone_id_override);
 
         if tunnel_id.is_none() && dns_record_id.is_none() {
-            return;
+            return true;
         }
 
         if let Some(tunnel_id) = tunnel_id.as_deref() {
@@ -542,25 +568,42 @@ impl PreviewManager {
                     "Skip Cloudflare cleanup for local preview tunnel {}",
                     tunnel_id
                 );
-                return;
+                return true;
             }
         }
 
-        let cloudflare = match self.get_client().await {
-            Ok(c) => Some(c),
-            Err(e) => {
-                error!("Failed to initialize Cloudflare client for cleanup: {}", e);
-                None
+        let owned_cloudflare = if cloudflare_override.is_none() {
+            match self.get_client().await {
+                Ok(client) => Some(client),
+                Err(e) => {
+                    error!("Failed to initialize Cloudflare client for cleanup: {}", e);
+                    None
+                }
             }
+        } else {
+            None
         };
+        let cloudflare = cloudflare_override.or(owned_cloudflare.as_ref());
 
-        if let (Some(cf), Some(tunnel_id)) = (&cloudflare, tunnel_id.as_deref()) {
+        let mut success = true;
+
+        if let (Some(cf), Some(tunnel_id)) = (cloudflare, tunnel_id.as_deref()) {
             if let Err(e) = cf.delete_tunnel(tunnel_id).await {
-                error!(
-                    "Failed to delete tunnel {} from Cloudflare: {}",
-                    tunnel_id, e
-                );
+                if cloudflare_delete_error_is_missing_resource(&e) {
+                    debug!(
+                        "Treat missing Cloudflare tunnel {} as already cleaned: {}",
+                        tunnel_id, e
+                    );
+                } else {
+                    error!(
+                        "Failed to delete tunnel {} from Cloudflare: {}",
+                        tunnel_id, e
+                    );
+                    success = false;
+                }
             }
+        } else if tunnel_id.is_some() {
+            success = false;
         }
 
         if let Some(record_id) = dns_record_id.as_deref() {
@@ -572,15 +615,22 @@ impl PreviewManager {
                     .await
                     .ok()
                     .and_then(|settings| settings.cloudflare_zone_id)
-                    .map(|value| value.trim().to_string())
-                    .filter(|value| !value.is_empty())
+                    .and_then(|value| normalize_optional_metadata_string(Some(value)))
             };
 
-            match (cloudflare.as_ref(), zone_id.as_deref()) {
+            match (cloudflare, zone_id.as_deref()) {
                 (Some(cf), Some(zone_id)) => {
                     info!("Deleting DNS record {}", record_id);
                     if let Err(e) = cf.delete_dns_record(zone_id, record_id).await {
-                        error!("Failed to delete DNS record {}: {}", record_id, e);
+                        if cloudflare_delete_error_is_missing_resource(&e) {
+                            debug!(
+                                "Treat missing Cloudflare DNS record {} as already cleaned: {}",
+                                record_id, e
+                            );
+                        } else {
+                            error!("Failed to delete DNS record {}: {}", record_id, e);
+                            success = false;
+                        }
                     }
                 }
                 (_, None) => {
@@ -588,10 +638,15 @@ impl PreviewManager {
                         "Skipping DNS record cleanup for {} because Cloudflare zone ID is unavailable",
                         record_id
                     );
+                    success = false;
                 }
-                (None, _) => {}
+                (None, _) => {
+                    success = false;
+                }
             }
         }
+
+        success
     }
 
     /// List all active previews
@@ -978,7 +1033,6 @@ impl PreviewManager {
     pub async fn cleanup_expired_previews(&self) -> Result<usize> {
         info!("Running cleanup job for expired previews");
 
-        // Find expired tunnels
         let expired_tunnels = sqlx::query_as::<_, CloudflareTunnel>(
             r#"
             SELECT * FROM cloudflare_tunnels
@@ -990,12 +1044,25 @@ impl PreviewManager {
         .await
         .context("Failed to query expired tunnels")?;
 
-        let count = expired_tunnels.len();
-        info!("Found {} expired previews to cleanup", count);
+        let expired_attempt_previews = self
+            .load_expired_attempt_preview_cleanup_candidates()
+            .await?;
+
+        info!(
+            "Found {} expired managed previews and {} expired metadata-only previews to cleanup",
+            expired_tunnels.len(),
+            expired_attempt_previews.len()
+        );
 
         let requires_cloudflare_cleanup = expired_tunnels
             .iter()
-            .any(|tunnel| !is_local_preview_tunnel_id(&tunnel.tunnel_id));
+            .any(|tunnel| !is_local_preview_tunnel_id(&tunnel.tunnel_id))
+            || expired_attempt_previews.iter().any(|candidate| {
+                parse_attempt_preview_cloudflare_cleanup(&candidate.metadata)
+                    .and_then(|cleanup| cleanup.tunnel_id)
+                    .map(|tunnel_id| !is_local_preview_tunnel_id(&tunnel_id))
+                    .unwrap_or(true)
+            });
         let cloudflare = if requires_cloudflare_cleanup {
             match self.get_client().await {
                 Ok(c) => Some(c),
@@ -1013,6 +1080,8 @@ impl PreviewManager {
             None
         };
 
+        let mut cleaned_count = 0usize;
+
         for tunnel in expired_tunnels {
             if let Err(e) = self.stop_preview_runtime(tunnel.attempt_id).await {
                 warn!(
@@ -1021,47 +1090,23 @@ impl PreviewManager {
                 );
             }
 
-            if !is_local_preview_tunnel_id(&tunnel.tunnel_id) {
-                if let Some(cf) = &cloudflare {
-                    // Delete from Cloudflare (Tunnel)
-                    match cf.delete_tunnel(&tunnel.tunnel_id).await {
-                        Ok(_) => {
-                            debug!("Deleted expired tunnel {}", tunnel.tunnel_id);
-                        }
-                        Err(e) => {
-                            error!(
-                                "Failed to delete expired tunnel {}: {}",
-                                tunnel.tunnel_id, e
-                            );
-                            // Continue with next tunnel
-                            // continue; // Actually we want to try DNS too
-                        }
-                    }
+            let external_cleanup_succeeded = self
+                .cleanup_cloudflare_resources_with_client(
+                    cloudflare.as_ref(),
+                    Some(tunnel.tunnel_id.clone()),
+                    tunnel.dns_record_id.clone(),
+                    None,
+                )
+                .await;
 
-                    // Delete DNS record if exists
-                    if let Some(record_id) = &tunnel.dns_record_id {
-                        if let Ok(settings) = self.settings_service.get().await {
-                            if let Some(zone_id) = settings.cloudflare_zone_id {
-                                if let Err(e) = cf.delete_dns_record(&zone_id, record_id).await {
-                                    error!(
-                                        "Failed to delete expired DNS record {}: {}",
-                                        record_id, e
-                                    );
-                                } else {
-                                    debug!("Deleted expired DNS record {}", record_id);
-                                }
-                            }
-                        }
-                    }
-                }
-            } else {
-                debug!(
-                    "Skip Cloudflare cleanup for expired local preview tunnel {}",
-                    tunnel.tunnel_id
+            if !external_cleanup_succeeded {
+                warn!(
+                    "Skipping DB deletion for expired managed preview {} because Cloudflare cleanup did not complete successfully",
+                    tunnel.id
                 );
+                continue;
             }
 
-            // Mark as deleted in database
             if let Err(e) = sqlx::query(
                 r#"
                 UPDATE cloudflare_tunnels
@@ -1075,12 +1120,153 @@ impl PreviewManager {
             .await
             {
                 error!("Failed to update tunnel {} status: {}", tunnel.id, e);
+            } else {
+                if let Err(e) = self
+                    .mark_attempt_preview_stopped_in_db(tunnel.attempt_id)
+                    .await
+                {
+                    error!(
+                        "Failed to mark managed preview stopped for attempt {}: {}",
+                        tunnel.attempt_id, e
+                    );
+                }
+                cleaned_count += 1;
             }
         }
 
-        info!("Cleanup job completed: {} previews deleted", count);
+        for candidate in expired_attempt_previews {
+            let runtime_control = parse_attempt_preview_runtime_control(&candidate.metadata);
+            let Some(cleanup) = parse_attempt_preview_cloudflare_cleanup(&candidate.metadata)
+            else {
+                continue;
+            };
 
-        Ok(count)
+            if runtime_control
+                .as_ref()
+                .map(|control| control.controllable)
+                .unwrap_or(false)
+            {
+                let runtime_type = runtime_control
+                    .as_ref()
+                    .and_then(|control| control.runtime_type.as_deref());
+                if let Some(runtime_type) = runtime_type {
+                    if let Err(e) = self
+                        .stop_preview_runtime_with_contract(
+                            runtime_type,
+                            runtime_control
+                                .as_ref()
+                                .and_then(|control| control.container_name.as_deref()),
+                            runtime_control
+                                .as_ref()
+                                .and_then(|control| control.compose_project_name.as_deref()),
+                        )
+                        .await
+                    {
+                        warn!(
+                            "Failed to stop metadata-only preview runtime for expired attempt {}: {}",
+                            candidate.attempt_id, e
+                        );
+                    }
+                }
+            }
+
+            let external_cleanup_succeeded = self
+                .cleanup_cloudflare_resources_with_client(
+                    cloudflare.as_ref(),
+                    cleanup.tunnel_id,
+                    cleanup.dns_record_id,
+                    cleanup.zone_id,
+                )
+                .await;
+
+            if !external_cleanup_succeeded {
+                warn!(
+                    "Leaving expired metadata-only preview for attempt {} marked active because Cloudflare cleanup failed",
+                    candidate.attempt_id
+                );
+                continue;
+            }
+
+            if let Err(e) = self
+                .mark_attempt_preview_stopped_in_db(candidate.attempt_id)
+                .await
+            {
+                error!(
+                    "Failed to mark metadata-only preview stopped for attempt {}: {}",
+                    candidate.attempt_id, e
+                );
+            } else {
+                cleaned_count += 1;
+            }
+        }
+
+        info!(
+            "Cleanup job completed: {} expired preview records cleaned",
+            cleaned_count
+        );
+
+        Ok(cleaned_count)
+    }
+
+    async fn load_expired_attempt_preview_cleanup_candidates(
+        &self,
+    ) -> Result<Vec<ExpiredAttemptPreviewCleanupCandidate>> {
+        let default_ttl_days = self.preview_ttl_days.max(1) as i32;
+        let rows = sqlx::query(
+            r#"
+            SELECT
+                ta.id AS attempt_id,
+                COALESCE(ta.metadata, '{}'::jsonb) AS metadata
+            FROM task_attempts ta
+            JOIN tasks t ON t.id = ta.task_id
+            JOIN projects p ON p.id = t.project_id
+            WHERE jsonb_typeof(COALESCE(ta.metadata->'preview_cloudflare_cleanup', 'null'::jsonb)) = 'object'
+              AND COALESCE(ta.metadata->>'preview_runtime_stopped_at', '') = ''
+              AND COALESCE(ta.metadata->'preview_cloudflare_cleanup'->>'provider', 'cloudflare') = 'cloudflare'
+              AND ta.created_at < NOW() - make_interval(days => GREATEST(COALESCE((p.settings->>'preview_ttl_days')::int, $1), 1))
+              AND NOT EXISTS (
+                SELECT 1
+                FROM cloudflare_tunnels ct
+                WHERE ct.attempt_id = ta.id
+                  AND ct.deleted_at IS NULL
+              )
+            "#,
+        )
+        .bind(default_ttl_days)
+        .fetch_all(&self.db)
+        .await
+        .context("Failed to query expired metadata-only preview cleanup candidates")?;
+
+        Ok(rows
+            .into_iter()
+            .map(|row| ExpiredAttemptPreviewCleanupCandidate {
+                attempt_id: row.get("attempt_id"),
+                metadata: row.get("metadata"),
+            })
+            .collect())
+    }
+
+    async fn mark_attempt_preview_stopped_in_db(&self, attempt_id: Uuid) -> Result<()> {
+        let stopped_at = Utc::now().to_rfc3339();
+        let patch = serde_json::json!({
+            "preview_runtime_state": "stopped",
+            "preview_runtime_stopped_at": stopped_at,
+        });
+
+        sqlx::query(
+            r#"
+            UPDATE task_attempts
+            SET metadata = COALESCE(metadata, '{}'::jsonb) || $2::jsonb
+            WHERE id = $1
+            "#,
+        )
+        .bind(attempt_id)
+        .bind(patch)
+        .execute(&self.db)
+        .await
+        .context("Failed to mark task attempt preview as stopped")?;
+
+        Ok(())
     }
 
     /// Start Docker-based runtime for preview (best effort controlled by env flag).
@@ -2464,6 +2650,95 @@ fn is_local_preview_tunnel_id(tunnel_id: &str) -> bool {
     tunnel_id.starts_with(LOCAL_PREVIEW_TUNNEL_PREFIX)
 }
 
+fn normalize_optional_metadata_string(value: Option<String>) -> Option<String> {
+    value
+        .map(|value| value.trim().to_string())
+        .filter(|value| !value.is_empty())
+}
+
+fn cloudflare_delete_error_is_missing_resource(error: &anyhow::Error) -> bool {
+    let message = error.to_string().to_ascii_lowercase();
+    message.contains("status 404")
+        || message.contains("not found")
+        || message.contains("resource not found")
+}
+
+fn parse_attempt_preview_runtime_control(
+    metadata: &Value,
+) -> Option<AttemptPreviewRuntimeControlMetadata> {
+    let control = metadata.get("preview_runtime_control")?.as_object()?;
+    let controllable = control
+        .get("controllable")
+        .and_then(Value::as_bool)
+        .unwrap_or(false);
+
+    Some(AttemptPreviewRuntimeControlMetadata {
+        controllable,
+        runtime_type: normalize_optional_metadata_string(
+            control
+                .get("runtime_type")
+                .and_then(Value::as_str)
+                .map(ToString::to_string),
+        ),
+        container_name: normalize_optional_metadata_string(
+            control
+                .get("container_name")
+                .and_then(Value::as_str)
+                .map(ToString::to_string),
+        ),
+        compose_project_name: normalize_optional_metadata_string(
+            control
+                .get("compose_project_name")
+                .and_then(Value::as_str)
+                .map(ToString::to_string),
+        ),
+    })
+}
+
+fn parse_attempt_preview_cloudflare_cleanup(
+    metadata: &Value,
+) -> Option<AttemptPreviewCloudflareCleanupMetadata> {
+    let cleanup = metadata.get("preview_cloudflare_cleanup")?.as_object()?;
+    let provider = cleanup
+        .get("provider")
+        .and_then(Value::as_str)
+        .map(|value| value.trim().to_ascii_lowercase());
+    if let Some(provider) = provider {
+        if provider != "cloudflare" {
+            return None;
+        }
+    }
+
+    let tunnel_id = normalize_optional_metadata_string(
+        cleanup
+            .get("tunnel_id")
+            .and_then(Value::as_str)
+            .map(ToString::to_string),
+    );
+    let dns_record_id = normalize_optional_metadata_string(
+        cleanup
+            .get("dns_record_id")
+            .and_then(Value::as_str)
+            .map(ToString::to_string),
+    );
+    let zone_id = normalize_optional_metadata_string(
+        cleanup
+            .get("zone_id")
+            .and_then(Value::as_str)
+            .map(ToString::to_string),
+    );
+
+    if tunnel_id.is_none() && dns_record_id.is_none() && zone_id.is_none() {
+        return None;
+    }
+
+    Some(AttemptPreviewCloudflareCleanupMetadata {
+        tunnel_id,
+        dns_record_id,
+        zone_id,
+    })
+}
+
 fn has_complete_cloudflare_config(settings: &SystemSettings) -> bool {
     settings
         .cloudflare_account_id
@@ -3324,6 +3599,56 @@ mod tests {
             volumes,
             vec!["preview-cache".to_string(), "preview-db".to_string()]
         );
+    }
+
+    #[test]
+    fn parse_attempt_preview_cloudflare_cleanup_reads_metadata_contract() {
+        let metadata = serde_json::json!({
+            "preview_cloudflare_cleanup": {
+                "provider": "cloudflare",
+                "tunnel_id": "tunnel-123",
+                "dns_record_id": "dns-456",
+                "zone_id": "zone-789"
+            }
+        });
+
+        let cleanup = parse_attempt_preview_cloudflare_cleanup(&metadata)
+            .expect("expected cleanup metadata to parse");
+        assert_eq!(cleanup.tunnel_id.as_deref(), Some("tunnel-123"));
+        assert_eq!(cleanup.dns_record_id.as_deref(), Some("dns-456"));
+        assert_eq!(cleanup.zone_id.as_deref(), Some("zone-789"));
+    }
+
+    #[test]
+    fn parse_attempt_preview_runtime_control_reads_metadata_contract() {
+        let metadata = serde_json::json!({
+            "preview_runtime_control": {
+                "controllable": true,
+                "runtime_type": "docker_compose_project",
+                "compose_project_name": "preview-demo"
+            }
+        });
+
+        let control = parse_attempt_preview_runtime_control(&metadata)
+            .expect("expected runtime control metadata to parse");
+        assert!(control.controllable);
+        assert_eq!(
+            control.runtime_type.as_deref(),
+            Some("docker_compose_project")
+        );
+        assert_eq!(
+            control.compose_project_name.as_deref(),
+            Some("preview-demo")
+        );
+    }
+
+    #[test]
+    fn cloudflare_delete_error_is_missing_resource_recognizes_not_found_errors() {
+        let error = anyhow::anyhow!("Failed to delete tunnel (status 404): resource not found");
+        assert!(cloudflare_delete_error_is_missing_resource(&error));
+
+        let error = anyhow::anyhow!("Failed to delete tunnel (status 403): forbidden");
+        assert!(!cloudflare_delete_error_is_missing_resource(&error));
     }
 
     #[test]
