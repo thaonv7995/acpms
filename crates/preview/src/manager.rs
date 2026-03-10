@@ -7,9 +7,10 @@ use acpms_services::{EncryptionService, SystemSettingsService};
 use anyhow::{Context, Result};
 use chrono::{DateTime, Duration, Utc};
 use serde::Serialize;
+use serde_json::Value;
 use sqlx::{PgPool, Row};
 use std::{
-    collections::BTreeMap,
+    collections::{BTreeMap, BTreeSet},
     fs,
     net::TcpListener,
     path::{Path, PathBuf},
@@ -494,43 +495,8 @@ impl PreviewManager {
             );
         }
 
-        if is_local_preview_tunnel_id(&tunnel_id) {
-            debug!(
-                "Skip Cloudflare cleanup for local preview tunnel {} (attempt {})",
-                tunnel_id, attempt_id
-            );
-            return;
-        }
-
-        let cloudflare = match self.get_client().await {
-            Ok(c) => Some(c),
-            Err(e) => {
-                error!("Failed to initialize Cloudflare client for cleanup: {}", e);
-                None
-            }
-        };
-
-        if let Some(cf) = &cloudflare {
-            if let Err(e) = cf.delete_tunnel(&tunnel_id).await {
-                error!(
-                    "Failed to delete tunnel {} from Cloudflare: {}",
-                    tunnel_id, e
-                );
-            }
-        }
-
-        if let Some(record_id) = dns_record_id {
-            if let Ok(settings) = self.settings_service.get().await {
-                if let Some(zone_id) = settings.cloudflare_zone_id {
-                    if let Some(cf) = &cloudflare {
-                        info!("Deleting DNS record {}", record_id);
-                        if let Err(e) = cf.delete_dns_record(&zone_id, &record_id).await {
-                            error!("Failed to delete DNS record {}: {}", record_id, e);
-                        }
-                    }
-                }
-            }
-        }
+        self.cleanup_cloudflare_resources_only(Some(tunnel_id), dns_record_id, None)
+            .await;
     }
 
     /// Cleanup a preview environment (full inline - use mark_preview_deleted + cleanup_preview_resources for non-blocking)
@@ -541,6 +507,91 @@ impl PreviewManager {
         self.cleanup_preview_resources(attempt_id, tunnel_id, dns_record_id)
             .await;
         Ok(())
+    }
+
+    /// Cleanup only Cloudflare resources for a preview, without attempting Docker/runtime shutdown.
+    pub async fn cleanup_cloudflare_resources_only(
+        &self,
+        tunnel_id: Option<String>,
+        dns_record_id: Option<String>,
+        zone_id_override: Option<String>,
+    ) {
+        let tunnel_id = tunnel_id
+            .as_deref()
+            .map(str::trim)
+            .filter(|value| !value.is_empty())
+            .map(ToString::to_string);
+        let dns_record_id = dns_record_id
+            .as_deref()
+            .map(str::trim)
+            .filter(|value| !value.is_empty())
+            .map(ToString::to_string);
+        let zone_id_override = zone_id_override
+            .as_deref()
+            .map(str::trim)
+            .filter(|value| !value.is_empty())
+            .map(ToString::to_string);
+
+        if tunnel_id.is_none() && dns_record_id.is_none() {
+            return;
+        }
+
+        if let Some(tunnel_id) = tunnel_id.as_deref() {
+            if is_local_preview_tunnel_id(tunnel_id) {
+                debug!(
+                    "Skip Cloudflare cleanup for local preview tunnel {}",
+                    tunnel_id
+                );
+                return;
+            }
+        }
+
+        let cloudflare = match self.get_client().await {
+            Ok(c) => Some(c),
+            Err(e) => {
+                error!("Failed to initialize Cloudflare client for cleanup: {}", e);
+                None
+            }
+        };
+
+        if let (Some(cf), Some(tunnel_id)) = (&cloudflare, tunnel_id.as_deref()) {
+            if let Err(e) = cf.delete_tunnel(tunnel_id).await {
+                error!(
+                    "Failed to delete tunnel {} from Cloudflare: {}",
+                    tunnel_id, e
+                );
+            }
+        }
+
+        if let Some(record_id) = dns_record_id.as_deref() {
+            let zone_id = if let Some(zone_id_override) = zone_id_override {
+                Some(zone_id_override)
+            } else {
+                self.settings_service
+                    .get()
+                    .await
+                    .ok()
+                    .and_then(|settings| settings.cloudflare_zone_id)
+                    .map(|value| value.trim().to_string())
+                    .filter(|value| !value.is_empty())
+            };
+
+            match (cloudflare.as_ref(), zone_id.as_deref()) {
+                (Some(cf), Some(zone_id)) => {
+                    info!("Deleting DNS record {}", record_id);
+                    if let Err(e) = cf.delete_dns_record(zone_id, record_id).await {
+                        error!("Failed to delete DNS record {}: {}", record_id, e);
+                    }
+                }
+                (_, None) => {
+                    warn!(
+                        "Skipping DNS record cleanup for {} because Cloudflare zone ID is unavailable",
+                        record_id
+                    );
+                }
+                (None, _) => {}
+            }
+        }
     }
 
     /// List all active previews
@@ -2076,14 +2127,17 @@ impl PreviewManager {
 }
 
 fn stop_docker_container_by_name(container_name: &str) -> Result<()> {
+    let volume_names = inspect_docker_container_named_volumes(container_name);
     let output = Command::new(preview_docker_command())
         .arg("rm")
         .arg("-f")
+        .arg("-v")
         .arg(container_name)
         .output()
         .with_context(|| format!("Failed to execute docker rm -f for {}", container_name))?;
 
     if output.status.success() {
+        remove_docker_volumes(&volume_names);
         return Ok(());
     }
 
@@ -2164,6 +2218,26 @@ fn stop_docker_compose_project_by_name(project_name: &str) -> Result<()> {
         );
     }
 
+    let volume_output = Command::new(preview_docker_command())
+        .arg("volume")
+        .arg("ls")
+        .arg("-q")
+        .arg("--filter")
+        .arg(format!("label=com.docker.compose.project={}", project_name))
+        .output();
+
+    if let Ok(volume_output) = volume_output {
+        if volume_output.status.success() {
+            let volume_names = String::from_utf8_lossy(&volume_output.stdout)
+                .lines()
+                .map(str::trim)
+                .filter(|line| !line.is_empty())
+                .map(ToString::to_string)
+                .collect::<Vec<_>>();
+            remove_docker_volumes(&volume_names);
+        }
+    }
+
     let network_output = Command::new(preview_docker_command())
         .arg("network")
         .arg("ls")
@@ -2191,6 +2265,91 @@ fn stop_docker_compose_project_by_name(project_name: &str) -> Result<()> {
     }
 
     Ok(())
+}
+
+fn inspect_docker_container_named_volumes(container_name: &str) -> Vec<String> {
+    let output = match Command::new(preview_docker_command())
+        .arg("inspect")
+        .arg(container_name)
+        .output()
+    {
+        Ok(output) => output,
+        Err(error) => {
+            warn!(
+                "Failed to inspect docker container {} for attached volumes: {}",
+                container_name, error
+            );
+            return Vec::new();
+        }
+    };
+
+    if !output.status.success() {
+        return Vec::new();
+    }
+
+    extract_named_docker_volume_names_from_inspect_json(&output.stdout)
+}
+
+fn extract_named_docker_volume_names_from_inspect_json(bytes: &[u8]) -> Vec<String> {
+    let parsed: Value = match serde_json::from_slice(bytes) {
+        Ok(value) => value,
+        Err(_) => return Vec::new(),
+    };
+
+    let Some(containers) = parsed.as_array() else {
+        return Vec::new();
+    };
+
+    containers
+        .iter()
+        .filter_map(|container| container.get("Mounts").and_then(Value::as_array))
+        .flat_map(|mounts| mounts.iter())
+        .filter(|mount| {
+            mount
+                .get("Type")
+                .and_then(Value::as_str)
+                .map(|value| value.eq_ignore_ascii_case("volume"))
+                .unwrap_or(false)
+        })
+        .filter_map(|mount| mount.get("Name").and_then(Value::as_str))
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+        .map(ToString::to_string)
+        .collect::<BTreeSet<_>>()
+        .into_iter()
+        .collect()
+}
+
+fn remove_docker_volumes(volume_names: &[String]) {
+    if volume_names.is_empty() {
+        return;
+    }
+
+    let output = match Command::new(preview_docker_command())
+        .arg("volume")
+        .arg("rm")
+        .args(volume_names)
+        .output()
+    {
+        Ok(output) => output,
+        Err(error) => {
+            warn!(
+                "Failed to execute docker volume rm for {:?}: {}",
+                volume_names, error
+            );
+            return;
+        }
+    };
+
+    if !output.status.success() {
+        warn!(
+            "docker volume rm failed for {:?} (status: {:?})\nstdout: {}\nstderr: {}",
+            volume_names,
+            output.status.code(),
+            String::from_utf8_lossy(&output.stdout),
+            String::from_utf8_lossy(&output.stderr)
+        );
+    }
 }
 
 fn preview_docker_project_name(attempt_id: Uuid) -> String {
@@ -3145,6 +3304,26 @@ mod tests {
 
         assert!(!runtime_services_ready(&["cloudflared".to_string()], false));
         assert!(runtime_services_ready(&["dev-server".to_string()], false));
+    }
+
+    #[test]
+    fn extract_named_docker_volume_names_from_inspect_json_filters_only_volume_mounts() {
+        let inspect = r#"[
+          {
+            "Mounts": [
+              { "Type": "bind", "Source": "/tmp/worktree", "Destination": "/workspace" },
+              { "Type": "volume", "Name": "preview-cache" },
+              { "Type": "volume", "Name": "preview-db" },
+              { "Type": "volume", "Name": "preview-cache" }
+            ]
+          }
+        ]"#;
+
+        let volumes = extract_named_docker_volume_names_from_inspect_json(inspect.as_bytes());
+        assert_eq!(
+            volumes,
+            vec!["preview-cache".to_string(), "preview-db".to_string()]
+        );
     }
 
     #[test]

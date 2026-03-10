@@ -66,6 +66,7 @@ const AGENT_PREVIEW_FOLLOW_UP_PROMPT = [
   'If you cannot create the proper custom-domain preview yourself, leave `PREVIEW_URL` unset or equal to the local URL and include `CLOUDFLARE_TUNNEL_ERROR: <reason>`.',
   'Verify the preview serves the latest code, then print `PREVIEW_TARGET: <local-url>` in the logs and also print `PREVIEW_URL: <url>` where the URL is public when available, or the same local URL when no public URL exists.',
   'Write `.acpms/preview-output.json` with `preview_target`, `preview_url`, and `runtime_control` metadata if the runtime can be stopped by ACPMS.',
+  'If you created a Cloudflare public preview, also include `cloudflare_cleanup` with `tunnel_id`, `dns_record_id`, and `zone_id` so ACPMS can remove it later.',
 ].join(' ');
 
 const AGENT_PREVIEW_STOP_PROMPT = [
@@ -86,6 +87,7 @@ const AGENT_PREVIEW_RESTART_PROMPT = [
   'Never start `cloudflared` with `--token`; use a credentials file so tunnel secrets do not appear in process lists.',
   'Verify the preview serves the latest code, then print `PREVIEW_TARGET: <local-url>` in the logs and also print `PREVIEW_URL: <url>` where the URL is public when available, or the same local URL when no public URL exists.',
   'Write `.acpms/preview-output.json` with the new `preview_target`, `preview_url`, and `runtime_control` metadata if ACPMS can stop it.',
+  'If you created a Cloudflare public preview, also include `cloudflare_cleanup` with `tunnel_id`, `dns_record_id`, and `zone_id` so ACPMS can remove it later.',
 ].join(' ');
 
 export function PreviewPanelWrapper({

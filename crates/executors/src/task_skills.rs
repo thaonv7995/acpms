@@ -2315,6 +2315,7 @@ fn builtin_skill_content(skill_id: &str) -> Option<&'static str> {
 - Never run `cloudflared ... --token ...` and never put tunnel tokens/secrets on the command line, because process lists and logs can expose them.
 - For Docker previews, prefer a `cloudflared` service/container that runs `cloudflared tunnel --no-autoupdate run --credentials-file ... --url <PREVIEW_TARGET> <tunnel_id>`.
 - For host-side connectors, use the same credentials-file pattern: `cloudflared tunnel --no-autoupdate run --credentials-file <path> --url <PREVIEW_TARGET> <tunnel_id>`.
+- When tunnel creation succeeds, write cleanup metadata into `.acpms/preview-output.json` under `cloudflare_cleanup`, including at least `tunnel_id`, `dns_record_id`, and `zone_id`, so ACPMS can delete the public preview later.
 - Verify the public `https://<subdomain>.<CLOUDFLARE_BASE_DOMAIN>` URL serves traffic before emitting it as `PREVIEW_URL`.
 - Never use `*.trycloudflare.com`, never CNAME a custom domain to a quick tunnel URL, and never emit a public `PREVIEW_URL` outside `CLOUDFLARE_BASE_DOMAIN`.
 - If tunnel creation, DNS, `cloudflared`, or public verification fails, keep the local preview contract and output `CLOUDFLARE_TUNNEL_ERROR: <reason>`."#,
@@ -2755,6 +2756,7 @@ mod tests {
         assert!(content.contains("--credentials-file"));
         assert!(content.contains("Never run `cloudflared ... --token ...`"));
         assert!(content.contains("process lists and logs can expose them"));
+        assert!(content.contains("cloudflare_cleanup"));
     }
 
     #[test]

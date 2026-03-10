@@ -22,12 +22,23 @@ struct PreviewRuntimeControlContract {
     compose_project_name: Option<String>,
 }
 
+#[derive(Debug, Default, Clone, serde::Serialize, serde::Deserialize)]
+struct PreviewCloudflareCleanupContract {
+    #[serde(default)]
+    tunnel_id: Option<String>,
+    #[serde(default)]
+    dns_record_id: Option<String>,
+    #[serde(default)]
+    zone_id: Option<String>,
+}
+
 #[derive(Debug, Default, Clone)]
 pub(super) struct ExtractedPreviewContract {
     pub(super) preview_target: Option<String>,
     pub(super) preview_url: Option<String>,
     pub(super) cloudflare_tunnel_error: Option<String>,
     pub(super) runtime_control: Option<serde_json::Value>,
+    pub(super) cloudflare_cleanup: Option<serde_json::Value>,
 }
 
 fn parse_preview_output_contract(contents: &str) -> Option<ExtractedPreviewContract> {
@@ -39,6 +50,8 @@ fn parse_preview_output_contract(contents: &str) -> Option<ExtractedPreviewContr
         cloudflare_tunnel_error: Option<String>,
         #[serde(default)]
         runtime_control: Option<PreviewRuntimeControlContract>,
+        #[serde(default)]
+        cloudflare_cleanup: Option<PreviewCloudflareCleanupContract>,
     }
 
     let parsed: PreviewOutputContract = serde_json::from_str(contents).ok()?;
@@ -60,11 +73,15 @@ fn parse_preview_output_contract(contents: &str) -> Option<ExtractedPreviewContr
     let runtime_control = parsed
         .runtime_control
         .and_then(normalize_preview_runtime_control_value);
+    let cloudflare_cleanup = parsed
+        .cloudflare_cleanup
+        .and_then(normalize_preview_cloudflare_cleanup_value);
 
     if target.is_none()
         && url.is_none()
         && cloudflare_tunnel_error.is_none()
         && runtime_control.is_none()
+        && cloudflare_cleanup.is_none()
     {
         return None;
     }
@@ -74,6 +91,7 @@ fn parse_preview_output_contract(contents: &str) -> Option<ExtractedPreviewContr
         preview_url: url,
         cloudflare_tunnel_error,
         runtime_control,
+        cloudflare_cleanup,
     })
 }
 
@@ -175,6 +193,50 @@ fn normalize_preview_runtime_control_value(
     Some(serde_json::Value::Object(object))
 }
 
+fn normalize_preview_cloudflare_cleanup_value(
+    raw: PreviewCloudflareCleanupContract,
+) -> Option<serde_json::Value> {
+    let tunnel_id = raw
+        .tunnel_id
+        .map(|value| value.trim().to_string())
+        .filter(|value| !value.is_empty());
+    let dns_record_id = raw
+        .dns_record_id
+        .map(|value| value.trim().to_string())
+        .filter(|value| !value.is_empty());
+    let zone_id = raw
+        .zone_id
+        .map(|value| value.trim().to_string())
+        .filter(|value| !value.is_empty());
+
+    if tunnel_id.is_none() && dns_record_id.is_none() && zone_id.is_none() {
+        return None;
+    }
+
+    let mut object = serde_json::Map::new();
+    object.insert(
+        "provider".to_string(),
+        serde_json::Value::String("cloudflare".to_string()),
+    );
+    if let Some(tunnel_id) = tunnel_id {
+        object.insert(
+            "tunnel_id".to_string(),
+            serde_json::Value::String(tunnel_id),
+        );
+    }
+    if let Some(dns_record_id) = dns_record_id {
+        object.insert(
+            "dns_record_id".to_string(),
+            serde_json::Value::String(dns_record_id),
+        );
+    }
+    if let Some(zone_id) = zone_id {
+        object.insert("zone_id".to_string(), serde_json::Value::String(zone_id));
+    }
+
+    Some(serde_json::Value::Object(object))
+}
+
 impl ExecutorOrchestrator {
     pub(crate) async fn fetch_attempt_log_lines(
         &self,
@@ -201,9 +263,11 @@ impl ExecutorOrchestrator {
             preview_target,
             preview_url,
             preview_runtime_control,
+            preview_cloudflare_cleanup,
             cloudflare_tunnel_error,
             preview_target_source,
             preview_url_source,
+            preview_cloudflare_cleanup_source,
             cloudflare_tunnel_error_source,
         ) = if let Some(wp) = worktree_path {
             if let Ok(Some(contract)) = self.extract_preview_from_file_contract(wp).await {
@@ -236,9 +300,11 @@ impl ExecutorOrchestrator {
                     contract.preview_target,
                     preview_url,
                     contract.runtime_control,
+                    contract.cloudflare_cleanup,
                     cloudflare_tunnel_error,
                     "file_contract",
                     preview_url_source,
+                    "file_contract",
                     cloudflare_tunnel_error_source,
                 )
             } else {
@@ -246,8 +312,10 @@ impl ExecutorOrchestrator {
                     extract_preview_target(&lines),
                     extract_preview_url(&lines),
                     None,
+                    None,
                     extract_labeled_value(&lines, "CLOUDFLARE_TUNNEL_ERROR")
                         .or_else(|| extract_labeled_value(&lines, "cloudflare_tunnel_error")),
+                    "agent_output",
                     "agent_output",
                     "agent_output",
                     "agent_output",
@@ -258,8 +326,10 @@ impl ExecutorOrchestrator {
                 extract_preview_target(&lines),
                 extract_preview_url(&lines),
                 None,
+                None,
                 extract_labeled_value(&lines, "CLOUDFLARE_TUNNEL_ERROR")
                     .or_else(|| extract_labeled_value(&lines, "cloudflare_tunnel_error")),
+                "agent_output",
                 "agent_output",
                 "agent_output",
                 "agent_output",
@@ -352,6 +422,39 @@ impl ExecutorOrchestrator {
                 serde_json::Value::String("active".to_string()),
             );
         } else if preview_target.is_some() || preview_url.is_some() {
+            patch.insert(
+                "preview_runtime_control".to_string(),
+                serde_json::Value::Null,
+            );
+            patch.insert(
+                "preview_runtime_control_source".to_string(),
+                serde_json::Value::Null,
+            );
+        }
+        if let Some(cloudflare_cleanup) = &preview_cloudflare_cleanup {
+            patch.insert(
+                "preview_cloudflare_cleanup".to_string(),
+                cloudflare_cleanup.clone(),
+            );
+            patch.insert(
+                "preview_cloudflare_cleanup_source".to_string(),
+                serde_json::Value::String(preview_cloudflare_cleanup_source.to_string()),
+            );
+        } else if preview_target.is_some() || preview_url.is_some() {
+            patch.insert(
+                "preview_cloudflare_cleanup".to_string(),
+                serde_json::Value::Null,
+            );
+            patch.insert(
+                "preview_cloudflare_cleanup_source".to_string(),
+                serde_json::Value::Null,
+            );
+            patch.insert(
+                "preview_runtime_state".to_string(),
+                serde_json::Value::String("active".to_string()),
+            );
+        }
+        if preview_target.is_some() || preview_url.is_some() {
             patch.insert(
                 "preview_runtime_state".to_string(),
                 serde_json::Value::String("active".to_string()),
@@ -802,8 +905,10 @@ impl ExecutorOrchestrator {
             preview_target,
             preview_url,
             preview_runtime_control,
+            preview_cloudflare_cleanup,
             cloudflare_tunnel_error,
             source,
+            preview_cloudflare_cleanup_source,
             cloudflare_tunnel_error_source,
         ) = if let Some(wp) = worktree_path {
             if let Ok(Some(contract)) = self.extract_preview_from_file_contract(wp).await {
@@ -811,7 +916,9 @@ impl ExecutorOrchestrator {
                     contract.preview_target,
                     contract.preview_url,
                     contract.runtime_control,
+                    contract.cloudflare_cleanup,
                     contract.cloudflare_tunnel_error,
+                    "file_contract",
                     "file_contract",
                     "file_contract",
                 )
@@ -823,8 +930,10 @@ impl ExecutorOrchestrator {
                     extract_preview_target(&lines),
                     extract_preview_url(&lines),
                     None,
+                    None,
                     extract_labeled_value(&lines, "CLOUDFLARE_TUNNEL_ERROR")
                         .or_else(|| extract_labeled_value(&lines, "cloudflare_tunnel_error")),
+                    "agent_output",
                     "agent_output",
                     "agent_output",
                 )
@@ -837,8 +946,10 @@ impl ExecutorOrchestrator {
                 extract_preview_target(&lines),
                 extract_preview_url(&lines),
                 None,
+                None,
                 extract_labeled_value(&lines, "CLOUDFLARE_TUNNEL_ERROR")
                     .or_else(|| extract_labeled_value(&lines, "cloudflare_tunnel_error")),
+                "agent_output",
                 "agent_output",
                 "agent_output",
             )
@@ -892,7 +1003,37 @@ impl ExecutorOrchestrator {
                 "preview_runtime_state".to_string(),
                 serde_json::Value::String("active".to_string()),
             );
+        } else if preview_target.is_some() || metadata_patch.contains_key("preview_url") {
+            metadata_patch.insert(
+                "preview_runtime_control".to_string(),
+                serde_json::Value::Null,
+            );
+            metadata_patch.insert(
+                "preview_runtime_control_source".to_string(),
+                serde_json::Value::Null,
+            );
+        }
+        if let Some(cloudflare_cleanup) = preview_cloudflare_cleanup {
+            metadata_patch.insert("preview_cloudflare_cleanup".to_string(), cloudflare_cleanup);
+            metadata_patch.insert(
+                "preview_cloudflare_cleanup_source".to_string(),
+                serde_json::Value::String(preview_cloudflare_cleanup_source.to_string()),
+            );
         } else {
+            metadata_patch.insert(
+                "preview_cloudflare_cleanup".to_string(),
+                serde_json::Value::Null,
+            );
+            metadata_patch.insert(
+                "preview_cloudflare_cleanup_source".to_string(),
+                serde_json::Value::Null,
+            );
+            metadata_patch.insert(
+                "preview_runtime_state".to_string(),
+                serde_json::Value::String("active".to_string()),
+            );
+        }
+        if preview_target.is_some() || metadata_patch.contains_key("preview_url") {
             metadata_patch.insert(
                 "preview_runtime_state".to_string(),
                 serde_json::Value::String("active".to_string()),
@@ -1381,5 +1522,44 @@ mod tests {
             Some("cloudflare_not_configured — missing: CLOUDFLARE_ACCOUNT_ID")
         );
         assert!(contract.runtime_control.is_some());
+    }
+
+    #[test]
+    fn parse_preview_output_contract_preserves_cloudflare_cleanup_metadata() {
+        let contract = parse_preview_output_contract(
+            r#"{
+  "preview_target": "http://127.0.0.1:8080",
+  "preview_url": "https://task-abcd.preview.example.com",
+  "cloudflare_cleanup": {
+    "tunnel_id": "935949eb-eebc-458f-86cc-de0502e91208",
+    "dns_record_id": "dns-record-123",
+    "zone_id": "zone-123"
+  }
+}"#,
+        )
+        .expect("preview contract should parse");
+
+        let cleanup = contract
+            .cloudflare_cleanup
+            .and_then(|value| value.as_object().cloned())
+            .expect("cloudflare cleanup metadata should be present");
+        assert_eq!(
+            cleanup.get("provider").and_then(|value| value.as_str()),
+            Some("cloudflare")
+        );
+        assert_eq!(
+            cleanup.get("tunnel_id").and_then(|value| value.as_str()),
+            Some("935949eb-eebc-458f-86cc-de0502e91208")
+        );
+        assert_eq!(
+            cleanup
+                .get("dns_record_id")
+                .and_then(|value| value.as_str()),
+            Some("dns-record-123")
+        );
+        assert_eq!(
+            cleanup.get("zone_id").and_then(|value| value.as_str()),
+            Some("zone-123")
+        );
     }
 }

@@ -877,6 +877,7 @@ Project type: {}
    That public URL must use `CLOUDFLARE_BASE_DOMAIN`; do not use `*.trycloudflare.com` and do not CNAME a custom domain to a quick tunnel URL.
    Do not run `cloudflared` with `--token`; write the returned tunnel credentials to a file and use `--credentials-file` so the secret does not appear in process lists.
 8. Only after the runtime is reachable, write `.acpms/preview-output.json` with `preview_target`, `preview_url`, and `runtime_control`.
+   If a Cloudflare public preview was created, also include `cloudflare_cleanup` with `tunnel_id`, `dns_record_id`, and `zone_id` so ACPMS can delete that public preview on stop/cancel.
 9. Only after the runtime is reachable, print:
    - `PREVIEW_TARGET: http://127.0.0.1:<port>`
    - `PREVIEW_URL: <public-or-local-url>`
