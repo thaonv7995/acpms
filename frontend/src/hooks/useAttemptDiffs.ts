@@ -66,12 +66,14 @@ export function useAttemptDiffs(
       }
 
       try {
-        const { files } = await getAttemptDiffSummary(attemptId);
-        let nextDiffs = files;
+        let nextDiffs: FileDiffSummary[];
 
-        if (nextDiffs.length === 0 && enablePolling) {
+        if (enablePolling) {
           const liveDiff = await getAttemptDiff(attemptId);
           nextDiffs = mapLiveDiffsToSummary(liveDiff.files);
+        } else {
+          const { files } = await getAttemptDiffSummary(attemptId);
+          nextDiffs = files;
         }
 
         if (!mounted) return;
@@ -92,6 +94,9 @@ export function useAttemptDiffs(
 
     const pollId = enablePolling
       ? window.setInterval(() => {
+          if (typeof document !== 'undefined' && document.visibilityState === 'hidden') {
+            return;
+          }
           void refresh(false);
         }, LIVE_DIFF_POLL_INTERVAL_MS)
       : null;

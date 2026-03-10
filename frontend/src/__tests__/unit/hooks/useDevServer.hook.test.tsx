@@ -1,5 +1,5 @@
-import { renderHook, waitFor } from '@testing-library/react';
-import { beforeEach, describe, expect, it, vi } from 'vitest';
+import { act, renderHook, waitFor } from '@testing-library/react';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import {
   extractPreviewSignalFromAttemptLogs,
   useDevServer,
@@ -70,6 +70,10 @@ describe('useDevServer preview URL syncing', () => {
     });
   });
 
+  afterEach(() => {
+    vi.useRealTimers();
+  });
+
   it('replaces a fallback local preview URL with the latest public preview URL from logs', async () => {
     vi.mocked(getPreview).mockResolvedValue(null);
     vi.mocked(getPreviewControl).mockResolvedValue({
@@ -132,7 +136,34 @@ describe('useDevServer preview URL syncing', () => {
     expect(signal).toEqual({
       url: 'https://preview-9b0679a1.thaonv.online',
       signalKey:
-        'log-new:2026-03-10T10:25:19Z:https://preview-9b0679a1.thaonv.online',
+        'log-new:2026-03-10T10:25:19Z:preview_url:https://preview-9b0679a1.thaonv.online',
+      kind: 'preview_url',
+    });
+  });
+
+  it('prefers PREVIEW_URL over a newer PREVIEW_TARGET from the same attempt logs', () => {
+    const signal = extractPreviewSignalFromAttemptLogs([
+      {
+        id: 'log-target',
+        attempt_id: 'attempt-1',
+        log_type: 'stdout',
+        content: 'PREVIEW_TARGET: http://127.0.0.1:8080',
+        created_at: '2026-03-10T10:30:00Z',
+      },
+      {
+        id: 'log-url',
+        attempt_id: 'attempt-1',
+        log_type: 'stdout',
+        content: 'PREVIEW_URL: https://landing-page-989823.thaonv.online',
+        created_at: '2026-03-10T10:25:19Z',
+      },
+    ]);
+
+    expect(signal).toEqual({
+      url: 'https://landing-page-989823.thaonv.online',
+      signalKey:
+        'log-url:2026-03-10T10:25:19Z:preview_url:https://landing-page-989823.thaonv.online',
+      kind: 'preview_url',
     });
   });
 
@@ -179,6 +210,48 @@ describe('useDevServer preview URL syncing', () => {
     expect(result.current.externalPreview).toBe(true);
   });
 
+  it('prefers the fallback PREVIEW_URL over log-derived PREVIEW_TARGET while the attempt is still running', async () => {
+    vi.mocked(getPreview).mockResolvedValue(null);
+    vi.mocked(getPreviewControl).mockResolvedValue({
+      attempt_id: 'attempt-1',
+      preview_available: true,
+      controllable: false,
+      dismissible: true,
+      action: 'dismiss',
+      runtime_type: null,
+      control_source: 'file_contract',
+      container_name: null,
+      compose_project_name: null,
+    });
+    vi.mocked(getAttemptLogs).mockResolvedValue([
+      {
+        id: 'log-local',
+        attempt_id: 'attempt-1',
+        log_type: 'stdout',
+        content: 'PREVIEW_TARGET: http://127.0.0.1:8080',
+        created_at: '2026-03-10T10:03:32Z',
+      },
+    ]);
+
+    const { result } = renderHook(() =>
+      useDevServer(
+        'task-1',
+        'attempt-1',
+        'https://landing-page-989823.thaonv.online',
+        false,
+        'RUNNING'
+      )
+    );
+
+    await waitFor(() => {
+      expect(result.current.url).toBe(
+        'https://landing-page-989823.thaonv.online'
+      );
+    });
+
+    expect(result.current.externalPreview).toBe(true);
+  });
+
   it('refreshes the running preview when the backend preview URL changes', async () => {
     vi.mocked(getAttemptLogs).mockResolvedValue([]);
     vi.mocked(getPreview)
@@ -208,5 +281,80 @@ describe('useDevServer preview URL syncing', () => {
     });
 
     expect(result.current.previewRevision).toBeGreaterThan(0);
+  });
+
+  it('preserves dismiss-only control when preview metadata exists but runtime is not controllable', async () => {
+    vi.mocked(getAttemptLogs).mockResolvedValue([]);
+    vi.mocked(getPreview).mockResolvedValue({
+      id: 'preview-1',
+      attempt_id: 'attempt-1',
+      preview_url: 'https://preview.example.com',
+      status: 'active',
+      created_at: '2026-03-10T10:25:19Z',
+      expires_at: null,
+    });
+    vi.mocked(getPreviewControl).mockResolvedValue({
+      attempt_id: 'attempt-1',
+      preview_available: true,
+      controllable: false,
+      dismissible: true,
+      action: 'dismiss',
+      runtime_type: null,
+      control_source: 'file_contract',
+      container_name: null,
+      compose_project_name: null,
+    });
+
+    const { result } = renderHook(() => useDevServer('task-1', 'attempt-1'));
+
+    await waitFor(() => {
+      expect(result.current.url).toBe('https://preview.example.com');
+    });
+
+    expect(result.current.canStopPreview).toBe(false);
+    expect(result.current.dismissOnly).toBe(true);
+  });
+
+  it('stops polling attempt logs after a managed preview becomes available', async () => {
+    vi.useFakeTimers();
+    vi.mocked(getAttemptLogs).mockResolvedValue([]);
+    vi.mocked(getPreview).mockResolvedValue({
+      id: 'preview-1',
+      attempt_id: 'attempt-1',
+      preview_url: 'https://preview.example.com',
+      status: 'active',
+      created_at: '2026-03-10T10:25:19Z',
+      expires_at: null,
+    });
+    vi.mocked(getPreviewControl).mockResolvedValue({
+      attempt_id: 'attempt-1',
+      preview_available: true,
+      controllable: true,
+      dismissible: false,
+      action: 'stop',
+      runtime_type: 'managed_preview',
+      control_source: 'preview_manager',
+      container_name: null,
+      compose_project_name: null,
+    });
+
+    const { result } = renderHook(() =>
+      useDevServer('task-1', 'attempt-1', undefined, false, 'RUNNING')
+    );
+
+    await act(async () => {
+      await Promise.resolve();
+      await Promise.resolve();
+    });
+
+    expect(result.current.url).toBe('https://preview.example.com');
+    expect(getAttemptLogs).toHaveBeenCalledTimes(1);
+
+    await act(async () => {
+      vi.advanceTimersByTime(6000);
+      await Promise.resolve();
+    });
+
+    expect(getAttemptLogs).toHaveBeenCalledTimes(1);
   });
 });

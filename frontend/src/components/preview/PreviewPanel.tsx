@@ -1,11 +1,10 @@
-import { useState, useRef, useEffect } from 'react';
+import { useState, useRef, useEffect, type KeyboardEvent } from 'react';
 import {
   ExternalLink,
   Hammer,
   Loader2,
   Maximize2,
   Minimize2,
-  Pencil,
   Play,
   RefreshCw,
   RotateCw,
@@ -99,9 +98,12 @@ export function PreviewPanel({
   const [isFullscreen, setIsFullscreen] = useState(false);
   const [iframeKey, setIframeKey] = useState(0);
   const [isIframeLoading, setIsIframeLoading] = useState(false);
+  const [isEditingUrl, setIsEditingUrl] = useState(false);
+  const [draftUrl, setDraftUrl] = useState('');
   const [manualUrlOverride, setManualUrlOverride] = useState<string | undefined>();
   const iframeRef = useRef<HTMLIFrameElement>(null);
   const containerRef = useRef<HTMLDivElement>(null);
+  const urlInputRef = useRef<HTMLInputElement>(null);
   const effectiveUrl = manualUrlOverride?.trim() || devServerUrl;
   const iframeSrc = buildIframeSrc(effectiveUrl, externalPreview, previewRevision);
 
@@ -113,7 +115,10 @@ export function PreviewPanel({
   const hasManualOverride = Boolean(manualUrlOverride?.trim());
   const canShowPreview = hasUrl && (isRunning || externalPreview || hasManualOverride);
   const canManageRuntime = !externalPreview;
+  const canManageRuntimeActions =
+    canManageRuntime && canShowPreview && canStopPreview;
   const effectiveRebuild = onRebuild ?? onRestart;
+  const canEditUrl = Boolean(effectiveUrl);
 
   const statusIcon = (() => {
     if (hasError) {
@@ -163,16 +168,24 @@ export function PreviewPanel({
     window.open(iframeSrc, '_blank', 'noopener,noreferrer');
   };
 
-  const handleEditUrl = () => {
-    const currentValue = manualUrlOverride?.trim() || devServerUrl || '';
-    const nextValue = window.prompt('Edit preview URL', currentValue);
-    if (nextValue === null) {
+  const enterUrlEditMode = () => {
+    if (!effectiveUrl) {
       return;
     }
-    const trimmed = nextValue.trim();
+
+    setDraftUrl(effectiveUrl);
+    setIsEditingUrl(true);
+  };
+
+  const commitUrlEdit = () => {
+    const trimmed = draftUrl.trim();
     setManualUrlOverride(trimmed.length > 0 ? trimmed : undefined);
-    setIframeKey((prev) => prev + 1);
-    setIsIframeLoading(Boolean(trimmed.length > 0 || devServerUrl));
+    setIsEditingUrl(false);
+  };
+
+  const cancelUrlEdit = () => {
+    setDraftUrl(effectiveUrl ?? '');
+    setIsEditingUrl(false);
   };
 
   const handleFullscreen = () => {
@@ -193,6 +206,26 @@ export function PreviewPanel({
     setIsIframeLoading(false);
   };
 
+  const handleUrlKeyDown = (event: KeyboardEvent<HTMLButtonElement>) => {
+    if (event.key === 'Enter' || event.key === ' ') {
+      event.preventDefault();
+      enterUrlEditMode();
+    }
+  };
+
+  const handleUrlInputKeyDown = (event: KeyboardEvent<HTMLInputElement>) => {
+    if (event.key === 'Enter') {
+      event.preventDefault();
+      commitUrlEdit();
+      return;
+    }
+
+    if (event.key === 'Escape') {
+      event.preventDefault();
+      cancelUrlEdit();
+    }
+  };
+
   useEffect(() => {
     const handleFullscreenChange = () => {
       setIsFullscreen(Boolean(document.fullscreenElement));
@@ -201,6 +234,15 @@ export function PreviewPanel({
     document.addEventListener('fullscreenchange', handleFullscreenChange);
     return () => document.removeEventListener('fullscreenchange', handleFullscreenChange);
   }, []);
+
+  useEffect(() => {
+    if (!isEditingUrl) {
+      return;
+    }
+
+    urlInputRef.current?.focus();
+    urlInputRef.current?.select();
+  }, [isEditingUrl]);
 
   return (
     <div
@@ -212,13 +254,50 @@ export function PreviewPanel({
         <div className="flex items-center justify-between gap-3 px-3 py-1.5 border-b border-border bg-muted/50">
           <div className="min-w-0 flex-1 flex items-center gap-2">
             {statusIcon}
-            <div
-              className={`text-xs truncate leading-5 ${
-                devServerUrl ? 'text-muted-foreground font-mono' : hasError ? 'text-destructive' : 'text-muted-foreground'
-              }`}
-            >
-              {statusText}
-            </div>
+            {canEditUrl && isEditingUrl ? (
+              <input
+                ref={urlInputRef}
+                type="text"
+                value={draftUrl}
+                onChange={(event) => setDraftUrl(event.target.value)}
+                onKeyDown={handleUrlInputKeyDown}
+                onBlur={commitUrlEdit}
+                className="min-w-0 flex-1 rounded-md border border-primary/60 bg-background px-2 py-1 text-xs leading-5 text-foreground outline-none ring-0"
+                aria-label="Edit preview URL"
+                autoCapitalize="none"
+                autoCorrect="off"
+                spellCheck={false}
+              />
+            ) : canEditUrl ? (
+              <button
+                type="button"
+                onDoubleClick={enterUrlEditMode}
+                onKeyDown={handleUrlKeyDown}
+                className={`min-w-0 flex-1 truncate bg-transparent p-0 text-left text-xs leading-5 ${
+                  devServerUrl
+                    ? 'font-mono text-muted-foreground hover:text-foreground'
+                    : hasError
+                      ? 'text-destructive'
+                      : 'text-muted-foreground'
+                }`}
+                title="Double-click to edit preview URL"
+                aria-label="Preview URL. Double-click to edit"
+              >
+                {statusText}
+              </button>
+            ) : (
+              <div
+                className={`text-xs truncate leading-5 ${
+                  devServerUrl
+                    ? 'text-muted-foreground font-mono'
+                    : hasError
+                      ? 'text-destructive'
+                      : 'text-muted-foreground'
+                }`}
+              >
+                {statusText}
+              </div>
+            )}
             {statusBadgeLabel ? (
               <span
                 className="shrink-0 rounded-full border border-amber-500/30 bg-amber-500/10 px-2 py-0.5 text-[10px] font-medium uppercase tracking-[0.12em] text-amber-300"
@@ -260,16 +339,6 @@ export function PreviewPanel({
               </Button>
             )}
             <Button
-              onClick={handleEditUrl}
-              size="icon"
-              variant="ghost"
-              className="h-8 w-8 text-muted-foreground hover:text-foreground hover:bg-muted"
-              title="Edit preview URL"
-              aria-label="Edit preview URL"
-            >
-              <Pencil className="w-4 h-4" />
-            </Button>
-            <Button
               onClick={handleRefresh}
               size="icon"
               variant="ghost"
@@ -280,7 +349,7 @@ export function PreviewPanel({
             >
               <RefreshCw className={`w-4 h-4 ${isIframeLoading ? 'animate-spin' : ''}`} />
             </Button>
-            {canManageRuntime && canShowPreview && (
+            {canManageRuntimeActions && (
               <>
                 <Button
                   onClick={onRestart}

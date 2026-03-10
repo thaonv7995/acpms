@@ -51,24 +51,6 @@ function formatMissingCloudflareField(field: string): string {
   }
 }
 
-const PREVIEW_RUNTIME_DISABLED_REASON =
-  'preview unavailable: docker preview runtime is disabled';
-
-const AGENT_PREVIEW_FOLLOW_UP_PROMPT = [
-  'Deploy a preview for the latest code in this attempt.',
-  'Use the `preview-docker-runtime` skill.',
-  'If a public/tunneled preview is needed, also use `create-cloudflare-custom-domain-preview-url` after the local Docker preview is reachable.',
-  'Run the preview in Docker only, not as a host process.',
-  'Keep `PREVIEW_TARGET` as the local Docker preview URL.',
-  'If you emit `PREVIEW_URL`, it must be a real public URL on `CLOUDFLARE_BASE_DOMAIN` when Cloudflare settings are present.',
-  'Do not use `*.trycloudflare.com` and do not CNAME a custom domain to a quick tunnel URL.',
-  'Never start `cloudflared` with `--token`; use a credentials file so tunnel secrets do not appear in process lists.',
-  'If you cannot create the proper custom-domain preview yourself, leave `PREVIEW_URL` unset or equal to the local URL and include `CLOUDFLARE_TUNNEL_ERROR: <reason>`.',
-  'Verify the preview serves the latest code, then print `PREVIEW_TARGET: <local-url>` in the logs and also print `PREVIEW_URL: <url>` where the URL is public when available, or the same local URL when no public URL exists.',
-  'Write `.acpms/preview-output.json` with `preview_target`, `preview_url`, and `runtime_control` metadata if the runtime can be stopped by ACPMS.',
-  'If you created a Cloudflare public preview, also include `cloudflare_cleanup` with `tunnel_id`, `dns_record_id`, and `zone_id` so ACPMS can remove it later.',
-].join(' ');
-
 const AGENT_PREVIEW_STOP_PROMPT = [
   'Stop the preview that is currently associated with this attempt.',
   'Use the `preview-docker-runtime` skill.',
@@ -96,7 +78,7 @@ export function PreviewPanelWrapper({
   fallbackPreviewUrl,
   autoStartOnMount = false,
   attemptStatus = null,
-  taskStatus = null,
+  taskStatus: _taskStatus = null,
   onFollowUpAttemptCreated,
 }: PreviewPanelWrapperProps) {
   const {
@@ -127,10 +109,8 @@ export function PreviewPanelWrapper({
   const [previewActionError, setPreviewActionError] = useState<string | undefined>();
 
   const normalizedAttemptStatus = attemptStatus?.toLowerCase() ?? null;
-  const normalizedTaskStatus = taskStatus?.toLowerCase() ?? null;
   const isAttemptRunning =
     normalizedAttemptStatus === 'running' || normalizedAttemptStatus === 'queued';
-  const isTaskDone = normalizedTaskStatus === 'done';
   const latestProcessId =
     processes.length > 0 ? processes[processes.length - 1].id : null;
   const hasAgentActionContext = isAttemptRunning || Boolean(latestProcessId);
@@ -182,11 +162,8 @@ export function PreviewPanelWrapper({
 
   const handleStart = useCallback(async () => {
     setPreviewActionError(undefined);
-    const started = await startServer();
-    if (!started && hasAgentActionContext) {
-      await requestAgentPreviewAction(AGENT_PREVIEW_FOLLOW_UP_PROMPT);
-    }
-  }, [hasAgentActionContext, requestAgentPreviewAction, startServer]);
+    await startServer();
+  }, [startServer]);
 
   const handleStop = useCallback(async () => {
     setPreviewActionError(undefined);
@@ -219,24 +196,10 @@ export function PreviewPanelWrapper({
       ? 'starting'
       : status;
   const effectiveErrorMessage = previewActionError || errorMessage;
-  const previewStartWouldCreateAttemptReason =
-    isTaskDone &&
-    typeof startDisabledReason === 'string' &&
-    startDisabledReason.toLowerCase().includes(PREVIEW_RUNTIME_DISABLED_REASON)
-      ? 'Preview runtime is disabled here. ACPMS will try the built-in preview flow first, then fall back to an agent follow-up if needed.'
-      : undefined;
-  const effectiveStartDisabled =
-    !hasAgentActionContext &&
-    (startDisabled || Boolean(previewStartWouldCreateAttemptReason));
-  const effectiveStartDisabledReason =
-    hasAgentActionContext
-      ? startDisabledReason
-      : previewStartWouldCreateAttemptReason || startDisabledReason;
-  const startActionTitle = hasAgentActionContext
-    ? 'Try ACPMS preview first, then fall back to an agent follow-up if needed'
-    : undefined;
-  const effectiveCanStopPreview =
-    (hasAgentActionContext && hasPreviewUrl) || canStopPreview;
+  const effectiveStartDisabled = startDisabled;
+  const effectiveStartDisabledReason = startDisabledReason;
+  const startActionTitle = undefined;
+  const effectiveCanStopPreview = canStopPreview;
   const effectiveDismissOnly =
     hasPreviewUrl && !effectiveCanStopPreview ? true : dismissOnly;
   const showPublicUrlUnavailableBadge =

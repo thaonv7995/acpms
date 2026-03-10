@@ -64,8 +64,7 @@ describe('PreviewPanelWrapper', () => {
     });
   });
 
-  it('falls back to an agent preview follow-up when the hard preview start flow fails', async () => {
-    const onFollowUpAttemptCreated = vi.fn();
+  it('does not create an agent follow-up when the hard preview start flow fails', async () => {
     const startServer = vi.fn().mockResolvedValue(false);
 
     vi.mocked(useDevServer).mockReturnValue({
@@ -77,8 +76,8 @@ describe('PreviewPanelWrapper', () => {
       dismissPreview: vi.fn(),
       restartServer: vi.fn().mockResolvedValue(false),
       isLoading: false,
-      startDisabled: true,
-      startDisabledReason: 'Preview unavailable: Docker preview runtime is disabled',
+      startDisabled: false,
+      startDisabledReason: undefined,
       externalPreview: false,
       previewRevision: 0,
       canStopPreview: false,
@@ -87,23 +86,11 @@ describe('PreviewPanelWrapper', () => {
       missingCloudflareFields: [],
     });
 
-    vi.mocked(followUpExecutionProcess).mockResolvedValue({
-      id: 'attempt-2',
-      task_id: 'task-1',
-      status: 'QUEUED',
-      started_at: null,
-      completed_at: null,
-      error_message: null,
-      metadata: {},
-      created_at: new Date().toISOString(),
-    } as never);
-
     render(
       <PreviewPanelWrapper
         taskId="task-1"
         attemptId="attempt-1"
         attemptStatus="SUCCESS"
-        onFollowUpAttemptCreated={onFollowUpAttemptCreated}
       />
     );
 
@@ -111,17 +98,13 @@ describe('PreviewPanelWrapper', () => {
 
     await waitFor(() => {
       expect(startServer).toHaveBeenCalled();
-      expect(followUpExecutionProcess).toHaveBeenCalledWith(
-        'process-1',
-        expect.stringContaining('Deploy a preview for the latest code in this attempt.')
-      );
     });
 
-    expect(onFollowUpAttemptCreated).toHaveBeenCalledWith('attempt-2');
     expect(sendAttemptInput).not.toHaveBeenCalled();
+    expect(followUpExecutionProcess).not.toHaveBeenCalled();
   });
 
-  it('shows stop and requests an agent follow-up to stop preview when a preview URL exists', async () => {
+  it('requests an agent follow-up to stop preview when a stoppable preview stop fails', async () => {
     vi.mocked(useDevServer).mockReturnValue({
       status: 'running',
       url: 'http://localhost:42574',
@@ -135,7 +118,7 @@ describe('PreviewPanelWrapper', () => {
       startDisabledReason: undefined,
       externalPreview: false,
       previewRevision: 0,
-      canStopPreview: false,
+      canStopPreview: true,
       dismissOnly: false,
       cloudflareReady: true,
       missingCloudflareFields: [],
@@ -159,6 +142,38 @@ describe('PreviewPanelWrapper', () => {
         expect.stringContaining('Stop the preview that is currently associated with this attempt.')
       );
     });
+  });
+
+  it('shows dismiss instead of stop when preview is not controllable', () => {
+    vi.mocked(useDevServer).mockReturnValue({
+      status: 'running',
+      url: 'https://preview.example.com',
+      errorMessage: undefined,
+      startServer: vi.fn().mockResolvedValue(true),
+      stopServer: vi.fn().mockResolvedValue(false),
+      dismissPreview: vi.fn(),
+      restartServer: vi.fn().mockResolvedValue(false),
+      isLoading: false,
+      startDisabled: false,
+      startDisabledReason: undefined,
+      externalPreview: true,
+      previewRevision: 0,
+      canStopPreview: false,
+      dismissOnly: true,
+      cloudflareReady: true,
+      missingCloudflareFields: [],
+    });
+
+    render(
+      <PreviewPanelWrapper
+        taskId="task-1"
+        attemptId="attempt-1"
+        attemptStatus="SUCCESS"
+      />
+    );
+
+    expect(screen.queryByRole('button', { name: /stop preview/i })).toBeNull();
+    expect(screen.getByRole('button', { name: /dismiss preview/i })).toBeTruthy();
   });
 
   it('does not create a follow-up when the hard preview start flow succeeds', async () => {

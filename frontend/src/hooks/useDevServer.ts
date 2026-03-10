@@ -48,6 +48,7 @@ interface UseDevServerReturn {
 interface PreviewLogSignal {
   url: string;
   signalKey: string;
+  kind: 'preview_url' | 'preview_target';
 }
 
 interface PreviewLogSignalCandidate extends PreviewLogSignal {
@@ -317,30 +318,43 @@ function shouldPreferExternalPreviewSignal(
 }
 
 export function extractPreviewUrlFromText(text: string): string | undefined {
-  const sanitized = stripAnsiSequences(text);
-
-  for (const regex of [PREVIEW_URL_REGEX, PREVIEW_TARGET_REGEX]) {
-    const match = sanitized.match(regex);
-    const candidate = match?.[1];
-    if (!candidate) {
-      continue;
-    }
-
-    const normalized = normalizePreviewUrlCandidate(candidate);
-    if (normalized) {
-      return normalized;
-    }
-  }
-
-  return undefined;
+  const signals = extractPreviewSignalsFromText(text);
+  return signals[0]?.url;
 }
 
-function extractPreviewUrlFromStructuredLog(value: unknown): string | undefined {
+function extractPreviewSignalsFromText(
+  text: string
+): Array<Pick<PreviewLogSignal, 'url' | 'kind'>> {
+  const sanitized = stripAnsiSequences(text);
+  const signals: Array<Pick<PreviewLogSignal, 'url' | 'kind'>> = [];
+
+  const previewUrlMatch = sanitized.match(PREVIEW_URL_REGEX);
+  const previewUrl = previewUrlMatch?.[1]
+    ? normalizePreviewUrlCandidate(previewUrlMatch[1])
+    : undefined;
+  if (previewUrl) {
+    signals.push({ url: previewUrl, kind: 'preview_url' });
+  }
+
+  const previewTargetMatch = sanitized.match(PREVIEW_TARGET_REGEX);
+  const previewTarget = previewTargetMatch?.[1]
+    ? normalizePreviewUrlCandidate(previewTargetMatch[1])
+    : undefined;
+  if (previewTarget) {
+    signals.push({ url: previewTarget, kind: 'preview_target' });
+  }
+
+  return signals;
+}
+
+function extractPreviewSignalsFromStructuredLog(
+  value: unknown
+): Array<Pick<PreviewLogSignal, 'url' | 'kind'>> {
   if (typeof value === 'string') {
-    return extractPreviewUrlFromText(value);
+    return extractPreviewSignalsFromText(value);
   }
   if (!value || typeof value !== 'object') {
-    return undefined;
+    return [];
   }
 
   const record = value as Record<string, unknown>;
@@ -349,13 +363,13 @@ function extractPreviewUrlFromStructuredLog(value: unknown): string | undefined 
     if (typeof field !== 'string') {
       continue;
     }
-    const extracted = extractPreviewUrlFromText(field);
-    if (extracted) {
+    const extracted = extractPreviewSignalsFromText(field);
+    if (extracted.length > 0) {
       return extracted;
     }
   }
 
-  return undefined;
+  return [];
 }
 
 export function extractPreviewUrlFromAttemptLogs(logs: AgentLog[]): string | undefined {
@@ -373,30 +387,34 @@ export function extractPreviewSignalFromAttemptLogs(
       continue;
     }
 
-    const direct = extractPreviewUrlFromText(content);
-    if (direct) {
-      candidates.push({
-        url: direct,
-        signalKey: `${log.id}:${log.created_at}:${direct}`,
-        createdAtMs: Number.isFinite(Date.parse(log.created_at))
-          ? Date.parse(log.created_at)
-          : Number.NEGATIVE_INFINITY,
-        loopback: isLoopbackPreviewUrl(direct),
-      });
+    const directSignals = extractPreviewSignalsFromText(content);
+    if (directSignals.length > 0) {
+      for (const signal of directSignals) {
+        candidates.push({
+          url: signal.url,
+          kind: signal.kind,
+          signalKey: `${log.id}:${log.created_at}:${signal.kind}:${signal.url}`,
+          createdAtMs: Number.isFinite(Date.parse(log.created_at))
+            ? Date.parse(log.created_at)
+            : Number.NEGATIVE_INFINITY,
+          loopback: isLoopbackPreviewUrl(signal.url),
+        });
+      }
       continue;
     }
 
     try {
       const parsed = JSON.parse(content) as unknown;
-      const extracted = extractPreviewUrlFromStructuredLog(parsed);
-      if (extracted) {
+      const extractedSignals = extractPreviewSignalsFromStructuredLog(parsed);
+      for (const signal of extractedSignals) {
         candidates.push({
-          url: extracted,
-          signalKey: `${log.id}:${log.created_at}:${extracted}`,
+          url: signal.url,
+          kind: signal.kind,
+          signalKey: `${log.id}:${log.created_at}:${signal.kind}:${signal.url}`,
           createdAtMs: Number.isFinite(Date.parse(log.created_at))
             ? Date.parse(log.created_at)
             : Number.NEGATIVE_INFINITY,
-          loopback: isLoopbackPreviewUrl(extracted),
+          loopback: isLoopbackPreviewUrl(signal.url),
         });
       }
     } catch {
@@ -405,11 +423,16 @@ export function extractPreviewSignalFromAttemptLogs(
   }
 
   candidates.sort((left, right) => {
-    if (left.createdAtMs !== right.createdAtMs) {
-      return right.createdAtMs - left.createdAtMs;
+    const leftKindPriority = left.kind === 'preview_url' ? 0 : 1;
+    const rightKindPriority = right.kind === 'preview_url' ? 0 : 1;
+    if (leftKindPriority !== rightKindPriority) {
+      return leftKindPriority - rightKindPriority;
     }
     if (left.loopback !== right.loopback) {
       return left.loopback ? 1 : -1;
+    }
+    if (left.createdAtMs !== right.createdAtMs) {
+      return right.createdAtMs - left.createdAtMs;
     }
     return left.signalKey.localeCompare(right.signalKey);
   });
@@ -422,7 +445,36 @@ export function extractPreviewSignalFromAttemptLogs(
   return {
     url: bestCandidate.url,
     signalKey: bestCandidate.signalKey,
+    kind: bestCandidate.kind,
   };
+}
+
+function hasAuthoritativePublicPreviewUrl(candidate?: string): boolean {
+  return Boolean(candidate && !isLoopbackPreviewUrl(candidate));
+}
+
+function shouldAdoptLogPreviewSignal(
+  currentUrl: string | undefined,
+  nextUrl: string,
+  hasManagedPreview: boolean
+): boolean {
+  if (hasManagedPreview && currentUrl === nextUrl) {
+    return false;
+  }
+
+  if (!currentUrl) {
+    return true;
+  }
+
+  if (currentUrl === nextUrl) {
+    return true;
+  }
+
+  if (!isLoopbackPreviewUrl(currentUrl) && isLoopbackPreviewUrl(nextUrl)) {
+    return false;
+  }
+
+  return shouldPreferExternalPreviewSignal(currentUrl, nextUrl);
 }
 
 function buildExternalPreviewState(
@@ -498,6 +550,11 @@ export function useDevServer(
     normalizedAttemptStatus === 'success' ||
     normalizedAttemptStatus === 'failed' ||
     normalizedAttemptStatus === 'cancelled';
+  const fallbackHasAuthoritativePublicUrl =
+    typeof fallbackPreviewUrl === 'string' &&
+    hasAuthoritativePublicPreviewUrl(fallbackPreviewUrl.trim());
+  const currentHasAuthoritativePublicUrl =
+    hasAuthoritativePublicPreviewUrl(state.url);
 
   // Hydrate preview state from backend when task/attempt changes.
   useEffect(() => {
@@ -527,7 +584,9 @@ export function useDevServer(
     let cancelled = false;
     setIsLoading(true);
 
-    const shouldFetchLogSignals = !attemptIsTerminal || !fallbackPreviewUrl;
+    const shouldFetchLogSignals =
+      !fallbackHasAuthoritativePublicUrl &&
+      (!attemptIsTerminal || !fallbackPreviewUrl);
     const logsPromise = shouldFetchLogSignals
       ? getAttemptLogs(attemptId).catch(() => [] as AgentLog[])
       : Promise.resolve([] as AgentLog[]);
@@ -551,10 +610,30 @@ export function useDevServer(
             ? {
                 url: fallbackPreviewUrl,
                 signalKey: `fallback:${fallbackPreviewUrl}`,
+                kind: 'preview_url' as const,
               }
             : undefined;
-        const agentPreviewSignal =
-          (attemptIsTerminal ? undefined : logPreviewSignal) || fallbackPreviewSignal;
+        const agentPreviewSignal = (() => {
+          if (
+            fallbackPreviewSignal &&
+            hasAuthoritativePublicPreviewUrl(fallbackPreviewSignal.url)
+          ) {
+            return fallbackPreviewSignal;
+          }
+
+          if (
+            logPreviewSignal &&
+            (!fallbackPreviewSignal ||
+              shouldPreferExternalPreviewSignal(
+                fallbackPreviewSignal.url,
+                logPreviewSignal.url
+              ))
+          ) {
+            return logPreviewSignal;
+          }
+
+          return fallbackPreviewSignal || (attemptIsTerminal ? undefined : logPreviewSignal);
+        })();
         const previewSignalAvailable = control.preview_available || Boolean(preview);
 
         setState((prev) => {
@@ -576,11 +655,11 @@ export function useDevServer(
             previewSignalAvailable &&
             agentPreviewSignal.signalKey !== prev.dismissedExternalPreviewSignal &&
             (!preview ||
-              (preview.preview_url !== agentPreviewSignal.url &&
-                shouldPreferExternalPreviewSignal(
-                  preview.preview_url,
-                  agentPreviewSignal.url
-                )))
+              shouldAdoptLogPreviewSignal(
+                preview.preview_url,
+                agentPreviewSignal.url,
+                true
+              ))
           ) {
             return buildExternalPreviewState(
               baseState,
@@ -616,8 +695,8 @@ export function useDevServer(
             lastExternalPreviewSignal: undefined,
             dismissedExternalPreviewSignal:
               prev.dismissedExternalPreviewSignal,
-            canStopPreview: true,
-            dismissOnly: false,
+            canStopPreview: control.controllable,
+            dismissOnly: control.action === 'dismiss',
           };
         });
       })
@@ -656,7 +735,14 @@ export function useDevServer(
   // Poll attempt logs while the agent is still running so PREVIEW_TARGET can
   // surface without requiring a manual page refresh.
   useEffect(() => {
-    if (!attemptId || !attemptIsActive) {
+    if (
+      !hasHydrated ||
+      !attemptId ||
+      !attemptIsActive ||
+      fallbackHasAuthoritativePublicUrl ||
+      currentHasAuthoritativePublicUrl ||
+      Boolean(state.previewId)
+    ) {
       return;
     }
 
@@ -688,10 +774,11 @@ export function useDevServer(
             return prev;
           }
 
-          const shouldAdoptPreviewSignal =
-            !prev.previewId ||
-            prev.externalPreview ||
-            shouldPreferExternalPreviewSignal(prev.url, previewSignal.url);
+          const shouldAdoptPreviewSignal = shouldAdoptLogPreviewSignal(
+            prev.url,
+            previewSignal.url,
+            Boolean(prev.previewId)
+          );
 
           if (!shouldAdoptPreviewSignal) {
             return prev;
@@ -723,8 +810,11 @@ export function useDevServer(
       window.clearInterval(intervalId);
     };
   }, [
+    hasHydrated,
     attemptIsActive,
     attemptId,
+    fallbackHasAuthoritativePublicUrl,
+    currentHasAuthoritativePublicUrl,
     state.previewId,
     state.status,
   ]);
@@ -767,8 +857,8 @@ export function useDevServer(
               ? prev.previewRevision + 1
               : prev.previewRevision,
             lastExternalPreviewSignal: undefined,
-            canStopPreview: true,
-            dismissOnly: false,
+            canStopPreview: prev.canStopPreview,
+            dismissOnly: prev.dismissOnly,
           };
         });
       } catch {
