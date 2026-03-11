@@ -28,6 +28,8 @@ interface TimelineLogDisplayProps {
   attemptId: string | undefined;
   /** When provided (e.g. from TaskAttemptPanel), avoids duplicate execution-processes stream subscription */
   executionProcesses?: ExecutionProcess[];
+  /** When set and status is running, header shows elapsed time. */
+  attemptStartedAt?: string | null;
   onSendMessage?: (message: string) => Promise<void>;
   enableChat?: boolean;
   enableEditReset?: boolean;
@@ -48,6 +50,7 @@ interface TimelineLogDisplayProps {
 export function TimelineLogDisplay({
   attemptId,
   executionProcesses,
+  attemptStartedAt,
   onSendMessage,
   enableChat = false,
   enableEditReset = true,
@@ -285,6 +288,7 @@ export function TimelineLogDisplay({
         <TimelineHeader
           streamState={streamState}
           attemptStatus={resolvedAttemptStatus ?? undefined}
+          attemptStartedAt={attemptStartedAt}
           tokenUsageInfo={tokenUsageInfo}
           showStatus={showStatusInHeader}
           showTokenUsage={showTokenUsageInHeader}

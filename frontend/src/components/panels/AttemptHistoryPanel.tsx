@@ -8,6 +8,8 @@ import {
 } from 'lucide-react';
 import { cn } from '@/lib/utils';
 import type { TaskAttempt } from '@/types/task-attempt';
+import { formatElapsed } from '@/utils/elapsedTime';
+import { useElapsedRealtime } from '@/hooks/useElapsedRealtime';
 
 interface AttemptHistoryPanelProps {
   attempts: TaskAttempt[];
@@ -156,16 +158,21 @@ function AttemptListItem({
             </div>
           )}
 
+          {/* Realtime elapsed for running */}
+          {attempt.status === 'running' && attempt.started_at && (
+            <AttemptRunningElapsed startedAt={attempt.started_at} />
+          )}
+
           {/* Duration for Completed/Failed */}
-          {attempt.status === 'completed' && attempt.started_at && attempt.ended_at && (
+          {attempt.status === 'completed' && attempt.started_at && (attempt.ended_at ?? attempt.completed_at) && (
             <div className="text-xs text-green-600 dark:text-green-400 mt-1">
-              Completed in {calculateDuration(attempt.started_at, attempt.ended_at)}
+              Completed in {formatElapsed(attempt.started_at, attempt.ended_at ?? attempt.completed_at)}
             </div>
           )}
 
-          {attempt.status === 'failed' && attempt.started_at && attempt.ended_at && (
+          {attempt.status === 'failed' && attempt.started_at && (attempt.ended_at ?? attempt.completed_at) && (
             <div className="text-xs text-red-600 dark:text-red-400 mt-1">
-              Failed after {calculateDuration(attempt.started_at, attempt.ended_at)}
+              Failed after {formatElapsed(attempt.started_at, attempt.ended_at ?? attempt.completed_at)}
             </div>
           )}
         </div>
@@ -174,13 +181,12 @@ function AttemptListItem({
   );
 }
 
-function calculateDuration(start: string, end: string): string {
-  const ms = new Date(end).getTime() - new Date(start).getTime();
-  const minutes = Math.floor(ms / 60000);
-  const seconds = Math.floor((ms % 60000) / 1000);
-
-  if (minutes > 0) {
-    return `${minutes}m ${seconds}s`;
-  }
-  return `${seconds}s`;
+function AttemptRunningElapsed({ startedAt }: { startedAt: string }) {
+  const elapsed = useElapsedRealtime(startedAt, true);
+  if (!elapsed) return null;
+  return (
+    <div className="text-xs text-blue-600 dark:text-blue-400 mt-1">
+      Running for {elapsed}
+    </div>
+  );
 }

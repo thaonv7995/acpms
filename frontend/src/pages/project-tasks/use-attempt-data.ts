@@ -36,6 +36,7 @@ export function useAttemptData(
         status: attempt.status.toLowerCase() as TaskAttempt['status'],
         started_at: attempt.started_at ?? undefined,
         completed_at: attempt.completed_at ?? undefined,
+        ended_at: attempt.completed_at ?? undefined,
         error_message: attempt.error_message ?? undefined,
         created_at: attempt.created_at,
         updated_at: attempt.created_at, // API doesn't have updated_at
@@ -95,6 +96,7 @@ export function useAttemptData(
       status: attempt.status.toLowerCase() as TaskAttempt['status'],
       started_at: attempt.started_at ?? undefined,
       completed_at: attempt.completed_at ?? undefined,
+      ended_at: attempt.completed_at ?? undefined,
       error_message: attempt.error_message ?? undefined,
       created_at: attempt.created_at,
       updated_at: attempt.created_at, // API doesn't have updated_at

@@ -9,10 +9,13 @@ import {
 import type { AttemptStreamConnectionState } from '@/hooks/useAttemptStream';
 import { cn } from '@/lib/utils';
 import type { TimelineTokenUsageInfo } from '@/types/timeline-log';
+import { useElapsedRealtime } from '@/hooks/useElapsedRealtime';
 
 interface TimelineHeaderProps {
   streamState: AttemptStreamConnectionState;
   attemptStatus?: string;
+  /** When set and status is running/queued, elapsed time is shown next to status. */
+  attemptStartedAt?: string | null;
   tokenUsageInfo?: TimelineTokenUsageInfo | null;
   showStatus?: boolean;
   showTokenUsage?: boolean;
@@ -24,18 +27,31 @@ interface TimelineHeaderProps {
 export function TimelineHeader({
   streamState,
   attemptStatus,
+  attemptStartedAt,
   tokenUsageInfo,
   showStatus = true,
   showTokenUsage = true,
 }: TimelineHeaderProps) {
   const normalizedAttemptStatus = attemptStatus?.toLowerCase();
+  const isRunningOrQueued =
+    normalizedAttemptStatus === 'running' || normalizedAttemptStatus === 'queued';
+  const elapsed = useElapsedRealtime(
+    attemptStartedAt ?? undefined,
+    normalizedAttemptStatus === 'running'
+  );
+
   const renderStatus = () => {
-    if (normalizedAttemptStatus === 'running' || normalizedAttemptStatus === 'queued') {
+    if (isRunningOrQueued) {
       const label = normalizedAttemptStatus === 'queued' ? 'Queued' : 'Running';
       return (
         <>
           <LoaderCircle className="w-3.5 h-3.5 text-primary animate-spin" />
           <span className="text-sm text-primary font-medium">{label}</span>
+          {normalizedAttemptStatus === 'running' && elapsed && (
+            <span className="text-sm text-muted-foreground ml-1" title="Elapsed time">
+              ({elapsed})
+            </span>
+          )}
         </>
       );
     }
