@@ -52,7 +52,7 @@ export const DEFAULT_PROJECT_SETTINGS: ProjectSettings = {
 
     // Deployment
     auto_deploy: false,
-    preview_enabled: true,
+    preview_enabled: false,
     production_deploy_on_merge: false,
     preview_ttl_days: 7,
 

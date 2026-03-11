@@ -347,7 +347,7 @@ describe('CreateTaskModal repository access guard', () => {
       settings: {
         ...DEFAULT_PROJECT_SETTINGS,
         auto_deploy: false,
-        preview_enabled: true,
+        preview_enabled: false,
       },
       defaults: {
         ...DEFAULT_PROJECT_SETTINGS,
@@ -399,6 +399,72 @@ describe('CreateTaskModal repository access guard', () => {
         metadata: expect.objectContaining({
           execution: expect.objectContaining({
             auto_deploy: false,
+          }),
+        }),
+      }),
+    );
+  });
+
+  it('keeps task preview off by default even when preview delivery is enabled via project settings', async () => {
+    vi.mocked(useProjectSettings).mockReturnValue({
+      settings: {
+        ...DEFAULT_PROJECT_SETTINGS,
+        auto_deploy: false,
+        preview_enabled: true,
+      },
+      defaults: {
+        ...DEFAULT_PROJECT_SETTINGS,
+      },
+      loading: false,
+      saving: false,
+      error: null,
+      isDirty: false,
+      refetch: vi.fn(),
+      updateSettings: vi.fn(),
+      updateSetting: vi.fn(),
+      resetToDefaults: vi.fn(),
+    });
+
+    renderCreateTaskModal(
+      <CreateTaskModal
+        isOpen
+        onClose={vi.fn()}
+        projectId="project-1"
+        projectName="ACPMS"
+        navigateToProjectOnCreate={false}
+      />,
+    );
+
+    const taskPreviewSwitch = screen.getByRole('switch', {
+      name: /Task preview/i,
+    }) as HTMLButtonElement;
+
+    await waitFor(() => {
+      expect(taskPreviewSwitch.getAttribute('aria-checked')).toBe('false');
+    });
+    expect(taskPreviewSwitch.disabled).toBe(false);
+
+    fireEvent.click(taskPreviewSwitch);
+
+    await waitFor(() => {
+      expect(taskPreviewSwitch.getAttribute('aria-checked')).toBe('true');
+    });
+
+    fireEvent.change(screen.getByPlaceholderText('e.g. Implement refresh token rotation'), {
+      target: { value: 'Create task with preview opt-in' },
+    });
+
+    fireEvent.click(screen.getByRole('button', { name: /Create Task/i }));
+
+    await waitFor(() => {
+      expect(createTask).toHaveBeenCalledTimes(1);
+    });
+
+    expect(createTask).toHaveBeenCalledWith(
+      expect.objectContaining({
+        metadata: expect.objectContaining({
+          execution: expect.objectContaining({
+            auto_deploy: true,
           }),
         }),
       }),

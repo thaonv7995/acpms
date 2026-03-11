@@ -129,7 +129,6 @@ export function CreateTaskModal({
     const [requireReview, setRequireReview] = useState(false);
     const [requireReviewTouched, setRequireReviewTouched] = useState(false);
     const [autoDeploy, setAutoDeploy] = useState(false);
-    const [autoDeployTouched, setAutoDeployTouched] = useState(false);
 
     const [taskContextFiles, setTaskContextFiles] = useState<PendingContextFile[]>([]);
 
@@ -147,7 +146,9 @@ export function CreateTaskModal({
     const repositorySummary = getRepositoryAccessSummary(effectiveRepositoryContext);
     const sourceControlConfigured = Boolean(settings?.gitlab?.configured);
     const sourceControlSetupRequired = !settingsLoading && !sourceControlConfigured;
-    const projectTaskPreviewEnabled = Boolean(projectSettings?.auto_deploy);
+    const projectTaskPreviewEnabled = Boolean(
+        projectSettings?.auto_deploy || projectSettings?.preview_enabled,
+    );
     const taskPreviewLocked = !projectSettingsLoading && !projectTaskPreviewEnabled;
 
     const showProjectSelector = !projectId;
@@ -170,7 +171,6 @@ export function CreateTaskModal({
         setRequireReview(true);
         setRequireReviewTouched(false);
         setAutoDeploy(false);
-        setAutoDeployTouched(false);
         setTaskContextFiles([]);
         setSubmitError(null);
         setShowSetupDialog(false);
@@ -197,21 +197,11 @@ export function CreateTaskModal({
     }, [effectiveProjectId, isOpen]);
 
     useEffect(() => {
-        if (!isOpen) return;
-        setAutoDeployTouched(false);
-    }, [effectiveProjectId, isOpen]);
-
-    useEffect(() => {
         if (!isOpen || requireReviewTouched) return;
         if (projectSettings) {
             setRequireReview(projectSettings.require_review);
         }
     }, [isOpen, projectSettings, requireReviewTouched]);
-
-    useEffect(() => {
-        if (!isOpen || !projectSettings || autoDeployTouched) return;
-        setAutoDeploy(projectSettings.auto_deploy);
-    }, [autoDeployTouched, isOpen, projectSettings]);
 
     useEffect(() => {
         if (assignee && !members.some((member) => member.id === assignee)) {
@@ -723,7 +713,6 @@ export function CreateTaskModal({
                                 onClick={() => {
                                     if (!taskPreviewLocked) {
                                         setAutoDeploy((prev) => !prev);
-                                        setAutoDeployTouched(true);
                                     }
                                 }}
                                 className={`${toggleCardClass(autoDeploy)} ${taskPreviewLocked ? 'cursor-not-allowed opacity-60' : ''}`}

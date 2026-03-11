@@ -191,14 +191,7 @@ pub enum ProjectType {
 impl ProjectType {
     /// Get the default preview_enabled setting for this project type
     pub fn default_preview_enabled(&self) -> bool {
-        match self {
-            ProjectType::Web => true,
-            ProjectType::Mobile => false,
-            ProjectType::Desktop => false,
-            ProjectType::Extension => true,
-            ProjectType::Api => true,
-            ProjectType::Microservice => true,
-        }
+        false
     }
 
     /// Get the default build command for this project type
@@ -383,7 +376,7 @@ pub struct ProjectSettings {
     pub auto_deploy: bool,
 
     /// If true, create preview environments for task attempts (legacy alias for auto_deploy)
-    #[serde(default = "default_true")]
+    #[serde(default = "default_false")]
     pub preview_enabled: bool,
 
     /// If true, deploy to production when MR is merged into deploy_branch
@@ -464,7 +457,7 @@ impl Default for ProjectSettings {
         Self {
             require_review: true,
             auto_deploy: false,
-            preview_enabled: true,
+            preview_enabled: false,
             production_deploy_on_merge: false,
             gitops_enabled: true,
             max_retries: 3,
@@ -2168,7 +2161,7 @@ pub struct SubagentRelationship {
 
 #[cfg(test)]
 mod tests {
-    use super::RequirementPriority;
+    use super::{ProjectSettings, ProjectType, RequirementPriority};
 
     #[test]
     fn requirement_priority_deserializes_lowercase_values() {
@@ -2189,5 +2182,27 @@ mod tests {
         let encoded = serde_json::to_string(&RequirementPriority::Critical)
             .expect("priority should serialize");
         assert_eq!(encoded, "\"critical\"");
+    }
+
+    #[test]
+    fn project_preview_defaults_are_disabled() {
+        let preview_capable_types = [
+            ProjectType::Web,
+            ProjectType::Api,
+            ProjectType::Microservice,
+            ProjectType::Extension,
+        ];
+
+        for project_type in preview_capable_types {
+            assert!(
+                !project_type.default_preview_enabled(),
+                "{project_type:?} should not auto-enable preview by default"
+            );
+        }
+
+        assert!(
+            !ProjectSettings::default().preview_enabled,
+            "project settings should default preview delivery to disabled"
+        );
     }
 }

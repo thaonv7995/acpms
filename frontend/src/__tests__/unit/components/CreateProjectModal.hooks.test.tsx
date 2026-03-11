@@ -1,4 +1,5 @@
 import { render } from '@testing-library/react';
+import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import { describe, expect, it, vi } from 'vitest';
 import { CreateProjectModal } from '../../../components/modals/CreateProjectModal';
 
@@ -17,12 +18,24 @@ vi.mock('react-router-dom', async () => {
 describe('CreateProjectModal hook order', () => {
   it('does not throw when toggling isOpen from false to true', () => {
     const onClose = vi.fn();
+    const queryClient = new QueryClient({
+      defaultOptions: {
+        queries: { retry: false },
+        mutations: { retry: false },
+      },
+    });
     const { rerender } = render(
-      <CreateProjectModal isOpen={false} onClose={onClose} />
+      <QueryClientProvider client={queryClient}>
+        <CreateProjectModal isOpen={false} onClose={onClose} />
+      </QueryClientProvider>
     );
 
     expect(() =>
-      rerender(<CreateProjectModal isOpen={true} onClose={onClose} />)
+      rerender(
+        <QueryClientProvider client={queryClient}>
+          <CreateProjectModal isOpen={true} onClose={onClose} />
+        </QueryClientProvider>
+      )
     ).not.toThrow();
   });
 });

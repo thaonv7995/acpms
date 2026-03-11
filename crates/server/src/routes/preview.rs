@@ -953,7 +953,7 @@ async fn load_attempt_context(
             p.project_type,
             (
                 COALESCE((p.settings->>'auto_deploy')::boolean, false)
-                OR COALESCE((p.settings->>'preview_enabled')::boolean, true)
+                OR COALESCE((p.settings->>'preview_enabled')::boolean, false)
             ) AS preview_enabled,
             COALESCE(ta.metadata, '{}'::jsonb) AS metadata
         FROM task_attempts ta

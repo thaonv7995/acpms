@@ -215,6 +215,22 @@ fn resolve_auto_deploy(task_metadata: &serde_json::Value, project_auto_deploy: b
         .unwrap_or(project_auto_deploy)
 }
 
+fn preview_delivery_enabled(
+    task_metadata: &serde_json::Value,
+    project_settings: &acpms_db::models::ProjectSettings,
+) -> bool {
+    task_metadata
+        .get("execution")
+        .and_then(|value| value.get("auto_deploy"))
+        .and_then(|value| value.as_bool())
+        .or_else(|| {
+            task_metadata
+                .get("auto_deploy")
+                .and_then(|value| value.as_bool())
+        })
+        .unwrap_or(project_settings.auto_deploy || project_settings.preview_enabled)
+}
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum TaskSuccessDeliveryMode {
     Preview,
@@ -722,8 +738,7 @@ async fn handle_attempt_success_deployment(
 
     enforce_architecture_change_output(db, storage_service, &task, &attempt).await?;
 
-    let auto_deploy_enabled = resolve_auto_deploy(&task.metadata, project.settings.auto_deploy);
-    let preview_wanted = auto_deploy_enabled || project.settings.preview_enabled;
+    let preview_wanted = preview_delivery_enabled(&task.metadata, &project.settings);
     let delivery_mode = task_success_delivery_mode(project.project_type);
     let requires_cloudflare_for_preview =
         preview_wanted && matches!(delivery_mode, TaskSuccessDeliveryMode::Preview);
@@ -1333,6 +1348,46 @@ mod tests {
 
         assert!(resolve_auto_deploy(&metadata, true));
         assert!(!resolve_auto_deploy(&metadata, false));
+    }
+
+    #[test]
+    fn preview_delivery_enabled_uses_project_defaults_when_not_set() {
+        let metadata = serde_json::json!({});
+
+        assert!(preview_delivery_enabled(
+            &metadata,
+            &acpms_db::models::ProjectSettings {
+                auto_deploy: false,
+                preview_enabled: true,
+                ..acpms_db::models::ProjectSettings::default()
+            }
+        ));
+        assert!(!preview_delivery_enabled(
+            &metadata,
+            &acpms_db::models::ProjectSettings {
+                auto_deploy: false,
+                preview_enabled: false,
+                ..acpms_db::models::ProjectSettings::default()
+            }
+        ));
+    }
+
+    #[test]
+    fn preview_delivery_enabled_respects_explicit_disable_even_when_project_preview_is_on() {
+        let metadata = serde_json::json!({
+            "execution": {
+                "auto_deploy": false
+            }
+        });
+
+        assert!(!preview_delivery_enabled(
+            &metadata,
+            &acpms_db::models::ProjectSettings {
+                auto_deploy: false,
+                preview_enabled: true,
+                ..acpms_db::models::ProjectSettings::default()
+            }
+        ));
     }
 
     #[test]

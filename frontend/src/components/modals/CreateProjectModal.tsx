@@ -58,7 +58,7 @@ const defaultConfig: ProjectConfig = {
   customSettings: {
     requireReview: true,
     autoCreateInitTask: true,
-    enablePreview: true,
+    enablePreview: false,
   },
 };
 
