@@ -63,6 +63,20 @@ print_error() {
     echo -e "${RED}[ERROR]${NC} $1"
 }
 
+load_env_file() {
+    local env_file="$1"
+    [ -f "$env_file" ] || return 0
+
+    print_info "Loading environment from ${env_file#$PROJECT_ROOT/}"
+    set -a
+    # shellcheck source=/dev/null
+    . "$env_file"
+    set +a
+}
+
+load_env_file "$PROJECT_ROOT/.env"
+load_env_file "$PROJECT_ROOT/.env.local"
+
 require_command() {
     local command_name="$1"
     local install_hint="$2"
