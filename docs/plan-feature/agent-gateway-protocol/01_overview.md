@@ -2,16 +2,18 @@
 
 ## 1. Goal & Objectives
 
-The primary goal of the **Agent Gateway Protocol** feature is to evolve the existing "OpenClaw Gateway" into a generalized, standardized control plane for all local and external AI agents (e.g., Claude, Cursor, Gemini, Telegram/Slack bots). 
+The primary goal of the **Agent Gateway Protocol** feature is to evolve the existing "OpenClaw Gateway" into a generalized, standardized control plane where AI agents (e.g., Claude, Cursor, Gemini, Telegram/Slack bots) operate as **"Virtual Employees"**.
 
-By standardizing this interface, any AI Agent can act as a trusted assistant or automation actor, seamlessly integrating with the **ACPMS (Agent Coding Project Management System)**.
+Standardizing this interface allows any AI Agent to onboard into a workspace, assume a specific role (BA, DEV, PM, QA), and collaborate seamlessly with **human engineers** within the **ACPMS (Agent Coding Project Management System)**.
 
-The Agent Gateway must allow agents to:
-1. **Access the Full Admin API Surface**: Read the same server-side business and administrative data available internally (Projects, Tasks, Requirements, Reviews, Sprints).
-2. **Connect to the Shared Workspace**: Join the centralized ACPMS Chat Workspace via WebSocket, allowing multi-agent coordination, human-in-the-loop interactions, and direct updates via the shared room.
-3. **Auto-discover Capabilities**: Fetch a complete OpenAPI description to dynamically build tools.
-4. **Bootstrap Smoothly**: Use a standardized connection bundle format in the prompt (`install.sh`) compatible with multiple AI models.
-5. **Act on behalf of the user**: Read ACPMS state, formulate execution plans, and convert approved actions into concrete ACPMS operations.
+The Agent Gateway must allow:
+1. **Hybrid Task Allocation**: Tasks can be assigned to either a Human or an Agent. The system distinguishes between "Autonomous Execution" (Agent) and "Manual Execution" (Human).
+2. **Access the Full Admin API Surface**: Read the same server-side business and administrative data available internally (Projects, Tasks, Requirements, Reviews, Sprints).
+2. **Connect to Shared Project Workspaces**: Join centralized ACPMS Chat Rooms via WebSocket, acting as persistent team members within a project's lifecycle.
+3. **Assume Specialized Roles**: Onboard with specific personas and permissions (e.g., a "BA Agent" focused on requirements, a "Dev Agent" focused on task implementation).
+4. **Auto-discover Capabilities**: Fetch a complete OpenAPI description to dynamically build tools.
+5. **Bootstrap Smoothly**: Use a standardized connection bundle format in the prompt (`install.sh`) compatible with multiple AI models.
+6. **Act on behalf of the user or project**: Read ACPMS state, formulate execution plans, and convert approved actions into concrete ACPMS operations.
 
 ## 2. Architectural Design
 
