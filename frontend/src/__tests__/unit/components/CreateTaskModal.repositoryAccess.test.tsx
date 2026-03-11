@@ -88,7 +88,7 @@ function renderCreateTaskModal(ui: ReactElement) {
   return render(
     <QueryClientProvider client={queryClient}>
       <MemoryRouter>{ui}</MemoryRouter>
-    </QueryClientProvider>
+    </QueryClientProvider>,
   );
 }
 
@@ -236,29 +236,30 @@ describe('CreateTaskModal repository access guard', () => {
         }}
         navigateToProjectOnCreate={false}
         onCreate={onCreate}
-      />
+      />,
     );
 
     expect(screen.getByText('GitHub access is read-only')).toBeTruthy();
     expect(
       screen.getByText(
-        'Link a writable fork or import a repository you can push to before starting coding attempts.'
-      )
+        'Link a writable fork or import a repository you can push to before starting coding attempts.',
+      ),
     ).toBeTruthy();
 
-    const autoStartSwitch = screen.getByRole('switch', { name: /Auto start/i }) as HTMLButtonElement;
+    const autoStartSwitch = screen.getByRole('switch', {
+      name: /Auto start/i,
+    }) as HTMLButtonElement;
     await waitFor(() => {
       expect(autoStartSwitch.getAttribute('aria-checked')).toBe('false');
     });
     expect(autoStartSwitch.disabled).toBe(true);
     expect(
-      screen.getByText('Disabled because this project is read-only for coding attempts.')
+      screen.getByText('Disabled because this project is read-only for coding attempts.'),
     ).toBeTruthy();
 
-    fireEvent.change(
-      screen.getByPlaceholderText('e.g. Implement refresh token rotation'),
-      { target: { value: 'Ship read-only coverage' } }
-    );
+    fireEvent.change(screen.getByPlaceholderText('e.g. Implement refresh token rotation'), {
+      target: { value: 'Ship read-only coverage' },
+    });
 
     fireEvent.click(screen.getByRole('button', { name: /Create Task/i }));
 
@@ -272,9 +273,54 @@ describe('CreateTaskModal repository access guard', () => {
         projectId: 'project-1',
         taskId: 'task-1',
         autoStarted: false,
-      })
+      }),
     );
     expect(onClose).toHaveBeenCalledTimes(1);
+  });
+
+  it('defaults new tasks into the active sprint even when sprint status casing is enum-style', async () => {
+    vi.mocked(useSprints).mockReturnValue({
+      sprints: [
+        {
+          id: 'sprint-planned',
+          name: 'Sprint 1',
+          status: 'Planned',
+        },
+        {
+          id: 'sprint-active',
+          name: 'Sprint 2',
+          status: 'Active',
+        },
+      ] as any,
+      loading: false,
+      error: null,
+      refreshSprints: vi.fn(),
+      generateSprints: vi.fn(),
+    });
+
+    renderCreateTaskModal(
+      <CreateTaskModal
+        isOpen
+        onClose={vi.fn()}
+        projectId="project-1"
+        projectName="ACPMS"
+        navigateToProjectOnCreate={false}
+      />,
+    );
+
+    fireEvent.change(screen.getByPlaceholderText('e.g. Implement refresh token rotation'), {
+      target: { value: 'Ship sprint-scoped task' },
+    });
+
+    fireEvent.click(screen.getByRole('button', { name: /Create Task/i }));
+
+    await waitFor(() => {
+      expect(createTask).toHaveBeenCalledWith(
+        expect.objectContaining({
+          sprint_id: 'sprint-active',
+        }),
+      );
+    });
   });
 
   it('defaults review-first to the project require_review setting', async () => {
@@ -285,10 +331,12 @@ describe('CreateTaskModal repository access guard', () => {
         projectId="project-1"
         projectName="ACPMS"
         navigateToProjectOnCreate={false}
-      />
+      />,
     );
 
-    const reviewFirstSwitch = screen.getByRole('switch', { name: /Review first/i });
+    const reviewFirstSwitch = screen.getByRole('switch', {
+      name: /Review first/i,
+    });
     await waitFor(() => {
       expect(reviewFirstSwitch.getAttribute('aria-checked')).toBe('true');
     });
@@ -321,23 +369,24 @@ describe('CreateTaskModal repository access guard', () => {
         projectId="project-1"
         projectName="ACPMS"
         navigateToProjectOnCreate={false}
-      />
+      />,
     );
 
-    const taskPreviewSwitch = screen.getByRole('switch', { name: /Task preview/i }) as HTMLButtonElement;
+    const taskPreviewSwitch = screen.getByRole('switch', {
+      name: /Task preview/i,
+    }) as HTMLButtonElement;
 
     await waitFor(() => {
       expect(taskPreviewSwitch.getAttribute('aria-checked')).toBe('false');
     });
     expect(taskPreviewSwitch.disabled).toBe(true);
     expect(
-      screen.getByText('Disabled because Task Preview is off in Project Settings.')
+      screen.getByText('Disabled because Task Preview is off in Project Settings.'),
     ).toBeTruthy();
 
-    fireEvent.change(
-      screen.getByPlaceholderText('e.g. Implement refresh token rotation'),
-      { target: { value: 'Create task with preview disabled' } }
-    );
+    fireEvent.change(screen.getByPlaceholderText('e.g. Implement refresh token rotation'), {
+      target: { value: 'Create task with preview disabled' },
+    });
 
     fireEvent.click(screen.getByRole('button', { name: /Create Task/i }));
 
@@ -352,7 +401,7 @@ describe('CreateTaskModal repository access guard', () => {
             auto_deploy: false,
           }),
         }),
-      })
+      }),
     );
   });
 
@@ -403,13 +452,12 @@ describe('CreateTaskModal repository access guard', () => {
         projectId="project-1"
         projectName="ACPMS"
         navigateToProjectOnCreate={false}
-      />
+      />,
     );
 
-    fireEvent.change(
-      screen.getByPlaceholderText('e.g. Implement refresh token rotation'),
-      { target: { value: 'Ship guarded task creation' } }
-    );
+    fireEvent.change(screen.getByPlaceholderText('e.g. Implement refresh token rotation'), {
+      target: { value: 'Ship guarded task creation' },
+    });
 
     fireEvent.click(screen.getByRole('button', { name: /Create Task/i }));
 

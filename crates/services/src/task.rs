@@ -137,6 +137,42 @@ impl TaskService {
         Ok(())
     }
 
+    async fn resolve_task_sprint_id(
+        &self,
+        project_id: Uuid,
+        requested_sprint_id: Option<Uuid>,
+    ) -> Result<Option<Uuid>> {
+        if let Some(sprint_id) = requested_sprint_id {
+            self.ensure_sprint_in_project(project_id, sprint_id).await?;
+            return Ok(Some(sprint_id));
+        }
+
+        let sprint_id = sqlx::query_scalar(
+            r#"
+            SELECT id
+            FROM sprints
+            WHERE project_id = $1
+            ORDER BY
+                CASE LOWER(status::text)
+                    WHEN 'active' THEN 0
+                    WHEN 'planning' THEN 1
+                    WHEN 'completed' THEN 2
+                    WHEN 'archived' THEN 3
+                    ELSE 4
+                END,
+                sequence ASC,
+                created_at ASC
+            LIMIT 1
+            "#,
+        )
+        .bind(project_id)
+        .fetch_optional(&self.pool)
+        .await
+        .context("Failed to resolve default sprint for task")?;
+
+        Ok(sprint_id)
+    }
+
     pub async fn create_task(&self, user_id: Uuid, req: CreateTaskRequest) -> Result<Task> {
         if let Some(assignee_id) = req.assigned_to {
             self.ensure_project_member(req.project_id, assignee_id)
@@ -153,10 +189,9 @@ impl TaskService {
                 .await?;
         }
 
-        if let Some(sprint_id) = req.sprint_id {
-            self.ensure_sprint_in_project(req.project_id, sprint_id)
-                .await?;
-        }
+        let sprint_id = self
+            .resolve_task_sprint_id(req.project_id, req.sprint_id)
+            .await?;
 
         let metadata = req.metadata.unwrap_or_else(|| serde_json::json!({}));
 
@@ -177,7 +212,7 @@ impl TaskService {
         .bind(req.assigned_to)
         .bind(req.parent_task_id)
         .bind(req.requirement_id)
-        .bind(req.sprint_id)
+        .bind(sprint_id)
         .bind(user_id)
         .bind(metadata)
         .fetch_one(&self.pool)

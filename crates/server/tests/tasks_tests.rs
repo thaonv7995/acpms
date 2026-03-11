@@ -84,6 +84,10 @@ async fn test_create_task() {
 
     assert!(response["success"].as_bool().unwrap());
     assert_eq!(response["data"]["title"].as_str().unwrap(), "Test Task");
+    assert!(
+        response["data"]["sprint_id"].as_str().is_some(),
+        "new tasks should be assigned to the default sprint"
+    );
 
     cleanup_test_data(&pool, user_id, Some(project_id)).await;
 }

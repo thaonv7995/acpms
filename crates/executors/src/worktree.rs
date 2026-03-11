@@ -1,6 +1,6 @@
 use anyhow::{Context, Result};
 use base64::{engine::general_purpose::STANDARD as BASE64, Engine as _};
-use std::collections::HashSet;
+use std::collections::{HashMap, HashSet};
 use std::path::{Path, PathBuf};
 use std::process::Output;
 use std::process::Stdio;
@@ -1285,6 +1285,45 @@ fn git_auth_configs(primary_url: &str, urls: &[&str], pat: &str) -> Vec<String> 
     configs
 }
 
+pub(crate) fn git_auth_env_vars(
+    primary_url: &str,
+    urls: &[&str],
+    pat: &str,
+) -> HashMap<String, String> {
+    let configs = git_auth_configs(primary_url, urls, pat);
+    if configs.is_empty() {
+        return HashMap::new();
+    }
+
+    let mut env_vars = HashMap::new();
+    env_vars.insert("GIT_TERMINAL_PROMPT".to_string(), "0".to_string());
+    env_vars.insert("GCM_INTERACTIVE".to_string(), "Never".to_string());
+    env_vars.insert("GIT_ASKPASS".to_string(), "echo".to_string());
+    env_vars.insert("SSH_ASKPASS".to_string(), "echo".to_string());
+    env_vars.insert(
+        "GIT_SSH_COMMAND".to_string(),
+        "ssh -oBatchMode=yes".to_string(),
+    );
+
+    let mut pairs = Vec::with_capacity(configs.len() + 2);
+    pairs.push(("credential.helper".to_string(), String::new()));
+    pairs.push(("credential.interactive".to_string(), "never".to_string()));
+
+    for config in configs {
+        if let Some((key, value)) = config.split_once('=') {
+            pairs.push((key.to_string(), value.to_string()));
+        }
+    }
+
+    env_vars.insert("GIT_CONFIG_COUNT".to_string(), pairs.len().to_string());
+    for (index, (key, value)) in pairs.into_iter().enumerate() {
+        env_vars.insert(format!("GIT_CONFIG_KEY_{index}"), key);
+        env_vars.insert(format!("GIT_CONFIG_VALUE_{index}"), value);
+    }
+
+    env_vars
+}
+
 fn configure_git_auth(command: &mut Command, primary_url: &str, urls: &[&str], pat: &str) {
     for config in git_auth_configs(primary_url, urls, pat) {
         command.arg("-c").arg(config);
@@ -1372,9 +1411,9 @@ fn parse_repo_identity(raw: &str) -> Option<(String, String)> {
 mod tests {
     use super::{
         auth_header_for_url, format_repository_clone_log, format_repository_sync_log,
-        git_auth_configs, is_recoverable_push_failure, normalize_remote_url, parse_tracking_branch,
-        remote_url_matches_configured_value, repo_url_matches, summarize_repository_source,
-        WorktreeManager,
+        git_auth_configs, git_auth_env_vars, is_recoverable_push_failure, normalize_remote_url,
+        parse_tracking_branch, remote_url_matches_configured_value, repo_url_matches,
+        summarize_repository_source, WorktreeManager,
     };
     use std::path::Path;
     use std::sync::Arc;
@@ -1470,6 +1509,46 @@ mod tests {
         );
 
         assert!(configs.is_empty());
+    }
+
+    #[test]
+    fn git_auth_env_vars_include_noninteractive_flags_and_extraheaders() {
+        let env_vars = git_auth_env_vars(
+            "https://github.com/openai/codex.git",
+            &["https://github.com/openai/upstream.git"],
+            "ghp_123",
+        );
+
+        assert_eq!(
+            env_vars.get("GIT_TERMINAL_PROMPT").map(String::as_str),
+            Some("0")
+        );
+        assert_eq!(
+            env_vars.get("GIT_CONFIG_COUNT").map(String::as_str),
+            Some("4")
+        );
+        assert_eq!(
+            env_vars.get("GIT_CONFIG_KEY_0").map(String::as_str),
+            Some("credential.helper")
+        );
+        assert_eq!(
+            env_vars.get("GIT_CONFIG_VALUE_0").map(String::as_str),
+            Some("")
+        );
+        assert_eq!(
+            env_vars.get("GIT_CONFIG_KEY_2").map(String::as_str),
+            Some("http.https://github.com/openai/codex.git.extraheader")
+        );
+        assert!(
+            env_vars
+                .get("GIT_CONFIG_VALUE_2")
+                .is_some_and(|value| value.starts_with("AUTHORIZATION: Basic ")),
+            "origin extraheader should be injected"
+        );
+        assert_eq!(
+            env_vars.get("GIT_CONFIG_KEY_3").map(String::as_str),
+            Some("http.https://github.com/openai/upstream.git.extraheader")
+        );
     }
 
     #[test]

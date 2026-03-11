@@ -4,7 +4,9 @@ use crate::msg_store::{LogMsg, MsgStore};
 use crate::process::{kill_process_group, terminate_process, InterruptSender};
 use crate::retry_handler::{RetryHandler, RetryScheduleResult};
 use crate::session::ClaudeSessionManager;
-use crate::worktree::{format_repository_clone_log, format_repository_sync_log, repo_url_matches};
+use crate::worktree::{
+    format_repository_clone_log, format_repository_sync_log, git_auth_env_vars, repo_url_matches,
+};
 use crate::{
     append_assistant_log, build_skill_instruction_context, format_loaded_skills_log_line,
     format_project_vault_search_follow_up, format_project_vault_search_summary,
@@ -2569,6 +2571,8 @@ impl ExecutorOrchestrator {
         let mut runtime_env = provider_env.unwrap_or_default();
         self.extend_agent_env_with_cloudflare_settings(&mut runtime_env)
             .await;
+        self.extend_agent_env_with_repository_credentials(attempt_id, &mut runtime_env)
+            .await;
         let provider_env = if runtime_env.is_empty() {
             None
         } else {
@@ -4662,7 +4666,21 @@ impl ExecutorOrchestrator {
 
                 self.log(attempt_id, "system", "Repository ready with latest code")
                     .await?;
+            } else if !repo_path.exists() {
+                tokio::fs::create_dir_all(repo_path)
+                    .await
+                    .context("Failed to create local repository workspace")?;
+                self.log(
+                    attempt_id,
+                    "system",
+                    "Project has no remote repository configured. Bootstrapping a local repository workspace.",
+                )
+                .await?;
             }
+        } else if !repo_path.exists() {
+            tokio::fs::create_dir_all(repo_path)
+                .await
+                .context("Failed to create local repository workspace")?;
         }
 
         Ok(())
@@ -4870,6 +4888,78 @@ impl ExecutorOrchestrator {
         };
 
         Ok((repo_url, pat))
+    }
+
+    async fn extend_agent_env_with_repository_credentials(
+        &self,
+        attempt_id: Uuid,
+        env_vars: &mut HashMap<String, String>,
+    ) {
+        let project_info = match self.fetch_project_info(attempt_id).await {
+            Ok(Some(info)) => info,
+            Ok(None) => return,
+            Err(error) => {
+                debug!(
+                    attempt_id = %attempt_id,
+                    error = %error,
+                    "Skipping repository credential env injection: project info unavailable"
+                );
+                return;
+            }
+        };
+
+        let repo_url = match repository_origin_url(&project_info) {
+            Some(url) => url,
+            None => return,
+        };
+
+        let (_, pat) = match self
+            .resolve_repository_origin_and_pat(attempt_id, Some(&project_info))
+            .await
+        {
+            Ok(values) => values,
+            Err(error) => {
+                debug!(
+                    attempt_id = %attempt_id,
+                    error = %error,
+                    "Skipping repository credential env injection: credential resolution failed"
+                );
+                return;
+            }
+        };
+
+        if pat.trim().is_empty() {
+            return;
+        }
+
+        env_vars.insert("GITLAB_PAT".to_string(), pat.clone());
+
+        let configured_url = self
+            .fetch_system_settings()
+            .await
+            .ok()
+            .map(|settings| settings.gitlab_url)
+            .filter(|value| !value.trim().is_empty());
+        let fallback_base_url = crate::orchestrator::init_flow::parse_repo_host_and_path(&repo_url)
+            .map(|(host, _)| format!("https://{host}"));
+        let git_base_url = configured_url.or(fallback_base_url);
+
+        if let Some(base_url) = git_base_url.clone() {
+            env_vars.insert("GITLAB_URL".to_string(), base_url.clone());
+            if let Some((host, _)) =
+                crate::orchestrator::init_flow::parse_repo_host_and_path(&repo_url)
+            {
+                if host.contains("github") {
+                    env_vars.insert("GITHUB_TOKEN".to_string(), pat.clone());
+                    env_vars.insert("GH_TOKEN".to_string(), pat.clone());
+                    env_vars.insert("GITHUB_SERVER_URL".to_string(), base_url);
+                }
+            }
+        }
+
+        let upstream_url = repository_upstream_url(&project_info);
+        let additional_urls: Vec<&str> = upstream_url.as_deref().into_iter().collect();
+        env_vars.extend(git_auth_env_vars(&repo_url, &additional_urls, &pat));
     }
 
     /// Emit a final user-facing attempt report in timeline after execution ends.
@@ -6610,8 +6700,9 @@ impl ExecutorOrchestrator {
                     .and_then(|v| v.get("run_build_and_tests"))
                     .and_then(|v| v.as_bool())
                     .unwrap_or(true);
+                let has_repository_origin = project_has_repository_origin(&project);
 
-                let repo_path = if project.repository_url.is_some() {
+                let repo_path =
                     self.worktree_manager
                         .base_path()
                         .await
@@ -6619,10 +6710,7 @@ impl ExecutorOrchestrator {
                             project.id,
                             &project.metadata,
                             &project.name,
-                        ))
-                } else {
-                    bail!("Project {} has no repository URL", project.id);
-                };
+                        ));
 
                 let task_desc = task.description.as_deref().unwrap_or(&task.title);
                 let skill_context = self.build_skill_instruction_context(
@@ -6675,7 +6763,7 @@ impl ExecutorOrchestrator {
 IMPORTANT: Do NOT commit or push changes. Changes will be reviewed by a human before committing.{}"#,
                         task_desc, verification_rule, skill_block
                     )
-                } else {
+                } else if has_repository_origin {
                     // No review: Agent handles full workflow including commit/push
                     format!(
                         r#"## Task
@@ -6688,6 +6776,24 @@ IMPORTANT: Do NOT commit or push changes. Changes will be reviewed by a human be
 4. Stage ONLY the files you changed: `git add <specific-files>`
 5. Commit with descriptive message: `git commit -m "feat: <description>"`
 6. Push to remote: `git push origin HEAD`
+7. Include deployment/report details required by active skills.
+
+IMPORTANT: Do not commit unrelated files. Verify changes work before committing.{}"#,
+                        task_desc, verification_rule, skill_block
+                    )
+                } else {
+                    // Local-only project: preserve changes locally and avoid remote steps.
+                    format!(
+                        r#"## Task
+{}
+
+## Workflow
+1. Implement the task above
+{}
+3. Only modify files necessary for this task
+4. Stage ONLY the files you changed: `git add <specific-files>`
+5. Commit with descriptive message: `git commit -m "feat: <description>"`
+6. Do NOT push. This project does not have a remote repository configured yet.
 7. Include deployment/report details required by active skills.
 
 IMPORTANT: Do not commit unrelated files. Verify changes work before committing.{}"#,
@@ -7620,6 +7726,28 @@ fn repository_base_ref_override(info: &ProjectInfo) -> Option<String> {
     };
 
     Some(format!("{}/{}", remote, default_branch))
+}
+
+fn project_repository_origin_url(project: &Project) -> Option<String> {
+    project
+        .repository_context
+        .writable_repository_url
+        .as_deref()
+        .filter(|value| !value.trim().is_empty())
+        .or(project
+            .repository_context
+            .effective_clone_url
+            .as_deref()
+            .filter(|value| !value.trim().is_empty()))
+        .or(project
+            .repository_url
+            .as_deref()
+            .filter(|value| !value.trim().is_empty()))
+        .map(|value| value.trim().to_string())
+}
+
+fn project_has_repository_origin(project: &Project) -> bool {
+    project_repository_origin_url(project).is_some()
 }
 
 #[cfg(test)]

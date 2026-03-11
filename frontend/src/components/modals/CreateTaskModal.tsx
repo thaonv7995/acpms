@@ -65,6 +65,14 @@ interface CreateTaskModalProps {
     }) => void | Promise<void>;
 }
 
+function normalizeSprintStatus(status: string | null | undefined): string {
+    if (!status) return '';
+    const lower = status.toLowerCase();
+    if (lower === 'planning') return 'planned';
+    if (lower === 'completed') return 'closed';
+    return lower;
+}
+
 function formatBytes(bytes: number): string {
     if (bytes < 1024) return `${bytes} B`;
     if (bytes < 1024 * 1024) return `${(bytes / 1024).toFixed(1)} KB`;
@@ -98,7 +106,9 @@ export function CreateTaskModal({
 
     const { sprints: sprintsFromHook } = useSprints(sprintsProp ? undefined : effectiveProjectId);
     const sprints = sprintsProp ?? sprintsFromHook;
-    const { members: membersFromHook, loading: membersLoading } = useProjectMembers(membersProp ? undefined : effectiveProjectId);
+    const { members: membersFromHook, loading: membersLoading } = useProjectMembers(
+        membersProp ? undefined : effectiveProjectId,
+    );
     const members = membersProp ?? membersFromHook;
     const { settings: projectSettings, loading: projectSettingsLoading } = useProjectSettings({
         projectId: effectiveProjectId || '',
@@ -106,10 +116,7 @@ export function CreateTaskModal({
     });
     const { settings, loading: settingsLoading } = useSettings();
 
-    const memberOptions = useMemo(
-        () => members.map((member) => ({ id: member.id, name: member.name })),
-        [members]
-    );
+    const memberOptions = useMemo(() => members.map((member) => ({ id: member.id, name: member.name })), [members]);
 
     const [title, setTitle] = useState('');
     const [description, setDescription] = useState('');
@@ -128,13 +135,13 @@ export function CreateTaskModal({
 
     const selectedProjectRecord = useMemo(
         () => apiProjects.find((project) => project.id === effectiveProjectId),
-        [apiProjects, effectiveProjectId]
+        [apiProjects, effectiveProjectId],
     );
     const repositoryGuardEnabled = Boolean(
-        effectiveProjectId && (repositoryContext || selectedProjectRecord?.repository_context)
+        effectiveProjectId && (repositoryContext || selectedProjectRecord?.repository_context),
     );
     const effectiveRepositoryContext = normalizeRepositoryContext(
-        repositoryContext ?? selectedProjectRecord?.repository_context
+        repositoryContext ?? selectedProjectRecord?.repository_context,
     );
     const repositoryReadOnly = repositoryGuardEnabled && isRepositoryReadOnly(effectiveRepositoryContext);
     const repositorySummary = getRepositoryAccessSummary(effectiveRepositoryContext);
@@ -171,7 +178,7 @@ export function CreateTaskModal({
 
     useEffect(() => {
         if (!sprint || !sprints.some((item) => item.id === sprint)) {
-            const activeSprint = sprints.find((item) => item.status === 'active');
+            const activeSprint = sprints.find((item) => normalizeSprintStatus(item.status) === 'active');
             setSprint(activeSprint?.id || sprints[0]?.id || '');
         }
     }, [sprints, sprint]);
@@ -230,16 +237,14 @@ export function CreateTaskModal({
         setIsAiGenerating(true);
         setTimeout(() => {
             setDescription(
-                'Implement the functionality as described in the task title. Ensure:\n\n1. Proper error handling\n2. Unit test coverage\n3. Documentation updates\n4. Code review checklist completed'
+                'Implement the functionality as described in the task title. Ensure:\n\n1. Proper error handling\n2. Unit test coverage\n3. Documentation updates\n4. Code review checklist completed',
             );
             setIsAiGenerating(false);
         }, 1500);
     };
 
     const setContextFileState = (id: string, updater: (item: PendingContextFile) => PendingContextFile) => {
-        setTaskContextFiles((prev) =>
-            prev.map((item) => (item.id === id ? updater(item) : item))
-        );
+        setTaskContextFiles((prev) => prev.map((item) => (item.id === id ? updater(item) : item)));
     };
 
     const addContextFiles = (files: File[]) => {
@@ -264,7 +269,7 @@ export function CreateTaskModal({
     const uploadTaskContextFiles = async (
         taskId: string,
         contextId: string,
-        files: PendingContextFile[]
+        files: PendingContextFile[],
     ): Promise<number> => {
         let uploadedCount = 0;
 
@@ -385,11 +390,7 @@ export function CreateTaskModal({
                 });
 
                 if (taskContextFiles.length > 0) {
-                    uploadedAttachmentCount = await uploadTaskContextFiles(
-                        task.id,
-                        context.id,
-                        taskContextFiles
-                    );
+                    uploadedAttachmentCount = await uploadTaskContextFiles(task.id, context.id, taskContextFiles);
                 }
             }
 
@@ -441,11 +442,7 @@ export function CreateTaskModal({
                 }
             }
             logger.error('Failed to create task:', error);
-            setSubmitError(
-                error instanceof Error
-                    ? error.message
-                    : 'Failed to create task and sync task context'
-            );
+            setSubmitError(error instanceof Error ? error.message : 'Failed to create task and sync task context');
         } finally {
             setIsCreating(false);
         }
@@ -458,8 +455,7 @@ export function CreateTaskModal({
                 : 'border-border bg-card/50 hover:bg-card'
         }`;
 
-    const toggleTitleClass = (enabled: boolean) =>
-        enabled ? 'text-primary' : 'text-card-foreground';
+    const toggleTitleClass = (enabled: boolean) => (enabled ? 'text-primary' : 'text-card-foreground');
 
     const toggleTrackClass = (enabled: boolean) =>
         `relative inline-flex h-5 w-10 items-center rounded-full border transition-colors ${
@@ -473,7 +469,10 @@ export function CreateTaskModal({
 
     return (
         <div className="fixed inset-0 z-50 flex items-center justify-center p-4 sm:p-6 font-display">
-            <div className="absolute inset-0 bg-black/70 backdrop-blur-[2px] transition-opacity" onClick={onClose}></div>
+            <div
+                className="absolute inset-0 bg-black/70 backdrop-blur-[2px] transition-opacity"
+                onClick={onClose}
+            ></div>
             <div className="relative w-full max-w-2xl bg-card border border-border rounded-2xl shadow-2xl overflow-hidden flex flex-col max-h-[90vh]">
                 <div className="px-6 py-5 border-b border-border flex justify-between items-center bg-muted">
                     <div>
@@ -484,7 +483,10 @@ export function CreateTaskModal({
                                 : `Adding task to ${getSelectedProjectName()}`}
                         </p>
                     </div>
-                    <button onClick={onClose} className="text-muted-foreground hover:text-card-foreground transition-colors">
+                    <button
+                        onClick={onClose}
+                        className="text-muted-foreground hover:text-card-foreground transition-colors"
+                    >
                         <span className="material-symbols-outlined">close</span>
                     </button>
                 </div>
@@ -574,7 +576,10 @@ export function CreateTaskModal({
                         {taskContextFiles.length > 0 && (
                             <div className="space-y-2">
                                 {taskContextFiles.map((file) => (
-                                    <div key={file.id} className="rounded-md border border-border bg-muted px-3 py-2 flex items-center justify-between gap-3">
+                                    <div
+                                        key={file.id}
+                                        className="rounded-md border border-border bg-muted px-3 py-2 flex items-center justify-between gap-3"
+                                    >
                                         <div className="min-w-0">
                                             <p className="text-sm text-card-foreground truncate">{file.filename}</p>
                                             <p className="text-xs text-muted-foreground">
@@ -588,17 +593,25 @@ export function CreateTaskModal({
                                                 <span className="w-4 h-4 border-2 border-muted-foreground/30 border-t-muted-foreground rounded-full animate-spin"></span>
                                             )}
                                             {file.status === 'uploaded' && (
-                                                <span className="material-symbols-outlined text-green-500 text-[18px]">check_circle</span>
+                                                <span className="material-symbols-outlined text-green-500 text-[18px]">
+                                                    check_circle
+                                                </span>
                                             )}
                                             {file.status === 'failed' && (
-                                                <span className="material-symbols-outlined text-red-500 text-[18px]">error</span>
+                                                <span className="material-symbols-outlined text-red-500 text-[18px]">
+                                                    error
+                                                </span>
                                             )}
                                             {file.status === 'pending' && (
-                                                <span className="material-symbols-outlined text-muted-foreground text-[18px]">schedule</span>
+                                                <span className="material-symbols-outlined text-muted-foreground text-[18px]">
+                                                    schedule
+                                                </span>
                                             )}
                                             <button
                                                 onClick={() =>
-                                                    setTaskContextFiles((prev) => prev.filter((item) => item.id !== file.id))
+                                                    setTaskContextFiles((prev) =>
+                                                        prev.filter((item) => item.id !== file.id),
+                                                    )
                                                 }
                                                 className="text-muted-foreground hover:text-card-foreground"
                                                 disabled={file.status === 'uploading'}
@@ -616,7 +629,9 @@ export function CreateTaskModal({
                     {effectiveProjectId && repositoryReadOnly && (
                         <div className="rounded-lg border border-amber-200 bg-amber-50 p-4 dark:border-amber-500/30 dark:bg-amber-500/10">
                             <div className="flex items-start gap-3">
-                                <span className="material-symbols-outlined text-amber-600 dark:text-amber-300">lock</span>
+                                <span className="material-symbols-outlined text-amber-600 dark:text-amber-300">
+                                    lock
+                                </span>
                                 <div>
                                     <p className="text-sm font-semibold text-amber-900 dark:text-amber-100">
                                         {repositorySummary.title}
@@ -635,13 +650,16 @@ export function CreateTaskModal({
                     {sourceControlSetupRequired && (
                         <div className="rounded-lg border border-amber-200 bg-amber-50 p-4 dark:border-amber-500/30 dark:bg-amber-500/10">
                             <div className="flex items-start gap-3">
-                                <span className="material-symbols-outlined text-amber-600 dark:text-amber-300">settings_alert</span>
+                                <span className="material-symbols-outlined text-amber-600 dark:text-amber-300">
+                                    settings_alert
+                                </span>
                                 <div>
                                     <p className="text-sm font-semibold text-amber-900 dark:text-amber-100">
                                         Source control is not configured
                                     </p>
                                     <p className="text-sm text-amber-800 dark:text-amber-200 mt-1">
-                                        Configure GitLab or GitHub in System Settings before creating or starting agent tasks.
+                                        Configure GitLab or GitHub in System Settings before creating or starting agent
+                                        tasks.
                                     </p>
                                 </div>
                             </div>
@@ -687,7 +705,9 @@ export function CreateTaskModal({
                                 className={toggleCardClass(requireReview)}
                             >
                                 <div className="flex items-center justify-between gap-2 mb-2">
-                                    <p className={`text-sm font-medium ${toggleTitleClass(requireReview)}`}>Review first</p>
+                                    <p className={`text-sm font-medium ${toggleTitleClass(requireReview)}`}>
+                                        Review first
+                                    </p>
                                     <span className={toggleTrackClass(requireReview)}>
                                         <span className={toggleThumbClass(requireReview)} />
                                     </span>
@@ -709,7 +729,9 @@ export function CreateTaskModal({
                                 className={`${toggleCardClass(autoDeploy)} ${taskPreviewLocked ? 'cursor-not-allowed opacity-60' : ''}`}
                             >
                                 <div className="flex items-center justify-between gap-2 mb-2">
-                                    <p className={`text-sm font-medium ${toggleTitleClass(autoDeploy)}`}>Task preview</p>
+                                    <p className={`text-sm font-medium ${toggleTitleClass(autoDeploy)}`}>
+                                        Task preview
+                                    </p>
                                     <span className={toggleTrackClass(autoDeploy)}>
                                         <span className={toggleThumbClass(autoDeploy)} />
                                     </span>
@@ -718,18 +740,14 @@ export function CreateTaskModal({
                                     {projectSettingsLoading
                                         ? 'Loading project setting...'
                                         : projectTaskPreviewEnabled
-                                            ? 'Enabled from Project Settings. Turn it off here to skip preview for this task.'
-                                            : 'Disabled because Task Preview is off in Project Settings.'}
+                                          ? 'Enabled from Project Settings. Turn it off here to skip preview for this task.'
+                                          : 'Disabled because Task Preview is off in Project Settings.'}
                                 </p>
                             </button>
                         </div>
                     </div>
 
-                    {membersLoading && (
-                        <p className="text-xs text-muted-foreground">
-                            Loading project members...
-                        </p>
-                    )}
+                    {membersLoading && <p className="text-xs text-muted-foreground">Loading project members...</p>}
 
                     {submitError && (
                         <div className="rounded-lg border border-red-500/40 bg-red-500/10 px-3 py-2 text-sm text-red-400">
@@ -739,7 +757,10 @@ export function CreateTaskModal({
                 </div>
 
                 <div className="px-6 py-4 border-t border-border bg-muted flex justify-end gap-3">
-                    <button onClick={onClose} className="px-4 py-2 text-sm font-medium text-muted-foreground hover:text-card-foreground transition-colors">
+                    <button
+                        onClick={onClose}
+                        className="px-4 py-2 text-sm font-medium text-muted-foreground hover:text-card-foreground transition-colors"
+                    >
                         Cancel
                     </button>
                     <button

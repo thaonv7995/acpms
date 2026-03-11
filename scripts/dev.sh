@@ -363,6 +363,12 @@ start_dev_servers() {
                 PATH="$parity_path" \
                 APP_ENV=production \
                 DATABASE_URL="$DATABASE_URL" \
+                OPENCLAW_GATEWAY_ENABLED="${OPENCLAW_GATEWAY_ENABLED:-false}" \
+                OPENCLAW_API_KEY="${OPENCLAW_API_KEY:-}" \
+                OPENCLAW_WEBHOOK_URL="${OPENCLAW_WEBHOOK_URL:-}" \
+                OPENCLAW_WEBHOOK_SECRET="${OPENCLAW_WEBHOOK_SECRET:-}" \
+                OPENCLAW_ACTOR_USER_ID="${OPENCLAW_ACTOR_USER_ID:-}" \
+                OPENCLAW_EVENT_RETENTION_HOURS="${OPENCLAW_EVENT_RETENTION_HOURS:-}" \
                 ACPMS_FRONTEND_DIR="$FRONTEND_DIST" \
                 ACPMS_SKILLS_DIR="$SKILLS_DIR" \
                 "$BACKEND_RELEASE_BIN"
