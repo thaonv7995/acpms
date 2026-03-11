@@ -7,6 +7,8 @@ import { Plus } from 'lucide-react';
 import WYSIWYGEditor from '../ui/wysiwyg';
 import { DataTable, type ColumnDef } from '../ui/table/data-table';
 import type { TaskAttempt } from '../../types/task-attempt';
+import { useElapsedRealtime } from '@/hooks/useElapsedRealtime';
+import { formatElapsed } from '@/utils/elapsedTime';
 
 interface TaskPanelProps {
   task: KanbanTask;
@@ -49,6 +51,33 @@ function formatTimeAgo(dateString: string): string {
   return to(years, 'year');
 }
 
+function AttemptTimeCell({
+  attempt,
+  formatTimeAgo,
+}: {
+  attempt: TaskAttempt;
+  formatTimeAgo: (date: string) => string;
+}) {
+  const isRunning = attempt.status === 'running';
+  const elapsed = useElapsedRealtime(attempt.started_at ?? null, isRunning);
+  if (isRunning && attempt.started_at && elapsed) {
+    return <span title="Elapsed">Running {elapsed}</span>;
+  }
+  const end = attempt.ended_at ?? attempt.completed_at;
+  if (
+    (attempt.status === 'completed' || attempt.status === 'failed') &&
+    attempt.started_at &&
+    end
+  ) {
+    return (
+      <span title="Duration">
+        {formatElapsed(attempt.started_at, end)}
+      </span>
+    );
+  }
+  return <span>{formatTimeAgo(attempt.created_at)}</span>;
+}
+
 export function TaskPanel({ task, onAttemptSelect, onCreateAttempt }: TaskPanelProps) {
   const [isDescriptionExpanded, setIsDescriptionExpanded] = useState(false);
 
@@ -81,6 +110,7 @@ export function TaskPanel({ task, onAttemptSelect, onCreateAttempt }: TaskPanelP
       status: dto.status.toLowerCase() as TaskAttempt['status'],
       started_at: dto.started_at ?? undefined,
       completed_at: dto.completed_at ?? undefined,
+      ended_at: dto.completed_at ?? undefined,
       error_message: dto.error_message ?? undefined,
       created_at: dto.created_at,
       executor: (dto.metadata as { executor?: string })?.executor,
@@ -110,7 +140,9 @@ export function TaskPanel({ task, onAttemptSelect, onCreateAttempt }: TaskPanelP
     {
       id: 'time',
       header: '',
-      accessor: (attempt) => formatTimeAgo(attempt.created_at),
+      accessor: (attempt) => (
+        <AttemptTimeCell attempt={attempt} formatTimeAgo={formatTimeAgo} />
+      ),
       className: 'pr-0 text-right',
     },
   ];

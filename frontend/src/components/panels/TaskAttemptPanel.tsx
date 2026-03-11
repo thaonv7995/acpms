@@ -83,6 +83,7 @@ export function TaskAttemptPanel({
                         <TimelineLogDisplay
                             key={attempt.id}
                             attemptId={attempt.id}
+                            attemptStartedAt={attempt.started_at}
                             executionProcesses={processes}
                             enableChat={isRunning}
                             onSendMessage={handleTimelineSend}

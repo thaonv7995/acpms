@@ -10,6 +10,7 @@ import {
 } from '@/components/ui/dropdown-menu';
 import { Button } from '@/components/ui/button';
 import type { TaskAttempt } from '@/types/task-attempt';
+import { useElapsedRealtime } from '@/hooks/useElapsedRealtime';
 
 interface AttemptSwitcherProps {
   currentAttempt: TaskAttempt;
@@ -26,6 +27,11 @@ export function AttemptSwitcher({
 }: AttemptSwitcherProps) {
   const currentIndex = allAttempts.findIndex((a) => a.id === currentAttempt.id);
   const currentAttemptNumber = allAttempts.length - currentIndex;
+  const isRunning = currentAttempt.status === 'running';
+  const elapsed = useElapsedRealtime(
+    currentAttempt.started_at ?? null,
+    isRunning
+  );
 
   // Sort attempts newest first for dropdown display
   const sortedAttempts = [...allAttempts].sort(
@@ -38,6 +44,11 @@ export function AttemptSwitcher({
       <DropdownMenuTrigger asChild>
         <Button variant="outline" size="sm" className="gap-2">
           <span className="font-semibold">Attempt #{currentAttemptNumber}</span>
+          {isRunning && elapsed && (
+            <span className="text-muted-foreground font-normal" title="Elapsed">
+              ({elapsed})
+            </span>
+          )}
           <ChevronDown className="h-3 w-3 opacity-50" />
         </Button>
       </DropdownMenuTrigger>
