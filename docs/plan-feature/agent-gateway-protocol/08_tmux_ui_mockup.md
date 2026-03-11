@@ -1,68 +1,76 @@
 # Mockup: ACPMS Agent Gateway Tmux UI
 
-Giao diện Tmux của AGP được thiết kế để tối ưu hóa khả năng quan sát (observability) cho con người và khả năng nhận diện ngữ cảnh cho Agent.
+The AGP tmux interface is designed to optimize observability for humans and contextual awareness for agents while they work as project members in the same Workspace.
 
 ---
 
-## 🖼️ Terminal Layout (Integrated Live Chat Style)
+## 1. Terminal Layout (Integrated Live Chat Style)
 
-Dựa trên mẫu bạn gửi, giao diện Tmux sẽ được chia đôi (Vertical Split) với phong cách chuyên nghiệp của các công cụ hiện đại như Claude Code:
+Based on the desired operating model, the tmux interface can be split vertically with a coding pane and a room feed pane:
 
 ```text
 +--------------------------------------------+-----------------------+
-| Claude Code v2.1.72                        | Live Chat [#main]     |
+| Claude Code v2.1.72                        | Workspace [#main]     |
 |                                            | --------------------  |
-| Welcome back Michael!                      | Sarah: @Thao_Senior   |
+| Welcome back Michael                       | Sarah_PM: @Thao       |
 | [====================] 100%                | Check task-102 pls    |
 |                                            |                       |
-| ~ /Projects/Personal/Agentic-Coding        | @Human_Dev2: I'm on   |
-|                                            | context for T-103.    |
-| ------------------------------------------ |                       |
-| check diff change in project               | @Quinn_QA: Tests for  |
-|                                            | T-101 are RED.        |
-|                                            |                       |
-| crates/executors/src/orchestrator.rs       | @David_Dev: Copy that |
-| - New regex: BASIC_AUTH_HEADER_REGEX...    | I'll fix it now.      |
+| ~ /Projects/Personal/Agentic-Coding        | @Thao_Senior [human]: |
+|                                            | I am on context for   |
+| ------------------------------------------ | T-103                 |
+| check diff change in project               |                       |
+|                                            | @Quinn_QA [agent]:    |
+| crates/executors/src/orchestrator.rs       | Tests for T-101 are   |
+| - New regex: BASIC_AUTH_HEADER_REGEX...    | RED                   |
 | - New test: validates Basic Auth...        |                       |
 |                                            | You > /who            |
-|                                            | Online: Sarah, Quinn, |
-|                                            | David, Thao, Dev2     |
-| [Main Working Pane - Claude Code/Shell]    | [Live Chat Pane - 20%]|
+| [Main Working Pane - Shell or Agent]       | Online: Sarah, Quinn, |
+|                                            | David, Thao           |
 +--------------------------------------------+-----------------------+
 | [1] nexus-auth*  [2] chat-cli              | 11:58 [165/165]       |
 +--------------------------------------------+-----------------------+
 ```
 
----
+Key points:
 
-## 🛠️ Điều phối và Chuyển đổi Room (Slash Commands)
-
-Với phong cách tối giản, việc chọn room sẽ không dùng các tab rườm rà mà sử dụng **Slash Commands** trực tiếp trong ô nhập liệu:
-
-1.  **Hiển thị Room hiện tại**: Tên phòng đang active sẽ được hiển thị ngay trên Header: `Live Chat [#room-name]`.
-2.  **Liệt kê các phòng đã join**: Gõ `/rooms`. Hệ thống sẽ liệt kê danh sách các phòng bạn đang tham gia. Nếu phòng nào có tin nhắn mới, nó sẽ có dấu `(*)` bên cạnh.
-3.  **Chuyển phòng (Switching)**: Gõ `/join #room-name`. Toàn bộ nội dung chat ở pane phải sẽ được làm mới (refresh) để hiển thị lịch sử của phòng mới.
-4.  **Rời phòng**: Gõ `/leave`.
-5.  **Tìm phòng mới**: Gõ `/search keyword` để tìm các phòng công khai trong project.
-
-### 3. Bottom Status Line (Tmux Bar)
-- Hiển thị tên Project đang active.
-- Số lượng thông báo chưa đọc trong các phòng chat khác (e.g., `#main: 3`).
+- the right pane is the live feed of the current project room
+- the feed can contain both human and agent members
+- member labels can make the participant type visible, for example `[human]` and `[agent]`
 
 ---
 
-## ⌨️ Cách tương tác (Interaction)
+## 2. Room Coordination and Slash Commands
 
-Vì pane bên phải là "Read-only" buffer để quan sát, việc gửi tin nhắn sẽ được thực hiện qua lệnh CLI ở pane bên trái:
+The interface should stay minimal. Room selection should happen through slash commands rather than heavyweight tab chrome inside tmux.
 
-- **Gửi tin nhắn**: `acpms chat "Nội dung tin nhắn"`
-- **Gửi tin nhắn kèm mention**: `acpms chat "@Sarah_PM xong phần logic rồi nhé"`
-- **Chuyển phòng chat**: `acpms chat --room #task-102` (Pane bên phải sẽ tự động chuyển feed).
+1. **Current Room Header**: The active room is displayed in the header, for example `Workspace [#room-name]`
+2. **List Joined Rooms**: Type `/rooms` to list joined rooms and unread activity
+3. **Switch Rooms**: Type `/join #room-name`
+4. **Leave Room**: Type `/leave`
+5. **Search Rooms**: Type `/search keyword`
+6. **Inspect Presence**: Type `/who` to see current room members and whether they are human or agent
+
+### Bottom Status Line
+
+- active project name
+- unread counts for other rooms
+- optional connection and presence indicator
 
 ---
 
-## 🚀 Lợi ích của UI này
+## 3. Interaction Model
 
-1.  **Observability**: Bạn không cần chuyển tab hay mở trình duyệt. Mọi hành động của các Agent "đồng nghiệp" hiện ra ngay trước mắt.
-2.  **Context-Awareness**: Khi Agent `David_Dev` code ở pane trái, nó có thể "nhìn" thấy tin nhắn chỉ đạo của `Sarah_PM` ở pane phải mà không cần phải gọi API liên tục.
-3.  **Auditability**: Mọi cuộc thảo luận về code diễn ra ngay sát bên cạnh code, cực kỳ tiện lợi cho việc tra cứu lý do tại sao một dòng code được viết như vậy.
+Because the right pane is a read-only observation pane, sending messages can happen through the CLI in the left pane:
+
+- **Send a message**: `acpms chat "Message content"`
+- **Mention a member**: `acpms chat "@Sarah_PM I finished the logic"`
+- **Switch the feed room**: `acpms chat --room #task-102`
+
+---
+
+## 4. Why This UI Works
+
+1. **Observability**: Humans can monitor what agents are doing without opening the browser.
+2. **Context Awareness**: Agents can keep the current room feed in sight while coding.
+3. **Hybrid Team Fit**: The same UI works whether the project is all-human, all-agent, or mixed.
+4. **Auditability**: Discussion and code work stay side by side, making it easier to understand why decisions were made.

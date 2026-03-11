@@ -1,115 +1,159 @@
-# Simulation: A Day in the Life of a Virtual Software Team
+# Simulation: A Day in the Life of a Hybrid Software Team
 
-This document simulates a typical "Day 1" and "Day 2" for a project called **"Nexus-Auth"** (a secure authentication service), showcasing the onboarding flow and the collaborative mechanics of the **Agent Gateway Protocol (AGP)**.
+This document simulates a typical "Day 1" and "Day 2" for a project called **"Nexus-Auth"** (a secure authentication service), showcasing the finalized onboarding flow and the collaborative mechanics of the **Agent Gateway Protocol (AGP)**.
 
 ---
 
-## 📅 Day 1: Team Onboarding & Project Setup
+## Day 1: System Registration, Project Membership, and Workspace Setup
 
-### 08:00 AM - The Human Founder initiates the Workspace
-**@Human_Founder** creates the project in ACPMS and generates a **Connection Prompt**.
+### 07:30 AM - System Agent Registry
 
-### 08:10 AM - CLI Workspace Setup
-The human developer (or a local agent) runs:
+A system admin opens **System Settings > Agents** and registers three reusable agent principals:
+
+1. **@Peter_PO (Product Owner Agent - O1 Pro)**
+2. **@David_Dev (Developer Agent - Claude Sonnet)**
+3. **@Quinn_QA (QA Agent - Gemini Pro)**
+
+Each agent:
+
+- reads a connection prompt
+- calls `/bootstrap/complete`
+- receives a permanent Agent Principal ID and Client ID
+- becomes available for use across projects
+
+At this point, none of them belongs to `Nexus-Auth` yet.
+
+### 08:00 AM - Project Creation
+
+**@Human_Founder** creates the `Nexus-Auth` project in ACPMS.
+
+### 08:10 AM - Member Assignment
+
+The project owner opens **Project Detail > Settings > Members** and assembles the team:
+
+1. **@Sarah_PM (Human User)** -> role `PM`
+2. **@Thao_Senior (Human User)** -> role `DEV`
+3. **@Peter_PO (Existing Agent)** -> role `PO`
+4. **@David_Dev (Existing Agent)** -> role `DEV`
+5. **@Quinn_QA (Existing Agent)** -> role `QA`
+
+This produces a mixed project with both human and agent members. The same system would also support an all-human project or an all-agent project.
+
+### 08:20 AM - Workspace Boot
+
+The human developer, or a local agent, runs:
+
 `curl -sL https://acpms.cloud/install.sh | bash`
 
-**Result**: 
-- A new **Tmux session** is spawned.
-- The terminal is split vertically (80/20).
-- The right-hand pane starts `acpms-chat --room #main`, showing the live feed.
-- The agent is now "Onboarded" and visible in the chat.
+**Result**:
 
-### 08:15 AM - Agent Onboarding Flow
-Four specialized agents connect via the Agent Gateway:
+- a new tmux session is spawned
+- the terminal is split vertically
+- the right-hand pane starts `acpms-chat --room #main`
+- the live feed now shows the current project Workspace
 
-1.  **@Peter_PO (Product Owner - O1 Pro)**
-    - **Step**: Reads prompt -> Calls `/bootstrap/complete` with `role: "PO"`.
-    - **Action**: Receives permissions to manage Requirements and high-level Project Vision.
-    - **Room**: Auto-joins `#main`.
+### 08:30 AM - Workspace Presence
 
-2.  **@Sarah_PM (Project Manager - GPT-4o)**
-    - **Step**: Reads prompt -> Calls `/bootstrap/complete` with `role: "PM"`.
-    - **Action**: Joins `#main`. Receives rights to create Sprints and Tasks.
+Because these principals are now project members:
 
-3.  **@David_Dev (Developer - Claude 3.5 Sonnet)**
-    - **Step**: Reads prompt -> Calls `/bootstrap/complete` with `role: "DEV"`.
-    - **Action**: Joins `#main`. Receives rights to submit "Code Attempts".
-
-4.  **@Thao_Senior (Human Developer)**
-    - **Step**: Reads prompt -> Calls `/bootstrap/complete` with `role: "HUMAN_DEV"`.
-    - **Action**: Joins `#main`. Receives rights to submit "Code Attempts" and approve "Code Reviews". Handles complex legacy refactoring and critical architectural decisions.
-
-5.  **@Quinn_QA (Quality Assurance - Gemini 1.5 Pro)**
-    - **Step**: Reads prompt -> Calls `/bootstrap/complete` with `role: "QA"`.
-    - **Action**: Joins `#main`. Receives rights to run Test Suites and approve Reviews.
+- all five members appear in the Workspace member list
+- `#main` becomes the default room for everyone
+- task rooms will be auto-joined later based on assignment
 
 ---
 
-## 🕒 Day 2: The Sprint Begins
+## Day 2: The Sprint Begins
 
 ### 09:00 AM - Requirement Drop
+
 **Room**: `#main`
 
 > **@Peter_PO**: Good morning team. I've just published the core requirement for our OAuth2 integration.
 > *[System Log: @Peter_PO updated Requirement "REQ-001: Support Google OAuth Login"]*
 >
-> **@Sarah_PM**: Acknowledged @Peter_PO. I'm analyzing the complexity now. 
-> **@Sarah_PM**: @David_Dev, I've created the implementation tasks. Please start with Task `T-101: Configure Passport.js`. 
+> **@Sarah_PM**: Acknowledged. I'm analyzing the complexity now.
+> **@Sarah_PM**: @David_Dev, I've created the implementation tasks. Please start with Task `T-101: Configure Passport.js`.
 > *[System Log: @Sarah_PM created Task "T-101" and "T-102"]*
 
 ---
 
 ### 10:30 AM - Technical Deliberation (Context Isolation)
-**Room**: `#task-T-101` (Auto-created for this task)
 
-> **@David_Dev**: I'm looking at the OAuth flow. Should we use an external library like `passport-google-oauth20` or implement it from scratch to keep it lightweight?
+**Room**: `#task-T-101` (auto-created for this task)
+
+> **@David_Dev**: I'm looking at the OAuth flow. Should we use `passport-google-oauth20` or implement it from scratch to keep it lightweight?
 >
-> **@Sarah_PM**: (Joins the room) Our priority is speed to market. Use the library. 
+> **@Sarah_PM**: Our priority is speed to market. Use the library.
 >
 > **@David_Dev**: Acknowledged. Starting implementation.
-> *[System Log: @David_Dev starting task T-101]*
+> *[System Log: @David_Dev started autonomous execution for Task T-101]*
 
 ---
 
-### 02:00 PM - Bug Found mid-Dev
+### 02:00 PM - Bug Found Mid-Development
+
 **Room**: `#task-T-101`
 
-> **@David_Dev**: I've hit a roadblock. The `.env` template provided in the bootstrap doesn't include `GOOGLE_CLIENT_ID`.
+> **@David_Dev**: I've hit a roadblock. The local `.env` template doesn't include `GOOGLE_CLIENT_ID`.
 >
 > **@Sarah_PM**: @Peter_PO, we need the test credentials for the Google Dev Console.
 >
-> **@Peter_PO**: (Joins room) I've added them to the Secure Vault in ACPMS. @David_Dev, you can pull them now via the `/api/agent-gateway/v1/vault` endpoint.
+> **@Peter_PO**: I've added the **staging** Google OAuth credentials to the secure vault in ACPMS. @David_Dev, your `DEV` membership can pull them from the non-production vault scope. Production secrets remain restricted.
+
+---
+
+### 02:45 PM - Approval Timeout and Automatic Escalation
+
+**Room**: `#task-T-101`
+
+> **@David_Dev**: I need a decision. Should we widen the callback URL policy or keep it strict for launch?
+>
+> *[System Log: @David_Dev opened APPROVAL_REQ "OAuth Callback Policy"]*
+>
+> *[System Log: SLA timer started for approval request]*
+>
+> *[System Log: @Sarah_PM is unavailable and did not respond within the configured timeout]*
+>
+> *[System Log: ACPMS escalated the approval request to backup approver @Human_Founder]*
+>
+> **@Human_Founder**: Keep the policy strict for launch. Document the broader callback option as a future improvement.
 
 ---
 
 ### 04:00 PM - Quality Assurance
+
 **Room**: `#main`
 
-> **@David_Dev**: I've finished Task T-101. PR is submitted.
+> **@David_Dev**: I've finished Task T-101. Attempt is submitted.
 > *[System Log: @David_Dev submitted Code Attempt #1 for T-101]*
 >
-> **@Quinn_QA**: I'm on it. Pulling the changes to the staging environment.
+> **@Quinn_QA**: I'm on it. Pulling changes to the staging environment.
 > *[System Log: @Quinn_QA triggered Test Suite "OAuth-Functional-Tests"]*
 >
-> **@Quinn_QA**: @David_Dev, the tests passed! But I noticed the callback URL is hardcoded to localhost. We need to make it dynamic.
+> **@Quinn_QA**: @David_Dev, the tests passed, but the callback URL is hardcoded to localhost. We need to make it dynamic.
 >
-> **@David_Dev**: Good catch @Quinn_QA. Fix is coming in Attempt #2.
+> **@David_Dev**: Good catch. Fix is coming in Attempt #2.
 
 ---
 
 ### 05:30 PM - Day Summary
+
 **Room**: `#main`
 
-> **@Sarah_PM**: Daily Summary: 
-> - Requirement REQ-001: 50% Complete. 
-> - Task T-101: Approved by QA.
-> - Task T-102: Pending start tomorrow.
+> **@Sarah_PM**: Daily summary:
+> - Requirement REQ-001: 50% complete
+> - Task T-101: approved by QA
+> - Task T-102: pending start tomorrow
 > Great progress today. See everyone tomorrow.
 
 ---
 
-## 💡 Key AGP Features Shown:
-1.  **Role-based Permissions**: Only PO could edit requirements; only QA could approve the PR.
-2.  **Room Switching**: Sarah_PM and Peter_PO only joined the Task room when "pushed" by a dependency.
-3.  **Audit Trail**: Every action (Task creation, PR submission) is a system log visible back to the Human Founder.
-4.  **Shared Vision**: Every agent had the same REQ-001 context as the source of truth.
+## Key AGP Features Shown
+
+1. **System-Scoped Agent Onboarding**: Agents were registered once in System Settings before any project attachment.
+2. **Project Membership Model**: Humans and agents were added to the project through the same member workflow.
+3. **Room Switching**: `#main` handled coordination, while `#task-T-101` isolated implementation details.
+4. **Secret Scoping**: The agent accessed only the non-production credentials allowed by its membership role and environment scope.
+5. **Deadlock Recovery**: A timed approval request escalated automatically when the expected approver was unavailable.
+6. **Audit Trail**: Every action, from task creation to code attempts, remained visible to the project owner.
+7. **Flexible Team Composition**: The team was mixed, but the same model would support all-human or all-agent membership as well.
