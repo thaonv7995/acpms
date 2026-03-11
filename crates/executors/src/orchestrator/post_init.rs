@@ -824,6 +824,7 @@ Project type: {}
    `{{"preview_target":"http://127.0.0.1:8080","runtime_control":{{"controllable":true,"runtime_type":"docker_container","container_name":"my-preview"}}}}`
    or
    `{{"preview_target":"http://127.0.0.1:8080","runtime_control":{{"controllable":true,"runtime_type":"docker_compose_project","compose_project_name":"my-preview-project"}}}}`
+   Docker cleanup is only allowed for resources that prove they belong to this attempt. For `docker compose`, run it from the current worktree so Docker records the compose working directory automatically. For a single `docker run`, bind-mount the current worktree and/or add a label like `--label acpms.worktree_path=\"$PWD\"`.
 6. Re-run the failing deployment command(s) before finishing.
 7. Commit and push fixes to the same branch/repository.
 8. Summarize root cause and deployment fixes in final output.
@@ -1853,7 +1854,7 @@ Project type: {}
                             reason.trim()
                         )
                     } else {
-                        "Preview delivery is enabled but agent did not output PREVIEW_TARGET. Deploy preview requires: start the app (e.g. docker compose up -d or npm run dev) and output PREVIEW_TARGET: http://127.0.0.1:<port> plus PREVIEW_URL: <public-or-local-url>, or create .acpms/preview-output.json with preview_target, preview_url, and runtime_control metadata for stoppable Docker preview. PREVIEW_URL may be the same local URL as PREVIEW_TARGET when no public URL exists. If you cannot provide PREVIEW_TARGET, you MUST output DEPLOYMENT_FAILURE_REASON: <root cause> (e.g. app failed to start, port conflict, docker compose error, Cloudflare not configured)."
+                        "Preview delivery is enabled but agent did not output PREVIEW_TARGET. Deploy preview requires: start the app (e.g. docker compose up -d or npm run dev) and output PREVIEW_TARGET: http://127.0.0.1:<port> plus PREVIEW_URL: <public-or-local-url>, or create .acpms/preview-output.json with preview_target, preview_url, and runtime_control metadata for stoppable Docker preview. Runtime control is only accepted for Docker resources that can be tied back to this worktree (for example: docker compose started from the current worktree, or docker run with a bind-mount/label such as acpms.worktree_path=$PWD). PREVIEW_URL may be the same local URL as PREVIEW_TARGET when no public URL exists. If you cannot provide PREVIEW_TARGET, you MUST output DEPLOYMENT_FAILURE_REASON: <root cause> (e.g. app failed to start, port conflict, docker compose error, Cloudflare not configured)."
                             .to_string()
                     }
                 };

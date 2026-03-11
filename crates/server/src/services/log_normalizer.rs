@@ -169,8 +169,6 @@ impl LogNormalizer {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use chrono::Utc;
-    use uuid::Uuid;
 
     #[test]
     fn test_user_message_detection() {

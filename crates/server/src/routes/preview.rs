@@ -80,7 +80,7 @@ async fn create_preview(
 
     if !attempt_context.preview_enabled {
         return Err(ApiError::BadRequest(
-            "Preview is disabled in project settings".to_string(),
+            "Preview is disabled for this task".to_string(),
         ));
     }
 
@@ -279,7 +279,7 @@ async fn get_preview_readiness_for_attempt(
             project_type_label(attempt_context.project_type)
         ))
     } else if !attempt_context.preview_enabled {
-        Some("Preview is disabled in project settings".to_string())
+        Some("Preview is disabled for this task".to_string())
     } else if !runtime_enabled {
         Some("Preview unavailable: Docker preview runtime is disabled".to_string())
     } else {
@@ -494,6 +494,7 @@ async fn stop_preview_for_attempt(
         state
             .preview_manager
             .stop_preview_runtime_with_contract(
+                attempt_id,
                 &runtime_type,
                 control
                     .as_ref()
@@ -928,6 +929,15 @@ struct AttemptContext {
     metadata: Value,
 }
 
+#[derive(sqlx::FromRow)]
+struct AttemptContextRow {
+    project_id: Uuid,
+    task_title: String,
+    project_type: ProjectType,
+    project_preview_enabled: bool,
+    metadata: Value,
+}
+
 #[derive(Debug, Serialize)]
 struct PreviewReadinessResponse {
     attempt_id: Uuid,
@@ -945,7 +955,7 @@ async fn load_attempt_context(
     state: &AppState,
     attempt_id: Uuid,
 ) -> Result<AttemptContext, ApiError> {
-    let attempt_context = sqlx::query_as::<_, AttemptContext>(
+    let attempt_context = sqlx::query_as::<_, AttemptContextRow>(
         r#"
         SELECT
             t.project_id,
@@ -954,7 +964,7 @@ async fn load_attempt_context(
             (
                 COALESCE((p.settings->>'auto_deploy')::boolean, false)
                 OR COALESCE((p.settings->>'preview_enabled')::boolean, false)
-            ) AS preview_enabled,
+            ) AS project_preview_enabled,
             COALESCE(ta.metadata, '{}'::jsonb) AS metadata
         FROM task_attempts ta
         JOIN tasks t ON t.id = ta.task_id
@@ -967,7 +977,28 @@ async fn load_attempt_context(
     .await
     .map_err(|e| ApiError::Internal(e.to_string()))?;
 
-    attempt_context.ok_or_else(|| ApiError::NotFound("Attempt not found".to_string()))
+    let attempt_context =
+        attempt_context.ok_or_else(|| ApiError::NotFound("Attempt not found".to_string()))?;
+
+    Ok(AttemptContext {
+        project_id: attempt_context.project_id,
+        task_title: attempt_context.task_title,
+        project_type: attempt_context.project_type,
+        preview_enabled: preview_delivery_enabled(
+            &attempt_context.metadata,
+            attempt_context.project_preview_enabled,
+        ),
+        metadata: attempt_context.metadata,
+    })
+}
+
+fn preview_delivery_enabled(task_metadata: &Value, project_preview_enabled: bool) -> bool {
+    task_metadata
+        .get("execution")
+        .and_then(|value| value.get("auto_deploy"))
+        .and_then(Value::as_bool)
+        .or_else(|| task_metadata.get("auto_deploy").and_then(Value::as_bool))
+        .unwrap_or(project_preview_enabled)
 }
 
 async fn get_existing_preview(
@@ -1066,6 +1097,25 @@ mod tests {
             preview_start_lock_key(attempt_id),
             "preview_start:12345678-1234-5678-9abc-def012345678"
         );
+    }
+
+    #[test]
+    fn preview_delivery_enabled_respects_explicit_task_disable() {
+        let metadata = serde_json::json!({
+            "execution": {
+                "auto_deploy": false
+            }
+        });
+
+        assert!(!preview_delivery_enabled(&metadata, true));
+    }
+
+    #[test]
+    fn preview_delivery_enabled_uses_project_default_when_task_setting_missing() {
+        let metadata = serde_json::json!({});
+
+        assert!(preview_delivery_enabled(&metadata, true));
+        assert!(!preview_delivery_enabled(&metadata, false));
     }
 
     #[test]

@@ -6,7 +6,7 @@ use acpms_deployment::CloudflareClient;
 use acpms_services::{EncryptionService, SystemSettingsService};
 use anyhow::{Context, Result};
 use chrono::{DateTime, Duration, Utc};
-use serde::Serialize;
+use serde::{Deserialize, Serialize};
 use serde_json::Value;
 use sqlx::{PgPool, Row};
 use std::{
@@ -92,6 +92,30 @@ struct AttemptPreviewCloudflareCleanupMetadata {
     tunnel_id: Option<String>,
     dns_record_id: Option<String>,
     zone_id: Option<String>,
+}
+
+#[derive(Debug, Deserialize)]
+struct DockerInspectContainerMetadata {
+    #[serde(default, rename = "Name")]
+    name: Option<String>,
+    #[serde(default, rename = "Config")]
+    config: Option<DockerInspectContainerConfig>,
+    #[serde(default, rename = "Mounts")]
+    mounts: Vec<DockerInspectMount>,
+}
+
+#[derive(Debug, Deserialize)]
+struct DockerInspectContainerConfig {
+    #[serde(default, rename = "Labels")]
+    labels: Option<BTreeMap<String, String>>,
+}
+
+#[derive(Debug, Deserialize)]
+struct DockerInspectMount {
+    #[serde(default, rename = "Type")]
+    mount_type: Option<String>,
+    #[serde(default, rename = "Source")]
+    source: Option<String>,
 }
 
 #[derive(Debug, Clone)]
@@ -1152,6 +1176,7 @@ impl PreviewManager {
                 if let Some(runtime_type) = runtime_type {
                     if let Err(e) = self
                         .stop_preview_runtime_with_contract(
+                            candidate.attempt_id,
                             runtime_type,
                             runtime_control
                                 .as_ref()
@@ -1534,6 +1559,7 @@ impl PreviewManager {
     /// Stop a preview runtime described by persisted agent contract metadata.
     pub async fn stop_preview_runtime_with_contract(
         &self,
+        attempt_id: Uuid,
         runtime_type: &str,
         container_name: Option<&str>,
         compose_project_name: Option<&str>,
@@ -1542,12 +1568,31 @@ impl PreviewManager {
             return Ok(());
         }
 
+        let expected_worktree = self
+            .load_attempt_runtime_contract_worktree_path(attempt_id)
+            .await?;
+
         match runtime_type {
             "docker_container" => {
                 let container_name = container_name
                     .map(str::trim)
                     .filter(|value| !value.is_empty())
                     .context("Missing container_name for docker_container preview control")?;
+                let Some(container_metadata) = inspect_docker_container_metadata(container_name)?
+                else {
+                    return Ok(());
+                };
+                if !container_matches_attempt_scope(
+                    &container_metadata,
+                    attempt_id,
+                    expected_worktree.as_deref(),
+                ) {
+                    anyhow::bail!(
+                        "Refusing to stop docker container '{}' for attempt {} because ownership could not be verified",
+                        container_name,
+                        attempt_id
+                    );
+                }
                 stop_docker_container_by_name(container_name)
             }
             "docker_compose_project" => {
@@ -1557,6 +1602,22 @@ impl PreviewManager {
                     .context(
                         "Missing compose_project_name for docker_compose_project preview control",
                     )?;
+                if compose_project_name != preview_docker_project_name(attempt_id) {
+                    let containers =
+                        inspect_docker_compose_project_containers(compose_project_name)?;
+                    if !compose_project_containers_match_attempt_scope(
+                        &containers,
+                        compose_project_name,
+                        attempt_id,
+                        expected_worktree.as_deref(),
+                    ) {
+                        anyhow::bail!(
+                            "Refusing to stop docker compose project '{}' for attempt {} because ownership could not be verified",
+                            compose_project_name,
+                            attempt_id
+                        );
+                    }
+                }
                 stop_docker_compose_project_by_name(compose_project_name)
             }
             other => anyhow::bail!("Unsupported preview runtime_type '{}'", other),
@@ -2247,6 +2308,69 @@ impl PreviewManager {
             .filter(|path| path.exists()))
     }
 
+    async fn load_attempt_runtime_contract_worktree_path(
+        &self,
+        attempt_id: Uuid,
+    ) -> Result<Option<PathBuf>> {
+        let execution_process_worktree = sqlx::query_scalar::<_, String>(
+            r#"
+            SELECT worktree_path
+            FROM execution_processes
+            WHERE attempt_id = $1
+              AND worktree_path IS NOT NULL
+            ORDER BY created_at DESC
+            LIMIT 1
+            "#,
+        )
+        .bind(attempt_id)
+        .fetch_optional(&self.db)
+        .await
+        .context("Failed to query execution_processes for runtime contract worktree path")?
+        .and_then(|path| normalize_optional_metadata_string(Some(path)));
+
+        if let Some(path) = execution_process_worktree {
+            return Ok(Some(PathBuf::from(path)));
+        }
+
+        let tunnel_worktree_path = sqlx::query_scalar::<_, Option<String>>(
+            r#"
+            SELECT worktree_path
+            FROM cloudflare_tunnels
+            WHERE attempt_id = $1
+              AND worktree_path IS NOT NULL
+            ORDER BY created_at DESC
+            LIMIT 1
+            "#,
+        )
+        .bind(attempt_id)
+        .fetch_optional(&self.db)
+        .await
+        .context("Failed to query cloudflare_tunnels for runtime contract worktree path")?
+        .flatten()
+        .and_then(|path| normalize_optional_metadata_string(Some(path)));
+
+        if let Some(path) = tunnel_worktree_path {
+            return Ok(Some(PathBuf::from(path)));
+        }
+
+        let attempt_metadata_worktree = sqlx::query_scalar::<_, Option<String>>(
+            r#"
+            SELECT metadata->>'worktree_path'
+            FROM task_attempts
+            WHERE id = $1
+            LIMIT 1
+            "#,
+        )
+        .bind(attempt_id)
+        .fetch_optional(&self.db)
+        .await
+        .context("Failed to query task_attempts for runtime contract worktree path")?
+        .flatten()
+        .and_then(|path| normalize_optional_metadata_string(Some(path)));
+
+        Ok(attempt_metadata_worktree.map(PathBuf::from))
+    }
+
     async fn sync_repo_source_for_preview(&self, repo_path: &Path) -> Result<()> {
         if !repo_path.join(".git").exists() {
             anyhow::bail!("Repository source is missing .git metadata");
@@ -2310,6 +2434,203 @@ impl PreviewManager {
 
         Ok(())
     }
+}
+
+fn normalize_path_for_comparison(raw: &str) -> Option<String> {
+    let trimmed = raw.trim().trim_end_matches('/');
+    if trimmed.is_empty() {
+        None
+    } else {
+        Some(trimmed.to_string())
+    }
+}
+
+fn path_matches_attempt_scope(candidate: &str, expected_worktree: &Path) -> bool {
+    let Some(candidate) = normalize_path_for_comparison(candidate) else {
+        return false;
+    };
+    let Some(expected) =
+        normalize_path_for_comparison(expected_worktree.to_string_lossy().as_ref())
+    else {
+        return false;
+    };
+
+    candidate == expected || candidate.starts_with(&format!("{expected}/"))
+}
+
+fn container_matches_attempt_scope(
+    container: &DockerInspectContainerMetadata,
+    attempt_id: Uuid,
+    expected_worktree: Option<&Path>,
+) -> bool {
+    let attempt_id = attempt_id.to_string();
+    let labels = container
+        .config
+        .as_ref()
+        .and_then(|config| config.labels.as_ref());
+
+    if labels
+        .and_then(|labels| labels.get("acpms.attempt_id"))
+        .is_some_and(|value| value == &attempt_id)
+        || labels
+            .and_then(|labels| labels.get("acpms.preview.attempt_id"))
+            .is_some_and(|value| value == &attempt_id)
+    {
+        return true;
+    }
+
+    let managed_prefix = format!("acpms-preview-{}", &attempt_id[..8]);
+    if container
+        .name
+        .as_deref()
+        .map(|name| name.trim().trim_start_matches('/'))
+        .is_some_and(|name| name.starts_with(&managed_prefix))
+    {
+        return true;
+    }
+
+    let Some(expected_worktree) = expected_worktree else {
+        return false;
+    };
+
+    if labels
+        .and_then(|labels| labels.get("acpms.worktree_path"))
+        .is_some_and(|value| path_matches_attempt_scope(value, expected_worktree))
+        || labels
+            .and_then(|labels| labels.get("acpms.preview.worktree_path"))
+            .is_some_and(|value| path_matches_attempt_scope(value, expected_worktree))
+        || labels
+            .and_then(|labels| labels.get("com.docker.compose.project.working_dir"))
+            .is_some_and(|value| path_matches_attempt_scope(value, expected_worktree))
+    {
+        return true;
+    }
+
+    container.mounts.iter().any(|mount| {
+        mount
+            .mount_type
+            .as_deref()
+            .is_some_and(|mount_type| mount_type.eq_ignore_ascii_case("bind"))
+            && mount
+                .source
+                .as_deref()
+                .is_some_and(|source| path_matches_attempt_scope(source, expected_worktree))
+    })
+}
+
+fn compose_project_containers_match_attempt_scope(
+    containers: &[DockerInspectContainerMetadata],
+    project_name: &str,
+    attempt_id: Uuid,
+    expected_worktree: Option<&Path>,
+) -> bool {
+    !containers.is_empty()
+        && containers.iter().all(|container| {
+            container
+                .config
+                .as_ref()
+                .and_then(|config| config.labels.as_ref())
+                .and_then(|labels| labels.get("com.docker.compose.project"))
+                .is_some_and(|value| value == project_name)
+                && container_matches_attempt_scope(container, attempt_id, expected_worktree)
+        })
+}
+
+fn parse_docker_inspect_metadata(
+    output: &[u8],
+    context: &str,
+) -> Result<Vec<DockerInspectContainerMetadata>> {
+    serde_json::from_slice(output)
+        .with_context(|| format!("Failed to parse docker inspect output for {}", context))
+}
+
+fn inspect_docker_container_metadata(
+    container_name: &str,
+) -> Result<Option<DockerInspectContainerMetadata>> {
+    let output = Command::new(preview_docker_command())
+        .arg("inspect")
+        .arg(container_name)
+        .output()
+        .with_context(|| format!("Failed to inspect docker container {}", container_name))?;
+
+    if !output.status.success() {
+        let stderr = String::from_utf8_lossy(&output.stderr).to_ascii_lowercase();
+        if stderr.contains("no such object") || stderr.contains("no such container") {
+            return Ok(None);
+        }
+        anyhow::bail!(
+            "docker inspect failed for {} (status: {:?}): {}",
+            container_name,
+            output.status.code(),
+            String::from_utf8_lossy(&output.stderr).trim()
+        );
+    }
+
+    Ok(
+        parse_docker_inspect_metadata(&output.stdout, container_name)?
+            .into_iter()
+            .next(),
+    )
+}
+
+fn inspect_docker_compose_project_containers(
+    project_name: &str,
+) -> Result<Vec<DockerInspectContainerMetadata>> {
+    let list_output = Command::new(preview_docker_command())
+        .arg("ps")
+        .arg("-aq")
+        .arg("--filter")
+        .arg(format!("label=com.docker.compose.project={}", project_name))
+        .output()
+        .with_context(|| {
+            format!(
+                "Failed to list docker containers for compose project {}",
+                project_name
+            )
+        })?;
+
+    if !list_output.status.success() {
+        anyhow::bail!(
+            "docker ps failed for compose project {} (status: {:?}): {}",
+            project_name,
+            list_output.status.code(),
+            String::from_utf8_lossy(&list_output.stderr).trim()
+        );
+    }
+
+    let container_ids_output = String::from_utf8_lossy(&list_output.stdout).to_string();
+    let container_ids = container_ids_output
+        .lines()
+        .map(str::trim)
+        .filter(|line| !line.is_empty())
+        .map(ToString::to_string)
+        .collect::<Vec<_>>();
+
+    if container_ids.is_empty() {
+        return Ok(Vec::new());
+    }
+
+    let output = Command::new(preview_docker_command())
+        .arg("inspect")
+        .args(&container_ids)
+        .output()
+        .with_context(|| {
+            format!(
+                "Failed to inspect docker containers for compose project {}",
+                project_name
+            )
+        })?;
+
+    if !output.status.success() {
+        anyhow::bail!(
+            "docker inspect failed for compose project {} (status: {:?}): {}",
+            project_name,
+            output.status.code(),
+            String::from_utf8_lossy(&output.stderr).trim()
+        );
+    }
+
+    parse_docker_inspect_metadata(&output.stdout, project_name)
 }
 
 fn stop_docker_container_by_name(container_name: &str) -> Result<()> {
@@ -3640,6 +3961,102 @@ mod tests {
             control.compose_project_name.as_deref(),
             Some("preview-demo")
         );
+    }
+
+    #[test]
+    fn container_matches_attempt_scope_accepts_bind_mount_from_attempt_worktree() {
+        let attempt_id = Uuid::parse_str("12345678-1234-5678-9abc-def012345678").unwrap();
+        let worktree = Path::new("/tmp/acpms/worktrees/12345678");
+        let container = DockerInspectContainerMetadata {
+            name: Some("/preview-demo".to_string()),
+            config: None,
+            mounts: vec![DockerInspectMount {
+                mount_type: Some("bind".to_string()),
+                source: Some("/tmp/acpms/worktrees/12345678".to_string()),
+            }],
+        };
+
+        assert!(container_matches_attempt_scope(
+            &container,
+            attempt_id,
+            Some(worktree)
+        ));
+    }
+
+    #[test]
+    fn container_matches_attempt_scope_accepts_compose_working_dir_label() {
+        let attempt_id = Uuid::parse_str("12345678-1234-5678-9abc-def012345678").unwrap();
+        let worktree = Path::new("/tmp/acpms/worktrees/12345678");
+        let container = DockerInspectContainerMetadata {
+            name: Some("/preview-demo".to_string()),
+            config: Some(DockerInspectContainerConfig {
+                labels: Some(BTreeMap::from([(
+                    "com.docker.compose.project.working_dir".to_string(),
+                    "/tmp/acpms/worktrees/12345678".to_string(),
+                )])),
+            }),
+            mounts: Vec::new(),
+        };
+
+        assert!(container_matches_attempt_scope(
+            &container,
+            attempt_id,
+            Some(worktree)
+        ));
+    }
+
+    #[test]
+    fn container_matches_attempt_scope_rejects_unrelated_container() {
+        let attempt_id = Uuid::parse_str("12345678-1234-5678-9abc-def012345678").unwrap();
+        let worktree = Path::new("/tmp/acpms/worktrees/12345678");
+        let container = DockerInspectContainerMetadata {
+            name: Some("/database".to_string()),
+            config: Some(DockerInspectContainerConfig {
+                labels: Some(BTreeMap::from([(
+                    "com.docker.compose.project.working_dir".to_string(),
+                    "/srv/other-project".to_string(),
+                )])),
+            }),
+            mounts: vec![DockerInspectMount {
+                mount_type: Some("bind".to_string()),
+                source: Some("/srv/other-project".to_string()),
+            }],
+        };
+
+        assert!(!container_matches_attempt_scope(
+            &container,
+            attempt_id,
+            Some(worktree)
+        ));
+    }
+
+    #[test]
+    fn compose_project_containers_match_attempt_scope_requires_matching_project_label() {
+        let attempt_id = Uuid::parse_str("12345678-1234-5678-9abc-def012345678").unwrap();
+        let worktree = Path::new("/tmp/acpms/worktrees/12345678");
+        let container = DockerInspectContainerMetadata {
+            name: Some("/preview-demo".to_string()),
+            config: Some(DockerInspectContainerConfig {
+                labels: Some(BTreeMap::from([
+                    (
+                        "com.docker.compose.project".to_string(),
+                        "preview-demo".to_string(),
+                    ),
+                    (
+                        "com.docker.compose.project.working_dir".to_string(),
+                        "/tmp/acpms/worktrees/12345678".to_string(),
+                    ),
+                ])),
+            }),
+            mounts: Vec::new(),
+        };
+
+        assert!(compose_project_containers_match_attempt_scope(
+            &[container],
+            "preview-demo",
+            attempt_id,
+            Some(worktree)
+        ));
     }
 
     #[test]

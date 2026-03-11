@@ -128,6 +128,8 @@ static CLI_TOKEN_FLAG_REGEX: Lazy<Option<Regex>> =
     Lazy::new(|| Regex::new(r#"(?i)(--token(?:=|\s+))((?:"[^"]*"|'[^']*'|[^\s"'`]+))"#).ok());
 static BEARER_TOKEN_REGEX: Lazy<Option<Regex>> =
     Lazy::new(|| Regex::new(r"(?i)\b(bearer)(\s+)([A-Za-z0-9._~+/=-]{12,})").ok());
+static BASIC_AUTH_HEADER_REGEX: Lazy<Option<Regex>> =
+    Lazy::new(|| Regex::new(r"(?i)(authorization\s*[:=]\s*basic\s+)([A-Za-z0-9+/=]{8,})").ok());
 static SECRET_JSON_VALUE_REGEX: Lazy<Option<Regex>> = Lazy::new(|| {
     Regex::new(
         r#"(?i)("(?:(?:access|refresh)_token|api[_-]?key|api[_-]?token|client_secret|password|secret|token)"\s*:\s*")([^"]+)(")"#,
@@ -207,6 +209,11 @@ pub fn sanitize_log(line: &str) -> String {
     if let Some(bearer_token_regex) = BEARER_TOKEN_REGEX.as_ref() {
         sanitized = bearer_token_regex
             .replace_all(&sanitized, "$1$2***BEARER_TOKEN_REDACTED***")
+            .to_string();
+    }
+    if let Some(basic_auth_header_regex) = BASIC_AUTH_HEADER_REGEX.as_ref() {
+        sanitized = basic_auth_header_regex
+            .replace_all(&sanitized, "$1***BASIC_AUTH_REDACTED***")
             .to_string();
     }
     if let Some(secret_json_regex) = SECRET_JSON_VALUE_REGEX.as_ref() {
@@ -8226,6 +8233,16 @@ mod tests {
         assert_eq!(
             output,
             r#"curl -H "Authorization: Bearer ***BEARER_TOKEN_REDACTED***" https://example.com"#
+        );
+    }
+
+    #[test]
+    fn test_sanitize_log_redacts_basic_auth_headers_in_git_config_env() {
+        let input = "GIT_CONFIG_VALUE_2=AUTHORIZATION: Basic b2F1dGgyOmdscGF0LXNlY3JldC10b2tlbg==";
+        let output = sanitize_log(input);
+        assert_eq!(
+            output,
+            "GIT_CONFIG_VALUE_2=AUTHORIZATION: Basic ***BASIC_AUTH_REDACTED***"
         );
     }
 

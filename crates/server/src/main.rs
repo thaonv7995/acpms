@@ -219,16 +219,10 @@ fn preview_delivery_enabled(
     task_metadata: &serde_json::Value,
     project_settings: &acpms_db::models::ProjectSettings,
 ) -> bool {
-    task_metadata
-        .get("execution")
-        .and_then(|value| value.get("auto_deploy"))
-        .and_then(|value| value.as_bool())
-        .or_else(|| {
-            task_metadata
-                .get("auto_deploy")
-                .and_then(|value| value.as_bool())
-        })
-        .unwrap_or(project_settings.auto_deploy || project_settings.preview_enabled)
+    resolve_auto_deploy(
+        task_metadata,
+        project_settings.auto_deploy || project_settings.preview_enabled,
+    )
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -496,6 +490,7 @@ fn upsert_production_deploy_failure(
     );
 }
 
+#[cfg(test)]
 fn is_cloudflare_configured(
     cloudflare_account_id: Option<&str>,
     cloudflare_api_token_encrypted: Option<&str>,
