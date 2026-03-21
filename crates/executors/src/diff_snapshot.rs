@@ -15,6 +15,9 @@ pub trait DiffStorageUploader: Send + Sync {
 
     /// Download raw object bytes from storage by key.
     async fn download_object_bytes(&self, key: &str) -> Result<Vec<u8>>;
+
+    /// Upload raw bytes to object storage.
+    async fn upload_object_bytes(&self, key: &str, bytes: &[u8], content_type: &str) -> Result<()>;
 }
 
 /// Complete diff snapshot for an attempt, stored as JSON in S3

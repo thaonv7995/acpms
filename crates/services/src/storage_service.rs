@@ -678,6 +678,15 @@ impl acpms_executors::DiffStorageUploader for StorageService {
     async fn download_object_bytes(&self, key: &str) -> anyhow::Result<Vec<u8>> {
         StorageService::download_object_bytes(self, key).await
     }
+
+    async fn upload_object_bytes(
+        &self,
+        key: &str,
+        bytes: &[u8],
+        content_type: &str,
+    ) -> anyhow::Result<()> {
+        StorageService::upload_bytes(self, key, bytes, content_type).await
+    }
 }
 
 #[cfg(test)]

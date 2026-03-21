@@ -1128,10 +1128,32 @@ impl ExecutorOrchestrator {
 
     /// Helper: Mark task as completed
     pub(super) async fn mark_task_completed(&self, task_id: Uuid) -> Result<()> {
-        sqlx::query("UPDATE tasks SET status = 'done', updated_at = NOW() WHERE id = $1")
-            .bind(task_id)
-            .execute(&self.db_pool)
-            .await?;
+        let updated_task_type = sqlx::query_scalar::<_, String>(
+            r#"
+            UPDATE tasks
+            SET status = 'done',
+                updated_at = NOW()
+            WHERE id = $1
+              AND status <> 'done'
+            RETURNING task_type::text
+            "#,
+        )
+        .bind(task_id)
+        .fetch_optional(&self.db_pool)
+        .await?;
+
+        if matches!(updated_task_type.as_deref(), Some("docs")) {
+            if let Err(error) =
+                crate::publish_docs_task_to_vault(&self.db_pool, &self.storage_service, task_id)
+                    .await
+            {
+                tracing::warn!(
+                    task_id = %task_id,
+                    error = %error,
+                    "Failed to publish docs task to vault after marking task done"
+                );
+            }
+        }
 
         Ok(())
     }

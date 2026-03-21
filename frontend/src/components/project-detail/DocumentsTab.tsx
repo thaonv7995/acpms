@@ -1,4 +1,6 @@
 import { useEffect, useMemo, useRef, useState, type ChangeEvent } from 'react';
+import ReactMarkdown from 'react-markdown';
+import remarkGfm from 'remark-gfm';
 import {
   createProjectDocument,
   deleteProjectDocument,
@@ -26,6 +28,14 @@ interface DocumentDraft {
 }
 
 const DOCUMENT_KIND_LABELS: Record<ProjectDocumentKind, string> = {
+  brainstorm: 'Brainstorm',
+  idea_note: 'Idea Note',
+  prd: 'PRD',
+  srs: 'SRS',
+  design: 'Design',
+  technical_spec: 'Technical Spec',
+  research_note: 'Research Note',
+  meeting_note: 'Meeting Note',
   architecture: 'Architecture',
   api_spec: 'API Spec',
   database_schema: 'Database Schema',
@@ -163,6 +173,20 @@ function formatBytes(bytes: number): string {
   return `${(bytes / (1024 * 1024)).toFixed(1)} MB`;
 }
 
+function supportsInlineTextEditing(contentType: string): boolean {
+  return (
+    contentType.startsWith('text/') ||
+    contentType === 'application/json' ||
+    contentType === 'application/vnd.api+json' ||
+    contentType === 'application/yaml' ||
+    contentType === 'application/x-yaml' ||
+    contentType === 'application/xml' ||
+    contentType === 'application/toml' ||
+    contentType === 'application/graphql' ||
+    contentType === 'application/typescript'
+  );
+}
+
 function ingestionBadge(status: ProjectDocument['ingestion_status']): string {
   switch (status) {
     case 'indexed':
@@ -182,6 +206,7 @@ export function DocumentsTab({ projectId }: DocumentsTabProps) {
   const [draft, setDraft] = useState<DocumentDraft>(createEmptyDraft);
   const [loadingList, setLoadingList] = useState(true);
   const [loadingContent, setLoadingContent] = useState(false);
+  const [selectedDownloadUrl, setSelectedDownloadUrl] = useState<string | null>(null);
   const [saving, setSaving] = useState(false);
   const [deleting, setDeleting] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -199,6 +224,9 @@ export function DocumentsTab({ projectId }: DocumentsTabProps) {
     const hasPreset = CONTENT_TYPE_SUGGESTIONS.some(({ value }) => value === draft.contentType);
     return hasPreset ? draft.contentType : CUSTOM_CONTENT_TYPE_VALUE;
   }, [draft.contentType]);
+  const selectedDocumentSupportsTextEditing = !selectedDocument
+    ? true
+    : supportsInlineTextEditing(selectedDocument.content_type);
 
   const loadDocuments = async (preferredDocumentId?: string | null) => {
     setLoadingList(true);
@@ -219,6 +247,9 @@ export function DocumentsTab({ projectId }: DocumentsTabProps) {
       if (!nextSelectedId && list.length === 0) {
         setDraft(createEmptyDraft());
       }
+      if (!nextSelectedId) {
+        setSelectedDownloadUrl(null);
+      }
     } catch (loadError) {
       logger.error('Failed to load project documents:', loadError);
       setError(loadError instanceof Error ? loadError.message : 'Failed to load documents');
@@ -232,7 +263,10 @@ export function DocumentsTab({ projectId }: DocumentsTabProps) {
   }, [projectId]);
 
   useEffect(() => {
-    if (!selectedDocument) return;
+    if (!selectedDocument) {
+      setSelectedDownloadUrl(null);
+      return;
+    }
 
     let cancelled = false;
 
@@ -245,6 +279,22 @@ export function DocumentsTab({ projectId }: DocumentsTabProps) {
           projectId,
           selectedDocument.storage_key
         );
+        if (cancelled) return;
+
+        setSelectedDownloadUrl(download_url);
+
+        if (!supportsInlineTextEditing(selectedDocument.content_type)) {
+          setDraft({
+            documentId: selectedDocument.id,
+            title: selectedDocument.title,
+            filename: selectedDocument.filename,
+            documentKind: selectedDocument.document_kind,
+            contentType: selectedDocument.content_type,
+            content: '',
+          });
+          return;
+        }
+
         const response = await fetch(download_url);
         if (!response.ok) {
           throw new Error(`Failed to download document content (${response.status})`);
@@ -505,7 +555,9 @@ export function DocumentsTab({ projectId }: DocumentsTabProps) {
               {draft.documentId ? 'Edit Document' : 'New Document'}
             </h3>
             <p className="text-xs text-muted-foreground mt-1">
-              Upload markdown or structured text so it can be indexed in later phases.
+              {selectedDocument && !selectedDocumentSupportsTextEditing
+                ? 'Binary documents are preview-only in v1. Re-upload to replace the file.'
+                : 'Upload markdown or structured text so it can be indexed in later phases.'}
             </p>
           </div>
           <div className="flex items-center gap-1.5">
@@ -543,7 +595,7 @@ export function DocumentsTab({ projectId }: DocumentsTabProps) {
                 void handleSave();
               }}
               className="px-3 py-1.5 text-xs font-bold rounded-md bg-primary text-primary-foreground hover:bg-primary/90 transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
-              disabled={saving || loadingContent}
+              disabled={saving || loadingContent || !selectedDocumentSupportsTextEditing}
             >
               {saving ? 'Saving...' : 'Save'}
             </button>
@@ -698,17 +750,86 @@ export function DocumentsTab({ projectId }: DocumentsTabProps) {
 
           <div>
             <label className="block text-xs font-bold text-muted-foreground uppercase mb-1.5">
-              Content
+              {selectedDocument && !selectedDocumentSupportsTextEditing ? 'Preview' : 'Content'}
             </label>
-            <textarea
-              value={draft.content}
-              onChange={(event) =>
-                setDraft((prev) => ({ ...prev, content: event.target.value }))
-              }
-              rows={22}
-              className="w-full bg-muted border border-border rounded-lg px-3 py-3 text-sm text-card-foreground focus:ring-primary focus:border-primary font-mono resize-y"
-              placeholder="# Authentication API&#10;&#10;Document the endpoints, payloads, and constraints here."
-            />
+            {selectedDocument && !selectedDocumentSupportsTextEditing ? (
+              <div className="rounded-xl border border-border bg-muted/20 p-4 space-y-4">
+                {selectedDocument.content_type === 'application/pdf' && selectedDownloadUrl && (
+                  <iframe
+                    src={selectedDownloadUrl}
+                    title={selectedDocument.title}
+                    className="h-[70vh] w-full rounded-lg bg-white"
+                  />
+                )}
+
+                {selectedDocument.content_type.startsWith('image/') && selectedDownloadUrl && (
+                  <img
+                    src={selectedDownloadUrl}
+                    alt={selectedDocument.title}
+                    className="max-h-[70vh] w-full rounded-lg object-contain bg-black/30"
+                  />
+                )}
+
+                {supportsInlineTextEditing(selectedDocument.content_type) === false &&
+                  selectedDocument.content_type !== 'application/pdf' &&
+                  !selectedDocument.content_type.startsWith('image/') && (
+                    <div className="rounded-lg border border-border bg-card px-4 py-3 flex items-center justify-between gap-4">
+                      <div>
+                        <p className="text-sm font-semibold text-card-foreground">
+                          {selectedDocument.filename}
+                        </p>
+                        <p className="text-xs text-muted-foreground mt-1">
+                          {selectedDocument.content_type}
+                        </p>
+                      </div>
+                      {selectedDownloadUrl && (
+                        <a
+                          href={selectedDownloadUrl}
+                          target="_blank"
+                          rel="noopener noreferrer"
+                          className="inline-flex items-center gap-1.5 rounded-lg bg-primary px-3 py-2 text-xs font-semibold text-primary-foreground hover:bg-primary/90"
+                        >
+                          <span className="material-symbols-outlined text-[16px]">download</span>
+                          Open File
+                        </a>
+                      )}
+                    </div>
+                  )}
+              </div>
+            ) : draft.contentType === 'text/markdown' ? (
+              <div className="grid gap-4 xl:grid-cols-[minmax(0,1fr)_minmax(0,1fr)]">
+                <textarea
+                  value={draft.content}
+                  onChange={(event) =>
+                    setDraft((prev) => ({ ...prev, content: event.target.value }))
+                  }
+                  rows={22}
+                  className="w-full bg-muted border border-border rounded-lg px-3 py-3 text-sm text-card-foreground focus:ring-primary focus:border-primary font-mono resize-y"
+                  placeholder="# Authentication API&#10;&#10;Document the endpoints, payloads, and constraints here."
+                />
+                <div className="rounded-lg border border-border bg-muted/20 px-4 py-3 overflow-y-auto max-h-[36rem]">
+                  {draft.content.trim() ? (
+                    <div className="prose prose-invert max-w-none prose-headings:text-card-foreground prose-p:text-card-foreground/90 prose-strong:text-card-foreground prose-a:text-primary prose-code:text-card-foreground">
+                      <ReactMarkdown remarkPlugins={[remarkGfm]}>{draft.content}</ReactMarkdown>
+                    </div>
+                  ) : (
+                    <p className="text-sm text-muted-foreground">
+                      Markdown preview will appear here.
+                    </p>
+                  )}
+                </div>
+              </div>
+            ) : (
+              <textarea
+                value={draft.content}
+                onChange={(event) =>
+                  setDraft((prev) => ({ ...prev, content: event.target.value }))
+                }
+                rows={22}
+                className="w-full bg-muted border border-border rounded-lg px-3 py-3 text-sm text-card-foreground focus:ring-primary focus:border-primary font-mono resize-y"
+                placeholder="# Authentication API&#10;&#10;Document the endpoints, payloads, and constraints here."
+              />
+            )}
           </div>
         </div>
       </div>

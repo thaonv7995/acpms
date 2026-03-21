@@ -1,6 +1,6 @@
 use acpms_db::{models::*, PgPool};
 use acpms_executors::{AgentEvent, StatusManager, StatusMessage};
-use acpms_services::TaskService;
+use acpms_services::{task_has_vault_document, TaskDocumentWorkflowService, TaskService};
 use axum::extract::{Path, Query, State};
 use axum::http::StatusCode;
 use axum::Json;
@@ -664,6 +664,21 @@ pub async fn update_task_status(
         cleanup_task_attempt_worktrees(&state, task_id, false).await?;
     }
 
+    let should_publish_docs = req.status == TaskStatus::Done
+        && existing_task.task_type == TaskType::Docs
+        && (existing_task.status != TaskStatus::Done || !task_has_vault_document(&existing_task));
+
+    if should_publish_docs {
+        let workflow =
+            TaskDocumentWorkflowService::new(pool.clone(), state.storage_service.clone());
+        workflow
+            .publish_final_document(task_id)
+            .await
+            .map_err(|e| {
+                ApiError::Internal(format!("Failed to publish document to vault: {}", e))
+            })?;
+    }
+
     let task = task_service
         .update_task_status(task_id, req.status)
         .await
@@ -813,7 +828,7 @@ pub async fn update_task_metadata(
     .await?;
 
     let task = task_service
-        .update_metadata(task_id, req.metadata)
+        .update_metadata_for_task(&existing_task, req.metadata)
         .await
         .map_err(|e| ApiError::Internal(e.to_string()))?;
 

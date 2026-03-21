@@ -2,6 +2,7 @@ import { useEffect, useMemo, useRef, useState, type ChangeEvent, type DragEvent 
 import { useNavigate } from 'react-router-dom';
 import { useQueryClient } from '@tanstack/react-query';
 import { ProjectSelector } from './create-task/ProjectSelector';
+import { TaskDocumentFields } from './create-task/TaskDocumentFields';
 import { TaskMetadataGrid } from './create-task/TaskMetadataGrid';
 import { AIDescriptionField } from './create-task/AIDescriptionField';
 import { useProjects } from '../../hooks/useProjects';
@@ -25,6 +26,7 @@ import {
     isRepositoryReadOnly,
     normalizeRepositoryContext,
 } from '../../utils/repositoryAccess';
+import type { TaskDocumentFormat, TaskDocumentKind } from '../../lib/taskDocuments';
 import { logger } from '@/lib/logger';
 import { SourceControlSetupRequiredDialog } from './SourceControlSetupRequiredDialog';
 
@@ -79,6 +81,48 @@ function formatBytes(bytes: number): string {
     return `${(bytes / (1024 * 1024)).toFixed(1)} MB`;
 }
 
+function buildDocsMetadata(options: {
+    priority: TaskPriorityValue;
+    requireReview: boolean;
+    taskTitle: string;
+    documentTitle: string;
+    documentKind: TaskDocumentKind;
+    documentFormat: TaskDocumentFormat;
+    documentSourceUrl: string;
+    documentFigmaUrl: string;
+    documentFigmaNodeId: string;
+}): Record<string, unknown> {
+    const document: Record<string, unknown> = {
+        kind: options.documentKind,
+        format: options.documentFormat,
+        preview_mode: 'document',
+        publish_policy: 'final_on_done',
+        title: options.documentTitle.trim() || options.taskTitle.trim(),
+    };
+
+    if (options.documentSourceUrl.trim()) {
+        document.source_url = options.documentSourceUrl.trim();
+    }
+    if (options.documentFigmaUrl.trim()) {
+        document.figma_url = options.documentFigmaUrl.trim();
+    }
+    if (options.documentFigmaNodeId.trim()) {
+        document.figma_node_id = options.documentFigmaNodeId.trim();
+    }
+
+    return {
+        priority: options.priority,
+        execution: {
+            require_review: options.requireReview,
+            no_code_changes: true,
+            run_build_and_tests: false,
+            auto_deploy: false,
+        },
+        require_review: options.requireReview,
+        document,
+    };
+}
+
 export function CreateTaskModal({
     isOpen,
     onClose,
@@ -124,6 +168,13 @@ export function CreateTaskModal({
     const [priority, setPriority] = useState<TaskPriorityValue>('medium');
     const [assignee, setAssignee] = useState('');
     const [sprint, setSprint] = useState('');
+    const [documentTitle, setDocumentTitle] = useState('');
+    const [documentKind, setDocumentKind] = useState<TaskDocumentKind>('other');
+    const [documentFormat, setDocumentFormat] = useState<TaskDocumentFormat>('markdown');
+    const [documentSourceUrl, setDocumentSourceUrl] = useState('');
+    const [documentFigmaUrl, setDocumentFigmaUrl] = useState('');
+    const [documentFigmaNodeId, setDocumentFigmaNodeId] = useState('');
+    const [documentContent, setDocumentContent] = useState('');
 
     const [autoStart, setAutoStart] = useState(false);
     const [requireReview, setRequireReview] = useState(false);
@@ -150,6 +201,8 @@ export function CreateTaskModal({
         projectSettings?.auto_deploy || projectSettings?.preview_enabled,
     );
     const taskPreviewLocked = !projectSettingsLoading && !projectTaskPreviewEnabled;
+    const isDocsTask = type === 'docs';
+    const sourceControlSetupRequiredForTask = sourceControlSetupRequired && !isDocsTask;
 
     const showProjectSelector = !projectId;
     const isFormValid = Boolean(title.trim()) && Boolean(effectiveProjectId);
@@ -167,6 +220,13 @@ export function CreateTaskModal({
         setPriority('medium');
         setAssignee('');
         setSprint('');
+        setDocumentTitle('');
+        setDocumentKind('other');
+        setDocumentFormat('markdown');
+        setDocumentSourceUrl('');
+        setDocumentFigmaUrl('');
+        setDocumentFigmaNodeId('');
+        setDocumentContent('');
         setAutoStart(false);
         setRequireReview(true);
         setRequireReviewTouched(false);
@@ -210,10 +270,16 @@ export function CreateTaskModal({
     }, [assignee, members]);
 
     useEffect(() => {
-        if (repositoryReadOnly && autoStart) {
+        if (repositoryReadOnly && autoStart && !isDocsTask) {
             setAutoStart(false);
         }
-    }, [autoStart, repositoryReadOnly]);
+    }, [autoStart, isDocsTask, repositoryReadOnly]);
+
+    useEffect(() => {
+        if (documentFigmaUrl.trim() && documentFormat === 'markdown') {
+            setDocumentFormat('figma_link');
+        }
+    }, [documentFigmaUrl, documentFormat]);
 
     if (!isOpen) return null;
 
@@ -333,7 +399,7 @@ export function CreateTaskModal({
 
     const handleCreate = async () => {
         if (!isFormValid) return;
-        if (sourceControlSetupRequired) {
+        if (sourceControlSetupRequiredForTask) {
             setShowSetupDialog(true);
             return;
         }
@@ -346,15 +412,27 @@ export function CreateTaskModal({
             const finalProjectId = effectiveProjectId;
             if (!finalProjectId) return;
 
-            const baseMetadata = {
-                priority,
-                execution: {
+            const baseMetadata = isDocsTask
+                ? buildDocsMetadata({
+                    priority,
+                    requireReview,
+                    taskTitle: title,
+                    documentTitle,
+                    documentKind,
+                    documentFormat,
+                    documentSourceUrl,
+                    documentFigmaUrl,
+                    documentFigmaNodeId,
+                })
+                : {
+                    priority,
+                    execution: {
+                        require_review: requireReview,
+                        run_build_and_tests: true,
+                        auto_deploy: projectTaskPreviewEnabled && autoDeploy,
+                    },
                     require_review: requireReview,
-                    run_build_and_tests: true,
-                    auto_deploy: projectTaskPreviewEnabled && autoDeploy,
-                },
-                require_review: requireReview,
-            };
+                };
 
             const task = await createTask({
                 project_id: finalProjectId,
@@ -368,13 +446,14 @@ export function CreateTaskModal({
             createdTaskId = task.id;
 
             let uploadedAttachmentCount = 0;
-            const hasTaskContext = taskContextFiles.length > 0;
+            const hasTaskContext =
+                taskContextFiles.length > 0 || (isDocsTask && documentContent.trim().length > 0);
 
             if (hasTaskContext) {
                 const context = await createTaskContext(task.id, {
                     title: null,
                     content_type: 'text/markdown',
-                    raw_content: '',
+                    raw_content: isDocsTask ? documentContent.trim() : '',
                     source: 'user',
                     sort_order: 0,
                 });
@@ -525,11 +604,34 @@ export function CreateTaskModal({
                         onSprintChange={setSprint}
                     />
 
+                    {isDocsTask && (
+                        <TaskDocumentFields
+                            documentTitle={documentTitle}
+                            onDocumentTitleChange={setDocumentTitle}
+                            documentKind={documentKind}
+                            onDocumentKindChange={setDocumentKind}
+                            documentFormat={documentFormat}
+                            onDocumentFormatChange={setDocumentFormat}
+                            documentSourceUrl={documentSourceUrl}
+                            onDocumentSourceUrlChange={setDocumentSourceUrl}
+                            documentFigmaUrl={documentFigmaUrl}
+                            onDocumentFigmaUrlChange={setDocumentFigmaUrl}
+                            documentFigmaNodeId={documentFigmaNodeId}
+                            onDocumentFigmaNodeIdChange={setDocumentFigmaNodeId}
+                            documentContent={documentContent}
+                            onDocumentContentChange={setDocumentContent}
+                        />
+                    )}
+
                     <div className="space-y-4 rounded-xl border border-border bg-muted/30 p-4">
                         <div>
-                            <h3 className="text-sm font-bold text-card-foreground">Reference Files</h3>
+                            <h3 className="text-sm font-bold text-card-foreground">
+                                {isDocsTask ? 'Document Assets' : 'Reference Files'}
+                            </h3>
                             <p className="text-xs text-muted-foreground mt-1">
-                                Upload specs, screenshots, logs, or any files the agent should use for this task.
+                                {isDocsTask
+                                    ? 'Upload PDFs, screenshots, binaries, or image assets that belong to the final document.'
+                                    : 'Upload specs, screenshots, logs, or any files the agent should use for this task.'}
                             </p>
                         </div>
 
@@ -616,7 +718,7 @@ export function CreateTaskModal({
                         )}
                     </div>
 
-                    {effectiveProjectId && repositoryReadOnly && (
+                    {effectiveProjectId && repositoryReadOnly && !isDocsTask && (
                         <div className="rounded-lg border border-amber-200 bg-amber-50 p-4 dark:border-amber-500/30 dark:bg-amber-500/10">
                             <div className="flex items-start gap-3">
                                 <span className="material-symbols-outlined text-amber-600 dark:text-amber-300">
@@ -637,7 +739,7 @@ export function CreateTaskModal({
                         </div>
                     )}
 
-                    {sourceControlSetupRequired && (
+                    {sourceControlSetupRequiredForTask && (
                         <div className="rounded-lg border border-amber-200 bg-amber-50 p-4 dark:border-amber-500/30 dark:bg-amber-500/10">
                             <div className="flex items-start gap-3">
                                 <span className="material-symbols-outlined text-amber-600 dark:text-amber-300">
@@ -664,12 +766,12 @@ export function CreateTaskModal({
                                 role="switch"
                                 aria-checked={autoStart}
                                 onClick={() => {
-                                    if (!repositoryReadOnly) {
+                                    if (!repositoryReadOnly || isDocsTask) {
                                         setAutoStart((prev) => !prev);
                                     }
                                 }}
-                                disabled={repositoryReadOnly}
-                                className={`${toggleCardClass(autoStart)} ${repositoryReadOnly ? 'cursor-not-allowed opacity-60' : ''}`}
+                                disabled={repositoryReadOnly && !isDocsTask}
+                                className={`${toggleCardClass(autoStart)} ${repositoryReadOnly && !isDocsTask ? 'cursor-not-allowed opacity-60' : ''}`}
                             >
                                 <div className="flex items-center justify-between gap-2 mb-2">
                                     <p className={`text-sm font-medium ${toggleTitleClass(autoStart)}`}>Auto start</p>
@@ -678,7 +780,7 @@ export function CreateTaskModal({
                                     </span>
                                 </div>
                                 <p className="text-xs text-muted-foreground">
-                                    {repositoryReadOnly
+                                    {repositoryReadOnly && !isDocsTask
                                         ? 'Disabled because this project is read-only for coding attempts.'
                                         : 'Create and run attempt right away.'}
                                 </p>
@@ -705,34 +807,36 @@ export function CreateTaskModal({
                                 <p className="text-xs text-muted-foreground">Require manual review before commit.</p>
                             </button>
 
-                            <button
-                                type="button"
-                                role="switch"
-                                aria-checked={autoDeploy}
-                                disabled={taskPreviewLocked}
-                                onClick={() => {
-                                    if (!taskPreviewLocked) {
-                                        setAutoDeploy((prev) => !prev);
-                                    }
-                                }}
-                                className={`${toggleCardClass(autoDeploy)} ${taskPreviewLocked ? 'cursor-not-allowed opacity-60' : ''}`}
-                            >
-                                <div className="flex items-center justify-between gap-2 mb-2">
-                                    <p className={`text-sm font-medium ${toggleTitleClass(autoDeploy)}`}>
-                                        Task preview
+                            {!isDocsTask && (
+                                <button
+                                    type="button"
+                                    role="switch"
+                                    aria-checked={autoDeploy}
+                                    disabled={taskPreviewLocked}
+                                    onClick={() => {
+                                        if (!taskPreviewLocked) {
+                                            setAutoDeploy((prev) => !prev);
+                                        }
+                                    }}
+                                    className={`${toggleCardClass(autoDeploy)} ${taskPreviewLocked ? 'cursor-not-allowed opacity-60' : ''}`}
+                                >
+                                    <div className="flex items-center justify-between gap-2 mb-2">
+                                        <p className={`text-sm font-medium ${toggleTitleClass(autoDeploy)}`}>
+                                            Task preview
+                                        </p>
+                                        <span className={toggleTrackClass(autoDeploy)}>
+                                            <span className={toggleThumbClass(autoDeploy)} />
+                                        </span>
+                                    </div>
+                                    <p className="text-xs text-muted-foreground">
+                                        {projectSettingsLoading
+                                            ? 'Loading project setting...'
+                                            : projectTaskPreviewEnabled
+                                              ? 'Enabled from Project Settings. Turn it off here to skip preview for this task.'
+                                              : 'Disabled because Task Preview is off in Project Settings.'}
                                     </p>
-                                    <span className={toggleTrackClass(autoDeploy)}>
-                                        <span className={toggleThumbClass(autoDeploy)} />
-                                    </span>
-                                </div>
-                                <p className="text-xs text-muted-foreground">
-                                    {projectSettingsLoading
-                                        ? 'Loading project setting...'
-                                        : projectTaskPreviewEnabled
-                                          ? 'Enabled from Project Settings. Turn it off here to skip preview for this task.'
-                                          : 'Disabled because Task Preview is off in Project Settings.'}
-                                </p>
-                            </button>
+                                </button>
+                            )}
                         </div>
                     </div>
 

@@ -221,6 +221,7 @@ export function TaskDetailPage() {
                                 />
                                 <TaskStatusContent
                                     task={task}
+                                    taskContexts={taskContexts}
                                     normalizedStatus={normalizedStatus}
                                     artifactAttemptId={latestSuccessAttempt?.id}
                                     previewMetadata={
@@ -251,6 +252,12 @@ export function TaskDetailPage() {
                 <DiffViewerModal
                     attemptId={latestSuccessAttempt.id}
                     taskStatus={normalizedStatus}
+                    task={task}
+                    taskContexts={taskContexts}
+                    previewMetadata={
+                        (latestSuccessAttempt?.metadata as Record<string, unknown> | undefined) ??
+                        (task.metadata as Record<string, unknown> | undefined)
+                    }
                     onClose={() => setShowDiffViewer(false)}
                     onApproved={() => { setShowDiffViewer(false); handleBack(); }}
                 />

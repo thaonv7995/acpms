@@ -10,8 +10,9 @@ use acpms_executors::{
     StatusManager, StatusMessage, SuggestedSkill,
 };
 use acpms_services::{
-    NormalizedLogService, ProjectService, RepositoryAccessService, SubagentService,
-    TaskAttemptService, TaskContextService, TaskService,
+    task_has_vault_document, NormalizedLogService, ProjectService, RepositoryAccessService,
+    SubagentService, TaskAttemptService, TaskContextService, TaskDocumentWorkflowService,
+    TaskService,
 };
 use axum::extract::{Path, Query, State};
 use axum::http::StatusCode;
@@ -35,7 +36,9 @@ use utoipa::{IntoParams, ToSchema};
 fn task_require_review(task: &Task, settings: &ProjectSettings) -> bool {
     // Analysis-only tasks (e.g. requirement breakdown sessions) should not enter manual review.
     // They are non-execution support tasks and should complete automatically.
-    if task_allows_analysis_only_attempt(task) {
+    // Docs tasks still respect require_review, but their review surface is a document preview
+    // instead of a code diff.
+    if task_is_analysis_session_support(task) {
         return false;
     }
 
@@ -63,18 +66,7 @@ fn task_run_build_and_tests(task: &Task) -> bool {
         .unwrap_or(true)
 }
 
-fn task_allows_analysis_only_attempt(task: &Task) -> bool {
-    let root_no_code_changes = task
-        .metadata
-        .get("no_code_changes")
-        .and_then(|v| v.as_bool())
-        .unwrap_or(false);
-    let execution_no_code_changes = task
-        .metadata
-        .get("execution")
-        .and_then(|v| v.get("no_code_changes"))
-        .and_then(|v| v.as_bool())
-        .unwrap_or(false);
+fn task_is_analysis_session_support(task: &Task) -> bool {
     let breakdown_mode_ai_support = task
         .metadata
         .get("breakdown_mode")
@@ -88,10 +80,25 @@ fn task_allows_analysis_only_attempt(task: &Task) -> bool {
         .map(|v| v.eq_ignore_ascii_case("analysis_session"))
         .unwrap_or(false);
 
-    root_no_code_changes
+    breakdown_mode_ai_support || breakdown_kind_analysis
+}
+
+fn task_allows_analysis_only_attempt(task: &Task) -> bool {
+    let root_no_code_changes = task
+        .metadata
+        .get("no_code_changes")
+        .and_then(|v| v.as_bool())
+        .unwrap_or(false);
+    let execution_no_code_changes = task
+        .metadata
+        .get("execution")
+        .and_then(|v| v.get("no_code_changes"))
+        .and_then(|v| v.as_bool())
+        .unwrap_or(false);
+    task.task_type == TaskType::Docs
+        || root_no_code_changes
         || execution_no_code_changes
-        || breakdown_mode_ai_support
-        || breakdown_kind_analysis
+        || task_is_analysis_session_support(task)
 }
 
 fn task_requires_source_control(task: &Task) -> bool {
@@ -3959,6 +3966,78 @@ pub async fn approve_attempt(
         return Err(ApiError::BadRequest(format!(
             "Task is not in review/done state (current: {:?})",
             task.status
+        )));
+    }
+
+    if task.task_type == TaskType::Docs {
+        let workflow =
+            TaskDocumentWorkflowService::new(pool.clone(), state.storage_service.clone());
+        let should_publish_document = !already_done || !task_has_vault_document(&task);
+        if should_publish_document {
+            workflow
+                .publish_final_document(task.id)
+                .await
+                .map_err(|e| {
+                    ApiError::Internal(format!("Failed to publish document to vault: {}", e))
+                })?;
+        }
+
+        if !already_done {
+            let updated_task = task_service
+                .update_task_status(task.id, TaskStatus::Done)
+                .await
+                .map_err(|e| ApiError::Internal(format!("Failed to update task status: {}", e)))?;
+            openclaw::emit_task_status_changed(
+                &state,
+                task.project_id,
+                task.id,
+                task.status,
+                updated_task.status,
+                "routes.task_attempts.approve_attempt.docs_publish_success",
+            )
+            .await;
+        }
+
+        if task.status == TaskStatus::InReview {
+            let project_service = ProjectService::new(pool.clone());
+            match project_service.get_project(task.project_id).await {
+                Ok(Some(project)) => {
+                    let repo_path = resolve_project_repo_path(&project);
+                    if let Err(error) = state
+                        .orchestrator
+                        .worktree_manager()
+                        .cleanup_worktree(&repo_path, attempt_id)
+                        .await
+                    {
+                        tracing::warn!(
+                            attempt_id = %attempt_id,
+                            task_id = %task.id,
+                            error = %error,
+                            "Failed to clean up docs review worktree after approval"
+                        );
+                    }
+                }
+                Ok(None) => {
+                    tracing::warn!(
+                        attempt_id = %attempt_id,
+                        task_id = %task.id,
+                        "Project missing while cleaning up docs review worktree"
+                    );
+                }
+                Err(error) => {
+                    tracing::warn!(
+                        attempt_id = %attempt_id,
+                        task_id = %task.id,
+                        error = %error,
+                        "Failed to load project for docs review worktree cleanup"
+                    );
+                }
+            }
+        }
+
+        return Ok(Json(ApiResponse::success(
+            (),
+            "Document approved and published",
         )));
     }
 

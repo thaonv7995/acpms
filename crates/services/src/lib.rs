@@ -17,6 +17,7 @@ pub mod subagent;
 pub mod task;
 pub mod task_attempt; // Restored
 pub mod task_context;
+pub mod task_documents;
 pub mod user;
 pub mod workspace_repos;
 
@@ -128,6 +129,10 @@ pub use task_attempt::*;
 pub use task_context::{
     CreateTaskContextAttachmentInput, CreateTaskContextInput, TaskContextService,
     TaskContextWithAttachments, UpdateTaskContextInput,
+};
+pub use task_documents::{
+    normalize_docs_task_metadata, task_has_vault_document, TaskDocumentWorkflowService,
+    TASK_DOCUMENT_FORMATS, TASK_DOCUMENT_KINDS,
 };
 pub use token_blacklist_service::TokenBlacklistService;
 pub use token_refresh_service::RefreshTokenService;

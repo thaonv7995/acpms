@@ -1,4 +1,5 @@
 import { useEffect, useMemo, useRef, useState, type ChangeEvent, type DragEvent } from 'react';
+import { TaskDocumentFields } from './create-task/TaskDocumentFields';
 import { TaskMetadataGrid } from './create-task/TaskMetadataGrid';
 import { useProjectMembers } from '../../hooks/useProjectMembers';
 import { useSprints } from '../../hooks/useSprints';
@@ -16,6 +17,11 @@ import {
 } from '../../api/taskContexts';
 import type { KanbanTask } from '../../types/project';
 import type { Task, TaskType } from '../../shared/types';
+import {
+  getTaskDocumentMetadata,
+  type TaskDocumentFormat,
+  type TaskDocumentKind,
+} from '../../lib/taskDocuments';
 import { logger } from '@/lib/logger';
 
 interface PendingContextFile {
@@ -34,6 +40,40 @@ function formatBytes(bytes: number): string {
   if (bytes < 1024) return `${bytes} B`;
   if (bytes < 1024 * 1024) return `${(bytes / 1024).toFixed(1)} KB`;
   return `${(bytes / (1024 * 1024)).toFixed(1)} MB`;
+}
+
+function isPlainObject(value: unknown): value is Record<string, unknown> {
+  return Boolean(value) && typeof value === 'object' && !Array.isArray(value);
+}
+
+function buildTaskDocumentMetadata(options: {
+  taskTitle: string;
+  documentTitle: string;
+  documentKind: TaskDocumentKind;
+  documentFormat: TaskDocumentFormat;
+  documentSourceUrl: string;
+  documentFigmaUrl: string;
+  documentFigmaNodeId: string;
+}): Record<string, unknown> {
+  const document: Record<string, unknown> = {
+    kind: options.documentKind,
+    format: options.documentFormat,
+    preview_mode: 'document',
+    publish_policy: 'final_on_done',
+    title: options.documentTitle.trim() || options.taskTitle.trim(),
+  };
+
+  if (options.documentSourceUrl.trim()) {
+    document.source_url = options.documentSourceUrl.trim();
+  }
+  if (options.documentFigmaUrl.trim()) {
+    document.figma_url = options.documentFigmaUrl.trim();
+  }
+  if (options.documentFigmaNodeId.trim()) {
+    document.figma_node_id = options.documentFigmaNodeId.trim();
+  }
+
+  return document;
 }
 
 type TaskTypeValue = Exclude<TaskType, 'init'>;
@@ -69,6 +109,12 @@ export function EditTaskModal({
   const [sprint, setSprint] = useState('');
   const [autoStart, setAutoStart] = useState(true);
   const [taskMetadata, setTaskMetadata] = useState<Record<string, unknown>>({});
+  const [documentTitle, setDocumentTitle] = useState('');
+  const [documentKind, setDocumentKind] = useState<TaskDocumentKind>('other');
+  const [documentFormat, setDocumentFormat] = useState<TaskDocumentFormat>('markdown');
+  const [documentSourceUrl, setDocumentSourceUrl] = useState('');
+  const [documentFigmaUrl, setDocumentFigmaUrl] = useState('');
+  const [documentFigmaNodeId, setDocumentFigmaNodeId] = useState('');
 
   const [taskContextId, setTaskContextId] = useState<string | null>(null);
   const [taskContextTitle, setTaskContextTitle] = useState('');
@@ -91,6 +137,7 @@ export function EditTaskModal({
     () => members.map((member) => ({ id: member.id, name: member.name })),
     [members]
   );
+  const isDocsTask = type === 'docs';
 
   useEffect(() => {
     if (!isOpen) return;
@@ -117,6 +164,18 @@ export function EditTaskModal({
         setSprint(taskDetails.sprint_id || '');
         setAutoStart(true);
         setTaskMetadata((taskDetails.metadata as Record<string, unknown>) || {});
+
+        const documentMetadata = getTaskDocumentMetadata(
+          taskDetails.task_type,
+          taskDetails.title,
+          (taskDetails.metadata as Record<string, unknown>) || {}
+        );
+        setDocumentTitle(documentMetadata?.title ?? taskDetails.title ?? '');
+        setDocumentKind(documentMetadata?.kind ?? 'other');
+        setDocumentFormat(documentMetadata?.format ?? 'markdown');
+        setDocumentSourceUrl(documentMetadata?.sourceUrl ?? '');
+        setDocumentFigmaUrl(documentMetadata?.figmaUrl ?? '');
+        setDocumentFigmaNodeId(documentMetadata?.figmaNodeId ?? '');
 
         const sortedContexts = [...contexts].sort((left, right) => {
           if (left.sort_order !== right.sort_order) {
@@ -320,6 +379,8 @@ export function EditTaskModal({
     try {
       const nextTaskType =
         originalTaskType === 'init' && !typeTouched && type === 'chore' ? undefined : type;
+      const effectiveTaskType = nextTaskType ?? originalTaskType;
+      const isNextDocsTask = effectiveTaskType === 'docs';
 
       await updateTask(task.id, {
         status: task.status,
@@ -331,7 +392,7 @@ export function EditTaskModal({
       });
 
       const hasTaskContext =
-        Boolean(taskContextTitle.trim()) ||
+        Boolean((isNextDocsTask ? '' : taskContextTitle).trim()) ||
         Boolean(taskContextContent.trim()) ||
         existingContextAttachments.length > 0 ||
         pendingContextFiles.length > 0;
@@ -348,14 +409,14 @@ export function EditTaskModal({
       } else {
         if (currentContextId) {
           await updateTaskContext(task.id, currentContextId, {
-            title: taskContextTitle.trim() || null,
+            title: isNextDocsTask ? null : taskContextTitle.trim() || null,
             content_type: 'text/markdown',
             raw_content: taskContextContent.trim(),
             sort_order: 0,
           });
         } else {
           const createdContext = await createTaskContext(task.id, {
-            title: taskContextTitle.trim() || null,
+            title: isNextDocsTask ? null : taskContextTitle.trim() || null,
             content_type: 'text/markdown',
             raw_content: taskContextContent.trim(),
             source: 'user',
@@ -392,11 +453,48 @@ export function EditTaskModal({
         ...remainingMetadata
       } = taskMetadata;
 
-      await updateTaskMetadata(task.id, {
+      const nextMetadata: Record<string, unknown> = {
         ...remainingMetadata,
         priority,
         attachments_count: additionalAttachmentCount + primaryAttachmentCount,
-      });
+      };
+
+      if (isNextDocsTask) {
+        const execution = isPlainObject(nextMetadata.execution)
+          ? { ...nextMetadata.execution }
+          : {};
+        execution.no_code_changes = true;
+        execution.run_build_and_tests = false;
+        execution.auto_deploy = false;
+        nextMetadata.execution = execution;
+        nextMetadata.document = buildTaskDocumentMetadata({
+          taskTitle: title,
+          documentTitle,
+          documentKind,
+          documentFormat,
+          documentSourceUrl,
+          documentFigmaUrl,
+          documentFigmaNodeId,
+        });
+      } else {
+        delete nextMetadata.document;
+        if (isPlainObject(nextMetadata.execution)) {
+          const execution = { ...nextMetadata.execution };
+          delete execution.no_code_changes;
+          if (originalTaskType === 'docs') {
+            delete execution.run_build_and_tests;
+            delete execution.auto_deploy;
+          }
+
+          if (Object.keys(execution).length === 0) {
+            delete nextMetadata.execution;
+          } else {
+            nextMetadata.execution = execution;
+          }
+        }
+      }
+
+      await updateTaskMetadata(task.id, nextMetadata);
 
       if (autoStart) {
         const newAttempt = await createTaskAttemptFromEdit(task.id);
@@ -485,9 +583,13 @@ export function EditTaskModal({
 
           <div className="space-y-4 rounded-xl border border-border bg-muted/30 p-4">
             <div>
-              <h3 className="text-sm font-bold text-card-foreground">Task Context</h3>
+              <h3 className="text-sm font-bold text-card-foreground">
+                {isDocsTask ? 'Document Content' : 'Task Context'}
+              </h3>
               <p className="text-xs text-muted-foreground mt-1">
-                Keep the agent-facing notes and reference files in sync with this task.
+                {isDocsTask
+                  ? 'Keep the final document metadata, notes, and supporting assets in sync with this task.'
+                  : 'Keep the agent-facing notes and reference files in sync with this task.'}
               </p>
               {additionalContextCount > 0 && (
                 <p className="text-xs text-amber-600 dark:text-amber-300 mt-2">
@@ -499,31 +601,52 @@ export function EditTaskModal({
               )}
             </div>
 
-            <div>
-              <label className="block text-sm font-bold text-card-foreground mb-1.5">
-                Context Title
-              </label>
-              <input
-                type="text"
-                value={taskContextTitle}
-                onChange={(event) => setTaskContextTitle(event.target.value)}
-                placeholder="e.g. Login screen constraints"
-                className="w-full bg-card border border-border rounded-lg px-3 py-2.5 text-sm text-card-foreground focus:ring-primary focus:border-primary placeholder-muted-foreground"
+            {isDocsTask ? (
+              <TaskDocumentFields
+                documentTitle={documentTitle}
+                onDocumentTitleChange={setDocumentTitle}
+                documentKind={documentKind}
+                onDocumentKindChange={setDocumentKind}
+                documentFormat={documentFormat}
+                onDocumentFormatChange={setDocumentFormat}
+                documentSourceUrl={documentSourceUrl}
+                onDocumentSourceUrlChange={setDocumentSourceUrl}
+                documentFigmaUrl={documentFigmaUrl}
+                onDocumentFigmaUrlChange={setDocumentFigmaUrl}
+                documentFigmaNodeId={documentFigmaNodeId}
+                onDocumentFigmaNodeIdChange={setDocumentFigmaNodeId}
+                documentContent={taskContextContent}
+                onDocumentContentChange={setTaskContextContent}
               />
-            </div>
+            ) : (
+              <>
+                <div>
+                  <label className="block text-sm font-bold text-card-foreground mb-1.5">
+                    Context Title
+                  </label>
+                  <input
+                    type="text"
+                    value={taskContextTitle}
+                    onChange={(event) => setTaskContextTitle(event.target.value)}
+                    placeholder="e.g. Login screen constraints"
+                    className="w-full bg-card border border-border rounded-lg px-3 py-2.5 text-sm text-card-foreground focus:ring-primary focus:border-primary placeholder-muted-foreground"
+                  />
+                </div>
 
-            <div>
-              <label className="block text-sm font-bold text-card-foreground mb-1.5">
-                Context Notes
-              </label>
-              <textarea
-                value={taskContextContent}
-                onChange={(event) => setTaskContextContent(event.target.value)}
-                placeholder="Describe the required copy, design constraints, edge cases, or debugging context."
-                rows={5}
-                className="w-full bg-card border border-border rounded-lg px-3 py-2.5 text-sm text-card-foreground focus:ring-primary focus:border-primary placeholder-muted-foreground resize-none"
-              />
-            </div>
+                <div>
+                  <label className="block text-sm font-bold text-card-foreground mb-1.5">
+                    Context Notes
+                  </label>
+                  <textarea
+                    value={taskContextContent}
+                    onChange={(event) => setTaskContextContent(event.target.value)}
+                    placeholder="Describe the required copy, design constraints, edge cases, or debugging context."
+                    rows={5}
+                    className="w-full bg-card border border-border rounded-lg px-3 py-2.5 text-sm text-card-foreground focus:ring-primary focus:border-primary placeholder-muted-foreground resize-none"
+                  />
+                </div>
+              </>
+            )}
 
             <input
               ref={attachmentInputRef}
@@ -551,7 +674,8 @@ export function EditTaskModal({
             >
               <span className="material-symbols-outlined text-muted-foreground mb-2">cloud_upload</span>
               <p className="text-xs font-medium text-muted-foreground">
-                Drop reference files, or <span className="text-primary underline">browse</span>
+                {isDocsTask ? 'Drop document assets, or ' : 'Drop reference files, or '}
+                <span className="text-primary underline">browse</span>
               </p>
             </div>
 

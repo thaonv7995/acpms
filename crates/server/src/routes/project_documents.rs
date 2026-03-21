@@ -1,6 +1,6 @@
 use acpms_services::{
     ProjectDocumentIndexService, ProjectDocumentService, ProjectDocumentServiceError,
-    UpdateProjectDocumentInput, UpsertProjectDocumentInput,
+    UpdateProjectDocumentInput, UpsertProjectDocumentInput, TASK_DOCUMENT_KINDS,
 };
 use axum::extract::{Path, State};
 use axum::Json;
@@ -16,15 +16,6 @@ use crate::middleware::{AuthUser, Permission, RbacChecker, ValidatedJson};
 use crate::AppState;
 
 const MAX_PROJECT_DOCUMENT_SIZE_BYTES: i64 = 5 * 1024 * 1024;
-const PROJECT_DOCUMENT_KINDS: &[&str] = &[
-    "architecture",
-    "api_spec",
-    "database_schema",
-    "business_rules",
-    "runbook",
-    "notes",
-    "other",
-];
 const PROJECT_DOCUMENT_SOURCES: &[&str] = &["upload", "repo_sync", "api"];
 
 #[derive(Debug, Deserialize, ToSchema, Validate)]
@@ -149,7 +140,7 @@ struct ResolvedProjectDocumentUpload {
 }
 
 fn validate_project_document_kind(kind: &str) -> ApiResult<()> {
-    if PROJECT_DOCUMENT_KINDS.contains(&kind) {
+    if TASK_DOCUMENT_KINDS.contains(&kind) {
         Ok(())
     } else {
         Err(ApiError::BadRequest("Invalid document kind".into()))

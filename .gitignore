@@ -59,3 +59,8 @@ crates/server/repos/
 # Claude Code
 CLAUDE.md
 **/CLAUDE.md
+AGENTS.md
+.claude
+.gitnexus
+output/
+

@@ -1,6 +1,14 @@
 import { apiDelete, apiGet, apiPatch, apiPost, API_PREFIX } from './client';
 
 export type ProjectDocumentKind =
+  | 'brainstorm'
+  | 'idea_note'
+  | 'prd'
+  | 'srs'
+  | 'design'
+  | 'technical_spec'
+  | 'research_note'
+  | 'meeting_note'
   | 'architecture'
   | 'api_spec'
   | 'database_schema'

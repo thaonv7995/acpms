@@ -4,6 +4,8 @@ use chrono::{DateTime, Utc};
 use sqlx::{FromRow, Postgres, Transaction};
 use uuid::Uuid;
 
+use crate::normalize_docs_task_metadata;
+
 // Re-export metadata types for convenience
 pub use acpms_db::models::{InitSource, InitTaskMetadata};
 
@@ -193,7 +195,11 @@ impl TaskService {
             .resolve_task_sprint_id(req.project_id, req.sprint_id)
             .await?;
 
-        let metadata = req.metadata.unwrap_or_else(|| serde_json::json!({}));
+        let metadata = normalize_docs_task_metadata(
+            req.task_type,
+            &req.title,
+            req.metadata.unwrap_or_else(|| serde_json::json!({})),
+        );
 
         let task = sqlx::query_as::<_, Task>(
             r#"
@@ -418,6 +424,12 @@ impl TaskService {
                 .await?;
         }
 
+        let next_task_type = req.task_type.unwrap_or(existing.task_type);
+        let next_title = req.title.clone().unwrap_or_else(|| existing.title.clone());
+        let normalized_metadata = req.task_type.map(|_| {
+            normalize_docs_task_metadata(next_task_type, &next_title, existing.metadata.clone())
+        });
+
         let task = sqlx::query_as::<_, Task>(
             r#"
             UPDATE tasks
@@ -427,6 +439,7 @@ impl TaskService {
                 status = COALESCE($5, status),
                 assigned_to = COALESCE($6, assigned_to),
                 sprint_id = COALESCE($7, sprint_id),
+                metadata = COALESCE($8, metadata),
                 updated_at = NOW()
             WHERE id = $1
             RETURNING id, project_id, title, description, task_type, status, assigned_to, parent_task_id, requirement_id, sprint_id, gitlab_issue_id, metadata, created_by, created_at, updated_at
@@ -439,6 +452,7 @@ impl TaskService {
         .bind(req.status)
         .bind(req.assigned_to)
         .bind(req.sprint_id)
+        .bind(normalized_metadata)
         .fetch_one(&self.pool)
         .await
         .context("Failed to update task")?;
@@ -596,7 +610,17 @@ impl TaskService {
         task_id: Uuid,
         metadata: serde_json::Value,
     ) -> Result<Task> {
-        let task = sqlx::query_as::<_, Task>(
+        let existing = self.get_task(task_id).await?.context("Task not found")?;
+        self.update_metadata_for_task(&existing, metadata).await
+    }
+
+    pub async fn update_metadata_for_task(
+        &self,
+        task: &Task,
+        metadata: serde_json::Value,
+    ) -> Result<Task> {
+        let metadata = normalize_docs_task_metadata(task.task_type, &task.title, metadata);
+        let updated_task = sqlx::query_as::<_, Task>(
             r#"
             UPDATE tasks
             SET metadata = $2,
@@ -605,13 +629,13 @@ impl TaskService {
             RETURNING id, project_id, title, description, task_type, status, assigned_to, parent_task_id, requirement_id, sprint_id, gitlab_issue_id, metadata, created_by, created_at, updated_at
             "#
         )
-        .bind(task_id)
+        .bind(task.id)
         .bind(metadata)
         .fetch_one(&self.pool)
         .await
         .context("Failed to update task metadata")?;
 
-        Ok(task)
+        Ok(updated_task)
     }
 
     /// Create init task for GitLab import
